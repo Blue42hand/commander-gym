@@ -1,3 +1,5 @@
+import json
+from pathlib import Path
 import unittest
 
 from commander_gym.deck_package import (
@@ -73,6 +75,19 @@ class DeckPackageV2Tests(unittest.TestCase):
         loaded = DeckPackage.from_dict(package.to_dict())
         self.assertEqual(package.fingerprint(), loaded.fingerprint())
         self.assertTrue(package.same_experiment(loaded))
+
+    def test_checked_in_public_fixture_is_valid_and_stable(self):
+        fixture_path = (
+            Path(__file__).resolve().parents[1]
+            / "fixtures"
+            / "deck_package_v2_commander.json"
+        )
+        raw = json.loads(fixture_path.read_text(encoding="utf-8"))
+        package = DeckPackage.from_dict(raw)
+
+        validate_commander_package(package)
+        self.assertEqual(package.package_id, "public-synthetic-commander-v1")
+        self.assertEqual(package.fingerprint(), raw["fingerprint"])
 
     def test_mismatched_fingerprint_is_rejected(self):
         raw = self.make_package().to_dict()
