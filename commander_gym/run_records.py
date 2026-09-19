@@ -1,7 +1,7 @@
 """Versioned, engine-independent experiment/run provenance.
 
 This module keeps the durable research record separate from any transport, process,
-or filesystem lifecycle.  It records enough provenance to compare or reproduce a
+or filesystem lifecycle. It records enough provenance to compare or reproduce a
 run while leaving authoritative game state and rules provenance to the engine.
 """
 
@@ -90,7 +90,6 @@ class RunParticipant:
             raise RecordValidationError("participant.seat must be a non-negative integer")
         if not isinstance(self.pilot, PilotProvenance):
             raise RecordValidationError("participant.pilot must be PilotProvenance")
-        # Reuse the public pilot record validation without coupling to pilot execution.
         PilotProvenance.from_dict(asdict(self.pilot))
         _require_optional_string("participant.deck_id", self.deck_id)
         _require_optional_string("participant.deck_version", self.deck_version)
@@ -127,16 +126,14 @@ class RunTermination:
     failure_domain: Optional[str] = None
 
     def validate(self) -> None:
-        if self.status not in RUN_TERMINAL_STATUSES:
+        if not isinstance(self.status, str) or self.status not in RUN_TERMINAL_STATUSES:
             raise RecordValidationError(
                 f"termination.status must be one of {sorted(RUN_TERMINAL_STATUSES)}"
             )
         _require_optional_string("termination.reason", self.reason)
         _require_optional_string("termination.failure_domain", self.failure_domain)
         if self.status == RUN_STATUS_COMPLETED and self.failure_domain is not None:
-            raise RecordValidationError(
-                "completed runs must not carry a failure_domain"
-            )
+            raise RecordValidationError("completed runs must not carry a failure_domain")
         if self.status in {RUN_STATUS_STOPPED, RUN_STATUS_FAILED} and self.reason is None:
             raise RecordValidationError(
                 f"{self.status} runs must include a terminal reason"
@@ -162,7 +159,7 @@ class RunRecord:
     """Durable provenance for one evaluation/training execution unit.
 
     A run may fail before a seat or game exists, so participants and game_id are
-    intentionally optional.  When decision_ids are recorded, game_id is required
+    intentionally optional. When decision_ids are recorded, game_id is required
     so they can be joined unambiguously to :class:`DecisionRecord` evidence.
     """
 
