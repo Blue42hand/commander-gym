@@ -5,8 +5,9 @@ from commander_gym.pilot_records import (
     PilotRecordContext,
     PilotRecordError,
     decision_record_from_execution_trace,
+    structured_decision_record_from_execution_trace,
 )
-from commander_gym.records import DecisionRecord
+from commander_gym.records import DecisionRecord, StructuredDecisionRecord
 
 
 def action_observation():
@@ -197,6 +198,85 @@ class PilotRecordBridgeTests(unittest.TestCase):
 
         with self.assertRaisesRegex(PilotRecordError, "structured decision"):
             decision_record_from_execution_trace(structured, context())
+
+    def test_structured_response_records_native_decision_without_fake_candidates(self):
+        structured = PilotExecutionTrace(
+            pilot_name="provider-neutral",
+            pilot_version="1",
+            channel="decision",
+            semantic_id="argentum-decision@v1:choose-targets",
+            live_routing_id="routing-1",
+            observation={
+                "schemaHash": "argentum-gym-contract@v1.7-semantic-state-provenance",
+                "stateDigest": "structured-a",
+                "pendingDecision": {
+                    "decisionId": "routing-1",
+                    "semanticId": "argentum-decision@v1:choose-targets",
+                    "kind": "CHOOSE_TARGETS",
+                    "requiresStructuredResponse": True,
+                },
+                "legalActions": [],
+            },
+            submitted={
+                "type": "ChooseTargetsResponse",
+                "decisionId": "routing-1",
+                "targets": ["entity-3"],
+            },
+            result_observation={
+                "schemaHash": "argentum-gym-contract@v1.7-semantic-state-provenance",
+                "stateDigest": "structured-b",
+                "pendingDecision": None,
+                "legalActions": [],
+            },
+            pilot_metadata={"model": "test-model", "routing": {"path": "strategic"}},
+        )
+
+        record = structured_decision_record_from_execution_trace(structured, context())
+
+        self.assertIsInstance(record, StructuredDecisionRecord)
+        self.assertEqual(record.decision_type, "CHOOSE_TARGETS")
+        self.assertEqual(
+            record.native_decision_semantic_id,
+            "argentum-decision@v1:choose-targets",
+        )
+        self.assertEqual(
+            record.response,
+            {"type": "ChooseTargetsResponse", "targets": ["entity-3"]},
+        )
+        self.assertNotIn("decisionId", record.observation["pendingDecision"])
+        self.assertEqual(record.metadata["live_routing_id"], "routing-1")
+        self.assertEqual(record.pilot.model, "test-model")
+        self.assertEqual(StructuredDecisionRecord.from_dict(record.to_dict()), record)
+
+    def test_structured_response_rejects_mismatched_live_routing(self):
+        structured = PilotExecutionTrace(
+            pilot_name="provider-neutral",
+            pilot_version="1",
+            channel="decision",
+            semantic_id="argentum-decision@v1:choose-targets",
+            live_routing_id="routing-1",
+            observation={
+                "schemaHash": "schema-v1",
+                "stateDigest": "state-a",
+                "pendingDecision": {
+                    "decisionId": "routing-1",
+                    "semanticId": "argentum-decision@v1:choose-targets",
+                    "kind": "CHOOSE_TARGETS",
+                    "requiresStructuredResponse": True,
+                },
+                "legalActions": [],
+            },
+            submitted={
+                "type": "ChooseTargetsResponse",
+                "decisionId": "wrong-routing",
+                "targets": ["entity-3"],
+            },
+            result_observation={"stateDigest": "state-b"},
+            pilot_metadata={},
+        )
+
+        with self.assertRaisesRegex(PilotRecordError, "live routing id"):
+            structured_decision_record_from_execution_trace(structured, context())
 
     def test_missing_candidate_semantic_identity_fails_closed(self):
         observation = action_observation()

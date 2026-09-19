@@ -26,6 +26,7 @@ from .records import (
     DecisionRecord,
     PilotProvenance,
     RecordValidationError,
+    StructuredDecisionRecord,
 )
 
 
@@ -138,6 +139,90 @@ def _decision_type(trace: PilotExecutionTrace) -> str:
 def _optional_model(metadata: Mapping[str, Any]) -> str | None:
     model = metadata.get("model")
     return model if isinstance(model, str) and model else None
+
+
+def structured_decision_record_from_execution_trace(
+    trace: PilotExecutionTrace,
+    context: PilotRecordContext,
+) -> StructuredDecisionRecord:
+    """Convert one native structured Argentum decision trace into durable evidence."""
+
+    if not isinstance(trace, PilotExecutionTrace):
+        raise PilotRecordError("trace must be PilotExecutionTrace")
+    if trace.channel != "decision":
+        raise PilotRecordError("structured record requires a decision-channel trace")
+
+    observation = trace.observation
+    if not isinstance(observation, Mapping):
+        raise PilotRecordError("trace observation must be an object")
+    result = trace.result_observation
+    if not isinstance(result, Mapping):
+        raise PilotRecordError("trace result observation must be an object")
+
+    schema = _require_string(observation.get("schemaHash"), "Argentum schemaHash")
+    state_digest = _require_string(observation.get("stateDigest"), "Argentum stateDigest")
+    result_digest = _require_string(result.get("stateDigest"), "result Argentum stateDigest")
+    semantic_id = _require_string(trace.semantic_id, "Argentum decision semanticId")
+
+    pending = observation.get("pendingDecision")
+    if not isinstance(pending, Mapping):
+        raise PilotRecordError("structured decision trace requires pendingDecision")
+    pending_semantic_id = _require_string(
+        pending.get("semanticId"),
+        "pending Argentum decision semanticId",
+    )
+    if pending_semantic_id != semantic_id:
+        raise PilotRecordError(
+            "trace semantic_id does not match pending Argentum decision semanticId"
+        )
+    if pending.get("requiresStructuredResponse") is not True:
+        raise PilotRecordError(
+            "decision-channel trace must originate from a structured Argentum decision"
+        )
+
+    submitted = dict(trace.submitted)
+    submitted_decision_id = submitted.pop("decisionId", None)
+    if submitted_decision_id != trace.live_routing_id:
+        raise PilotRecordError(
+            "submitted structured response decisionId does not match live routing id"
+        )
+    if not submitted:
+        raise PilotRecordError("structured response payload is empty after routing removal")
+
+    kind = pending.get("kind")
+    decision_type = kind if isinstance(kind, str) and kind else "STRUCTURED_DECISION"
+
+    record = StructuredDecisionRecord(
+        game_id=context.game_id,
+        decision_id=context.decision_id,
+        decision_type=decision_type,
+        seat=context.seat,
+        observation_schema=schema,
+        observation=_without_live_routing(observation),
+        native_decision_semantic_id=semantic_id,
+        response=submitted,
+        pilot=PilotProvenance(
+            source=context.pilot_source,
+            implementation=trace.pilot_name,
+            version=trace.pilot_version,
+            model=_optional_model(trace.pilot_metadata),
+        ),
+        deck_id=context.deck_id,
+        deck_version=context.deck_version,
+        primer_version=context.primer_version,
+        outcome={"result_observation": _without_live_routing(result)},
+        metadata={
+            "channel": trace.channel,
+            "native_semantic_id": semantic_id,
+            "live_routing_id": trace.live_routing_id,
+            "submitted": dict(trace.submitted),
+            "pilot_metadata": dict(trace.pilot_metadata),
+            "input_state_digest": state_digest,
+            "result_state_digest": result_digest,
+        },
+    )
+    record.validate()
+    return record
 
 
 def decision_record_from_execution_trace(

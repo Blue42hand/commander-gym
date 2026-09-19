@@ -146,3 +146,89 @@ class DecisionRecord:
         )
         record.validate()
         return record
+
+
+@dataclass(frozen=True)
+class StructuredDecisionRecord:
+    """Durable evidence for one native non-enumerable Argentum decision response."""
+
+    game_id: str
+    decision_id: str
+    decision_type: str
+    seat: int
+    observation_schema: str
+    observation: Dict[str, Any]
+    native_decision_semantic_id: str
+    response: Dict[str, Any]
+    pilot: PilotProvenance
+    deck_id: str
+    deck_version: str
+    primer_version: Optional[str] = None
+    outcome: Optional[Dict[str, Any]] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    schema_version: int = SCHEMA_VERSION
+
+    def validate(self) -> None:
+        if self.schema_version != SCHEMA_VERSION:
+            raise RecordValidationError(
+                f"unsupported schema_version {self.schema_version}; expected {SCHEMA_VERSION}"
+            )
+        for name, value in (
+            ("game_id", self.game_id),
+            ("decision_id", self.decision_id),
+            ("decision_type", self.decision_type),
+            ("observation_schema", self.observation_schema),
+            ("native_decision_semantic_id", self.native_decision_semantic_id),
+            ("deck_id", self.deck_id),
+            ("deck_version", self.deck_version),
+        ):
+            if not isinstance(value, str) or not value:
+                raise RecordValidationError(f"{name} must be a non-empty string")
+        if not isinstance(self.seat, int) or self.seat < 0:
+            raise RecordValidationError("seat must be a non-negative integer")
+        if not isinstance(self.observation, dict):
+            raise RecordValidationError("observation must be an object")
+        if not isinstance(self.response, dict) or not self.response:
+            raise RecordValidationError("response must be a non-empty object")
+        if "decisionId" in self.response:
+            raise RecordValidationError(
+                "durable structured response must not contain live decisionId routing"
+            )
+        if self.outcome is not None and not isinstance(self.outcome, dict):
+            raise RecordValidationError("outcome must be an object or null")
+        if not isinstance(self.metadata, dict):
+            raise RecordValidationError("metadata must be an object")
+
+    def to_dict(self) -> Dict[str, Any]:
+        self.validate()
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "StructuredDecisionRecord":
+        schema_version = value.get("schema_version", SCHEMA_VERSION)
+        if schema_version != SCHEMA_VERSION:
+            raise RecordValidationError(
+                f"unsupported schema_version {schema_version}; expected {SCHEMA_VERSION}"
+            )
+        pilot_value = value.get("pilot")
+        if not isinstance(pilot_value, dict):
+            raise RecordValidationError("pilot must be an object")
+        record = cls(
+            schema_version=schema_version,
+            game_id=value.get("game_id"),
+            decision_id=value.get("decision_id"),
+            decision_type=value.get("decision_type"),
+            seat=value.get("seat"),
+            observation_schema=value.get("observation_schema"),
+            observation=value.get("observation", {}),
+            native_decision_semantic_id=value.get("native_decision_semantic_id"),
+            response=value.get("response", {}),
+            pilot=PilotProvenance.from_dict(pilot_value),
+            deck_id=value.get("deck_id"),
+            deck_version=value.get("deck_version"),
+            primer_version=value.get("primer_version"),
+            outcome=value.get("outcome"),
+            metadata=value.get("metadata", {}),
+        )
+        record.validate()
+        return record

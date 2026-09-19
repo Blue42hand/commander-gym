@@ -5,6 +5,7 @@ from commander_gym import (
     DecisionRecord,
     PilotProvenance,
     RecordValidationError,
+    StructuredDecisionRecord,
 )
 
 
@@ -46,6 +47,42 @@ class DecisionRecordTests(unittest.TestCase):
                     ActionRecord(action_id="dup"),
                 ],
                 "chosen_action_id": "dup",
+            }
+        )
+        with self.assertRaises(RecordValidationError):
+            invalid.validate()
+
+
+class StructuredDecisionRecordTests(unittest.TestCase):
+    def record(self):
+        return StructuredDecisionRecord(
+            game_id="game-1",
+            decision_id="decision-structured-1",
+            decision_type="CHOOSE_TARGETS",
+            seat=0,
+            observation_schema="schema-v1",
+            observation={"pendingDecision": {"semanticId": "decision-semantic"}},
+            native_decision_semantic_id="decision-semantic",
+            response={"type": "ChooseTargetsResponse", "targets": ["entity-3"]},
+            pilot=PilotProvenance(source="test", implementation="fixture", version="v1"),
+            deck_id="package-a",
+            deck_version="revision-1",
+        )
+
+    def test_round_trip(self):
+        record = self.record()
+        self.assertEqual(StructuredDecisionRecord.from_dict(record.to_dict()), record)
+
+    def test_rejects_live_routing_id_in_durable_response(self):
+        record = self.record()
+        invalid = StructuredDecisionRecord(
+            **{
+                **record.__dict__,
+                "response": {
+                    "type": "ChooseTargetsResponse",
+                    "decisionId": "live-routing",
+                    "targets": ["entity-3"],
+                },
             }
         )
         with self.assertRaises(RecordValidationError):
