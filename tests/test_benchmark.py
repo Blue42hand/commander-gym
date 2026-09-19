@@ -76,6 +76,12 @@ class BenchmarkSchemaTests(unittest.TestCase):
         with self.assertRaises(RecordValidationError):
             BenchmarkCase.from_dict(value)
 
+    def test_rejects_case_not_marked_held_out(self):
+        value = synthetic_case_dict()
+        value["held_out"] = False
+        with self.assertRaises(RecordValidationError):
+            BenchmarkCase.from_dict(value)
+
     def test_training_guard_rejects_held_out_decision_and_allows_unrelated(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "benchmark.jsonl"
