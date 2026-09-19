@@ -1,29 +1,27 @@
 name: Argentum milestone relay
 
 on:
-  issue_comment:
-    types: [created]
+  push:
+    branches: [argentum-relay-control]
+    paths:
+      - relay-command.json
 
 permissions:
   contents: read
   issues: write
 
 concurrency:
-  group: argentum-relay-${{ github.event.issue.number }}
+  group: argentum-relay-control
   cancel-in-progress: false
 
 jobs:
   relay:
-    if: >-
-      github.event.issue.number == 7 &&
-      github.event.comment.user.login == github.repository_owner &&
-      startsWith(github.event.comment.body, '/argentum ')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
       ARGENTUM_GATEWAY_URL: ${{ secrets.ARGENTUM_GATEWAY_URL }}
       ARGENTUM_GATEWAY_TOKEN: ${{ secrets.ARGENTUM_GATEWAY_TOKEN }}
-      ARGENTUM_RELAY_COMMENT: ${{ github.event.comment.body }}
+      ARGENTUM_RELAY_COMMAND_FILE: relay-command.json
       ARGENTUM_RELAY_OUTPUT: ${{ runner.temp }}/argentum-relay-result.md
 
     steps:
@@ -44,7 +42,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh issue comment 7             --repo "$GITHUB_REPOSITORY"             --body-file "$ARGENTUM_RELAY_OUTPUT"
+          gh issue comment 7 \
+            --repo "$GITHUB_REPOSITORY" \
+            --body-file "$ARGENTUM_RELAY_OUTPUT"
 
       - name: Preserve fail-closed workflow status
         if: steps.relay.outcome != 'success'
