@@ -36,7 +36,7 @@ jobs:
       - name: Execute strict Argentum relay command
         id: relay
         continue-on-error: true
-        run: python scripts/argentum_issue_relay.py
+        run: PYTHONPATH=. python scripts/argentum_issue_relay.py
 
       - name: Publish relay result
         env:
