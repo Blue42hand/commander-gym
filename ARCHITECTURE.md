@@ -18,6 +18,28 @@ Self-play, reinforcement learning, LLM prompting, search, benchmarks, deck optim
 
 For now, competitive strength and enjoyable casual competence are sufficiently aligned that the project should optimize a single broad objective: **become a better Magic player**. Do not create separate casual and competitive pilot architectures until pilot strength makes the distinction useful.
 
+## Dependency objective
+
+Commander Gym should ultimately run against **vanilla upstream Argentum**.
+
+```text
+Commander Gym
+    ↓
+upstream Argentum
+```
+
+The `Blue42hand/argentum-engine` fork is a staging area for integration and contributions while required capabilities are being developed. It is not intended to become a permanently divergent engine distribution owned by Commander Gym.
+
+For each Argentum-side change, classify it as:
+
+- **upstream candidate** — the default for generally useful game/environment work;
+- **downstream extension** — exceptional work that truly should not live in Argentum;
+- **transitional infrastructure** — temporary integration machinery with an explicit retirement path.
+
+The desired steady state is no required fork delta.
+
+This objective does not supersede the product boundary. A change does not belong in Argentum merely because it could be made generic. Strategic reasoning, learning, policy, deck construction, and player improvement remain Commander Gym responsibilities.
+
 ## The two Argentum interfaces
 
 Commander Gym has two primary ways to interact with Argentum.
@@ -72,7 +94,7 @@ Prefer Argentum for capabilities that define the game or the environment in whic
 - generally useful search/self-play primitives when they are environment-level capabilities;
 - generic card-semantics/tooling support.
 
-Development on the Commander Gym Argentum fork should primarily make Argentum a better environment for training and hosting artificial players. Changes should remain generally useful and suitable for upstream contribution whenever practical.
+Changes made in the Commander Gym Argentum fork should be designed for upstream contribution by default. The fork should not accumulate a permanent private API or alternate rules-engine surface.
 
 ### Public Commander Gym
 
@@ -109,15 +131,35 @@ Keep private or deck-specific artifacts out of the public repo:
 
 ## Decision rule
 
-Ask two questions:
+Ask three questions:
 
 1. **Is this about the game/environment?**  
-   If it changes legality, rules, authoritative state, player-visible information, multiplayer lifecycle, or the generic interface through which an external player acts, it belongs in Argentum.
+   If it changes legality, rules, authoritative state, player-visible information, multiplayer lifecycle, cards, or the generic interface through which an external player acts, it belongs in Argentum.
 
 2. **Is this about the player?**  
    If it changes reasoning, learning, deck construction, planning, action selection, specialization, evaluation, or improvement, it belongs in Commander Gym.
 
+3. **If it belongs in Argentum, can another Argentum user benefit without knowing Commander Gym exists?**  
+   If yes, it should normally be shaped as an upstream contribution rather than a permanent fork-only feature.
+
 The boundary adapter belongs in Commander Gym, but should be thin. Commander Gym must not maintain a competing canonical rules/state model merely to drive Argentum.
+
+## Argentum contribution discipline
+
+Work in the fork should follow upstream Argentum's own contribution and architecture guidance.
+
+For card-database work:
+
+- Scryfall Oracle text and rulings are authoritative for implementation evidence;
+- use existing SDK primitives and `Effects.*` / `Patterns.*` composition before adding engine vocabulary;
+- give every card its own scenario-test file;
+- manually exercise meaningful interactions and player-facing UX;
+- batch only cards that compose existing primitives;
+- isolate a card that requires a new effect/condition/keyword/decision primitive so the engine addition can be reviewed and tested independently.
+
+Roster coverage and EDHREC popularity may determine **what to implement next**, but they do not lower upstream correctness or review standards.
+
+For non-card work, prefer small generic changes that improve Argentum's external-player, Gym, multiplayer, provenance, replay, performance, or server/controller surfaces without importing Commander Gym policy into the engine.
 
 ## Deck building and piloting
 
@@ -156,11 +198,14 @@ Once pilots exceed ordinary casual competence, the project may introduce configu
 
 ## Migration principle
 
-Use **move, not duplicate**:
+Use **move, upstream, or retire — not duplicate**:
 
 1. identify durable player/research functionality in `commander-gym-private`;
 2. determine whether it is actually a game/environment capability;
-3. move generic game/environment capability to Argentum;
-4. move player/learning/evaluation code to this repository;
-5. leave private deck/model/data assets in `commander-gym-private`;
-6. retire obsolete Forge-era layers rather than preserving compatibility indefinitely.
+3. move player/learning/evaluation code to this repository;
+4. for generic game/environment capability, implement it cleanly in the Argentum fork and prepare it for upstream;
+5. consume the upstream capability from Commander Gym once available and remove any transitional fork-only dependency;
+6. leave private deck/model/data assets in `commander-gym-private`;
+7. retire obsolete Forge-era layers rather than preserving compatibility indefinitely.
+
+The migration is successful when public Commander Gym is a focused player/research project that can plug into ordinary upstream Argentum.
