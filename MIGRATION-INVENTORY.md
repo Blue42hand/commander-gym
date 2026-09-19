@@ -2,11 +2,24 @@
 
 This document classifies the durable contents of `Blue42hand/commander-gym-private` under the three-repository architecture:
 
-- `Blue42hand/argentum-engine`: generally reusable Magic/agent platform capabilities.
-- `Blue42hand/commander-gym`: public Commander-focused research/evaluation harness.
+- `Blue42hand/argentum-engine`: authoritative Magic game/environment capabilities.
+- `Blue42hand/commander-gym`: public artificial-player, learning, deck-building, and evaluation framework.
 - `Blue42hand/commander-gym-private`: private deck/pilot/model/data assets and migration evidence.
 
 Commander remains the primary focus. Core contracts should avoid unnecessary Commander-only assumptions when a format-neutral design costs essentially nothing.
+
+
+## Direction clarification
+
+The migration is now governed by a stronger product boundary:
+
+> **Argentum is the game. Commander Gym is the player.**
+
+Argentum should own rules, authoritative state, legal actions/decisions, seat-safe observations, multiplayer/game-server hosting, Gym environment APIs, and generic environment performance/provenance. Commander Gym should own player intelligence: piloting, deck construction, deck/pilot co-optimization, LLM/RL/other learning systems, training policy, evaluation, and orchestration.
+
+In particular, do **not** interpret "generally reusable agent capability" as a reason to put strategic intelligence, player learning, or deck-building systems into Argentum. Argentum may provide baseline AI and environment-level search primitives, but Commander Gym is where the best artificial player is developed.
+
+For now, the migration should optimize one broad competency target rather than separate casual and competitive stacks. Those can diverge later when the pilots are strong enough for the distinction to matter.
 
 ## Inventory snapshot
 
