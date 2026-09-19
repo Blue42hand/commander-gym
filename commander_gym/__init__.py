@@ -49,6 +49,11 @@ from .pilot import (
     choose_for_observation,
     validate_pilot_choice,
 )
+from .pilot_records import (
+    PilotRecordContext,
+    PilotRecordError,
+    decision_record_from_execution_trace,
+)
 from .pilot_routing import (
     CertifiedMechanicalHandler,
     ForcedParameterlessChoiceHandler,
@@ -111,6 +116,8 @@ __all__ = [
     "PilotContractError",
     "PilotDecision",
     "PilotProvenance",
+    "PilotRecordContext",
+    "PilotRecordError",
     "RUN_RECORD_SCHEMA_VERSION",
     "RUN_STATUS_COMPLETED",
     "RUN_STATUS_FAILED",
@@ -124,6 +131,7 @@ __all__ = [
     "SparseDecisionFeatures",
     "StaleArgentumDecisionError",
     "choose_for_observation",
+    "decision_record_from_execution_trace",
     "encode_decision_record",
     "first_legal_pilot",
     "policy_family_for_decision_type",
