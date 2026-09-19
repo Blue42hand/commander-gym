@@ -1,1 +1,1 @@
-{"op":"status"}
+{"op":"create","config":{"players":[{"name":"Alice","deck":{"type":"Explicit","cards":{"Mountain":17,"Raging Goblin":3}},"startingLife":20},{"name":"Bob","deck":{"type":"Explicit","cards":{"Mountain":17,"Raging Goblin":3}},"startingLife":20}],"skipMulligans":true,"startingPlayerIndex":0,"perspectivePlayerIndex":0,"revealAll":false}}
