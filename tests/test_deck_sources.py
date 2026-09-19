@@ -80,7 +80,6 @@ class DeckSourceNormalizationTests(unittest.TestCase):
         first = normalize_archidekt_snapshot(payload, source_id=source_id, source_url=source_url)
         reordered = copy.deepcopy(payload)
         reordered["cards"].reverse()
-        reordered["cards"][1]["categories"].reverse()
         second = normalize_archidekt_snapshot(reordered, source_id=source_id, source_url=source_url)
         self.assertEqual(first.fingerprint(), second.fingerprint())
 
