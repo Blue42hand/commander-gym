@@ -29,8 +29,7 @@ from .deck_package import (
     DeckPackageError,
     validate_commander_package,
 )
-from .records import ActionRecord, DecisionRecord, PilotProvenance, RecordValidationError
-
+from .pilot import (\n    ArtificialPlayer,\n    ArgentumActionChoice,\n    ArgentumDecisionChoice,\n    PilotChoice,\n    PilotContractError,\n    choose_for_observation,\n    validate_pilot_choice,\n)\nfrom .records import ActionRecord, DecisionRecord, PilotProvenance, RecordValidationError\n
 __all__ = [
     "ActionRecord",
     "ArgentumCanonicalDecision",
