@@ -36,6 +36,7 @@ from .deck_sources import (
     DeckSourceSnapshot,
     normalize_archidekt_snapshot,
 )
+from .openai_responses_pilot import OpenAIResponsesPilot, OpenAIResponsesPilotError
 from .orchestration import (
     ArgentumOrchestrator,
     CreationReconciliation,
@@ -125,6 +126,8 @@ __all__ = [
     "EnvironmentReconciliation",
     "FEATURE_SCHEMA_VERSION",
     "ForcedParameterlessChoiceHandler",
+    "OpenAIResponsesPilot",
+    "OpenAIResponsesPilotError",
     "OrchestrationBackend",
     "OrchestrationCompatibilityError",
     "OrchestrationError",
