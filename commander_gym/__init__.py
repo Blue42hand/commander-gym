@@ -55,6 +55,16 @@ from .pilot_routing import (
     RoutingPilot,
 )
 from .records import ActionRecord, DecisionRecord, PilotProvenance, RecordValidationError
+from .run_records import (
+    RUN_RECORD_SCHEMA_VERSION,
+    RUN_STATUS_COMPLETED,
+    RUN_STATUS_FAILED,
+    RUN_STATUS_STOPPED,
+    EngineProvenance,
+    RunParticipant,
+    RunRecord,
+    RunTermination,
+)
 from .sparse_features import (
     DEFAULT_FEATURE_SPACE,
     FEATURE_SCHEMA_VERSION,
@@ -88,6 +98,7 @@ __all__ = [
     "DeckPackage",
     "DeckPackageError",
     "DecisionRecord",
+    "EngineProvenance",
     "EnvironmentReconciliation",
     "FEATURE_SCHEMA_VERSION",
     "ForcedParameterlessChoiceHandler",
@@ -100,8 +111,15 @@ __all__ = [
     "PilotContractError",
     "PilotDecision",
     "PilotProvenance",
+    "RUN_RECORD_SCHEMA_VERSION",
+    "RUN_STATUS_COMPLETED",
+    "RUN_STATUS_FAILED",
+    "RUN_STATUS_STOPPED",
     "RecordValidationError",
     "RoutingPilot",
+    "RunParticipant",
+    "RunRecord",
+    "RunTermination",
     "ServerIdentity",
     "SparseDecisionFeatures",
     "StaleArgentumDecisionError",
