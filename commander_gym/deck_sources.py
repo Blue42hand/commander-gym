@@ -316,9 +316,7 @@ def normalize_archidekt_snapshot(
             "collector_number": card.get("collectorNumber"),
             "finish": row.get("finish" if is_mcp else "modifier"),
             "language": row.get("language", card.get("language")),
-            "primary_category": (
-                row.get("primaryCategoryName") if is_mcp else (resolved[0] if resolved else None)
-            ),
+            "primary_category": row.get("primaryCategoryName") if is_mcp else None,
             "notes": row.get("notes"),
             "label": row.get("label"),
             "custom_cmc": row.get("customCmc"),
