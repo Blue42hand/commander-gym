@@ -108,6 +108,11 @@ class ArgentumGatewayTests(unittest.TestCase):
             ("POST", "/envs", {"players": [{"name": "A"}]}),
             ("GET", "/envs/env-1?revealAll=false", None),
             ("POST", "/envs/env-1/step", {"actionId": 7, "params": {}}),
+            (
+                "POST",
+                "/envs/env-1/decision",
+                {"decisionId": "decision-1", "response": {"type": "yes-no", "value": True}},
+            ),
             ("DELETE", "/envs", {"envIds": ["env-1"]}),
         ]
         for method, path, body in calls:
