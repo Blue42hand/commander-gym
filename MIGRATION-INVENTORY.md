@@ -21,6 +21,20 @@ In particular, do **not** interpret "generally reusable agent capability" as a r
 
 For now, the migration should optimize one broad competency target rather than separate casual and competitive stacks. Those can diverge later when the pilots are strong enough for the distinction to matter.
 
+### Upstream-first Argentum rule
+
+The target integration is **public Commander Gym → vanilla upstream Argentum**. `Blue42hand/argentum-engine` is a staging fork for developing, validating, and contributing missing game/environment capabilities; it should not become a permanent fourth architecture layer.
+
+For every fork delta, record one of three dispositions:
+
+- **upstream candidate** — the default for generally useful Argentum changes;
+- **downstream extension** — exceptional work that genuinely does not belong upstream;
+- **transitional infrastructure** — temporary machinery with an explicit removal path.
+
+Generic cards, rules fixes, Gym/environment APIs, multiplayer behavior, external-player/controller seams, replay/provenance, transport, diagnostics, and performance improvements should be shaped for upstream by default. Once an upstream equivalent lands, Commander Gym should consume it and retire the fork-only dependency.
+
+This does not weaken the game/player boundary. Player intelligence remains in Commander Gym even when it could be abstracted generically.
+
 ## Inventory snapshot
 
 At the start of this inventory, `commander-gym-private` contains 503 tracked files. The largest areas are:
@@ -190,7 +204,7 @@ Any future work involving:
 - generic telemetry hooks;
 - MCTS/self-play infrastructure
 
-belongs in `argentum-engine` and should be designed for upstream contribution.
+belongs in `argentum-engine` and should be designed for upstream contribution. The fork is the staging location, not the intended permanent owner.
 
 ### Card/rules semantics
 
@@ -203,6 +217,8 @@ Argentum already owns:
 - card capability coverage.
 
 Public Commander Gym may consume card semantics for experiment features, but generic semantic representation improvements should prefer Argentum.
+
+Card coverage work motivated by the private roster or EDHREC should follow upstream Argentum's contribution workflow: Scryfall-faithful Oracle/rulings, composition-first SDK usage, one scenario-test file per card, manual play/UX verification, and focused PRs when new engine vocabulary is required. Roster coverage and Commander popularity determine priority, not a separate implementation standard.
 
 ### Generic deck legality / engine capability checks
 
@@ -404,7 +420,8 @@ Recommended implementation order:
 
 5. **Argentum integration**
    - consume native Argentum observations/legal actions;
-   - upstream generally reusable action/decision identity improvements rather than building a large adapter.
+   - upstream generally reusable action/decision identity improvements rather than building a large adapter;
+   - track fork deltas by upstream/downstream/transitional disposition and drive the required fork delta toward zero.
 
 6. **Archidekt/package-source integration**
    - migrate generic code;
