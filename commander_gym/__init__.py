@@ -29,6 +29,7 @@ from .deck_package import (
     DeckPackageError,
     validate_commander_package,
 )
+from .deck_source_fetch import DeckSourceFetchError, fetch_archidekt_snapshot
 from .deck_sources import (
     DECK_SOURCE_SCHEMA_VERSION,
     DeckSourceEntry,
@@ -120,6 +121,7 @@ __all__ = [
     "DeckPackageError",
     "DeckSourceEntry",
     "DeckSourceError",
+    "DeckSourceFetchError",
     "DeckSourceSnapshot",
     "DecisionRecord",
     "EngineProvenance",
@@ -156,6 +158,7 @@ __all__ = [
     "decision_record_from_execution_trace",
     "structured_decision_record_from_execution_trace",
     "encode_decision_record",
+    "fetch_archidekt_snapshot",
     "first_legal_pilot",
     "normalize_archidekt_snapshot",
     "policy_family_for_decision_type",
