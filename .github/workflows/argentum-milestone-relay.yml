@@ -22,7 +22,7 @@ jobs:
       ARGENTUM_GATEWAY_URL: ${{ secrets.ARGENTUM_GATEWAY_URL }}
       ARGENTUM_GATEWAY_TOKEN: ${{ secrets.ARGENTUM_GATEWAY_TOKEN }}
       ARGENTUM_RELAY_COMMAND_FILE: relay-command.json
-      ARGENTUM_RELAY_OUTPUT: ${{ runner.temp }}/argentum-relay-result.md
+      ARGENTUM_RELAY_OUTPUT: argentum-relay-result.md
 
     steps:
       - uses: actions/checkout@v6
