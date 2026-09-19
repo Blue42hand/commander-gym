@@ -13,6 +13,15 @@ from .argentum_client import (
     ArgentumGymClient,
     ArgentumRemoteError,
 )
+from .benchmark_runner import (
+    BENCHMARK_REPORT_VERSION,
+    BenchmarkPilot,
+    CallablePilot,
+    PilotDecision,
+    first_legal_pilot,
+    preferred_or_first_pilot,
+    run_benchmark,
+)
 from .records import ActionRecord, DecisionRecord, PilotProvenance, RecordValidationError
 
 __all__ = [
@@ -25,8 +34,15 @@ __all__ = [
     "ArgentumDeliveryUnknownError",
     "ArgentumGymClient",
     "ArgentumRemoteError",
+    "BENCHMARK_REPORT_VERSION",
+    "BenchmarkPilot",
+    "CallablePilot",
     "DecisionRecord",
+    "PilotDecision",
     "PilotProvenance",
     "RecordValidationError",
     "StaleArgentumDecisionError",
+    "first_legal_pilot",
+    "preferred_or_first_pilot",
+    "run_benchmark",
 ]
