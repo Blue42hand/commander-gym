@@ -1,0 +1,52 @@
+{
+  "package_id": "public-synthetic-commander-v1",
+  "format_id": "commander",
+  "deck": {
+    "kind": "deck",
+    "artifact_id": "public-synthetic-commander-list",
+    "version": "1",
+    "digest": "sha256:synthetic-deck",
+    "metadata": {
+      "source": "synthetic-public-fixture"
+    }
+  },
+  "format_metadata": {
+    "commander": "Synthetic Commander"
+  },
+  "deck_knowledge": {
+    "kind": "primer",
+    "artifact_id": "public-synthetic-primer",
+    "version": "1",
+    "digest": null,
+    "metadata": {}
+  },
+  "deterministic_policy": null,
+  "generalist_base": {
+    "kind": "model",
+    "artifact_id": "public-generalist",
+    "version": "v1",
+    "digest": null,
+    "metadata": {
+      "provider": "synthetic"
+    }
+  },
+  "specialist": null,
+  "training_generation": null,
+  "training_provenance": [
+    "synthetic-public-fixture"
+  ],
+  "evaluation_refs": [
+    "public-benchmark-v1"
+  ],
+  "metapool_refs": [
+    "synthetic-public-pool-v1"
+  ],
+  "compatibility": {
+    "argentum_schema": "v1"
+  },
+  "metadata": {
+    "fixture": "public"
+  },
+  "schema_version": 2,
+  "fingerprint": "bd4cfda3b5cc15e94b47663f532dd5772b8558ca13435bcfaf6c9ba163f97252"
+}
