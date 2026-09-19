@@ -53,10 +53,6 @@ class DecisionRecordTests(unittest.TestCase):
             invalid.validate()
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class StructuredDecisionRecordTests(unittest.TestCase):
     def record(self):
         return StructuredDecisionRecord(
@@ -91,3 +87,7 @@ class StructuredDecisionRecordTests(unittest.TestCase):
         )
         with self.assertRaises(RecordValidationError):
             invalid.validate()
+
+
+if __name__ == "__main__":
+    unittest.main()
