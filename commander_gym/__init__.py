@@ -49,6 +49,11 @@ from .pilot import (
     choose_for_observation,
     validate_pilot_choice,
 )
+from .pilot_routing import (
+    CertifiedMechanicalHandler,
+    ForcedParameterlessChoiceHandler,
+    RoutingPilot,
+)
 from .records import ActionRecord, DecisionRecord, PilotProvenance, RecordValidationError
 from .sparse_features import (
     DEFAULT_FEATURE_SPACE,
@@ -76,6 +81,7 @@ __all__ = [
     "BENCHMARK_REPORT_VERSION",
     "BenchmarkPilot",
     "CallablePilot",
+    "CertifiedMechanicalHandler",
     "CreationReconciliation",
     "DEFAULT_FEATURE_SPACE",
     "DECK_PACKAGE_SCHEMA_VERSION",
@@ -84,6 +90,7 @@ __all__ = [
     "DecisionRecord",
     "EnvironmentReconciliation",
     "FEATURE_SCHEMA_VERSION",
+    "ForcedParameterlessChoiceHandler",
     "OrchestrationBackend",
     "OrchestrationCompatibilityError",
     "OrchestrationError",
@@ -94,6 +101,7 @@ __all__ = [
     "PilotDecision",
     "PilotProvenance",
     "RecordValidationError",
+    "RoutingPilot",
     "ServerIdentity",
     "SparseDecisionFeatures",
     "StaleArgentumDecisionError",
