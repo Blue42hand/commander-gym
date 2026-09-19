@@ -29,15 +29,27 @@ from .deck_package import (
     DeckPackageError,
     validate_commander_package,
 )
+from .pilot import (
+    ArtificialPlayer,
+    ArgentumActionChoice,
+    ArgentumDecisionChoice,
+    PilotChoice,
+    PilotContractError,
+    choose_for_observation,
+    validate_pilot_choice,
+)
 from .records import ActionRecord, DecisionRecord, PilotProvenance, RecordValidationError
 
 __all__ = [
     "ActionRecord",
+    "ArtificialPlayer",
+    "ArgentumActionChoice",
     "ArgentumCanonicalDecision",
     "ArgentumCanonicalError",
     "ArgentumClientConfigurationError",
     "ArgentumClientError",
     "ArgentumConnectionError",
+    "ArgentumDecisionChoice",
     "ArgentumDeliveryUnknownError",
     "ArgentumGymClient",
     "ArgentumRemoteError",
@@ -49,12 +61,16 @@ __all__ = [
     "DeckPackage",
     "DeckPackageError",
     "DecisionRecord",
+    "PilotChoice",
+    "PilotContractError",
     "PilotDecision",
     "PilotProvenance",
     "RecordValidationError",
     "StaleArgentumDecisionError",
+    "choose_for_observation",
     "first_legal_pilot",
     "preferred_or_first_pilot",
     "run_benchmark",
     "validate_commander_package",
+    "validate_pilot_choice",
 ]
