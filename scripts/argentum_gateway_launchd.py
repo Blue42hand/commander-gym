@@ -103,7 +103,7 @@ def render_plist(
         "StandardOutPath": str(stdout_path),
         "StandardErrorPath": str(stderr_path),
         "EnvironmentVariables": {
-            "PATH": "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+            "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
             "COMMANDER_GYM_GATEWAY_BIND": "127.0.0.1",
             "COMMANDER_GYM_GATEWAY_PORT": "8082",
             "COMMANDER_GYM_GATEWAY_UPSTREAM": "http://127.0.0.1:8081",
