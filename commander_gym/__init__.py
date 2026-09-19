@@ -53,13 +53,20 @@ from .pilot_records import (
     PilotRecordContext,
     PilotRecordError,
     decision_record_from_execution_trace,
+    structured_decision_record_from_execution_trace,
 )
 from .pilot_routing import (
     CertifiedMechanicalHandler,
     ForcedParameterlessChoiceHandler,
     RoutingPilot,
 )
-from .records import ActionRecord, DecisionRecord, PilotProvenance, RecordValidationError
+from .records import (
+    ActionRecord,
+    DecisionRecord,
+    PilotProvenance,
+    RecordValidationError,
+    StructuredDecisionRecord,
+)
 from .run_records import (
     RUN_RECORD_SCHEMA_VERSION,
     RUN_STATUS_COMPLETED,
@@ -129,9 +136,11 @@ __all__ = [
     "RunTermination",
     "ServerIdentity",
     "SparseDecisionFeatures",
+    "StructuredDecisionRecord",
     "StaleArgentumDecisionError",
     "choose_for_observation",
     "decision_record_from_execution_trace",
+    "structured_decision_record_from_execution_trace",
     "encode_decision_record",
     "first_legal_pilot",
     "policy_family_for_decision_type",
