@@ -111,6 +111,20 @@ class ArgentumGymClient:
             mutating=True,
         )
 
+    def submit_decision(
+        self,
+        env_id: str,
+        response: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
+        if not isinstance(response, Mapping) or not response:
+            raise ArgentumClientConfigurationError("decision response must be a non-empty mapping")
+        return self._request(
+            "POST",
+            f"/envs/{quote(env_id, safe='')}/decision",
+            body=response,
+            mutating=True,
+        )
+
     def dispose_envs(self, env_ids: Sequence[str]) -> None:
         self._request("DELETE", "/envs", body={"envIds": list(env_ids)}, mutating=True)
 
