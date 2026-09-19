@@ -23,6 +23,7 @@ from urllib.request import Request, urlopen
 MAX_REQUEST_BYTES = 1024 * 1024
 _ENV_PATH = re.compile(r"^/envs/[^/]+$")
 _STEP_PATH = re.compile(r"^/envs/[^/]+/step$")
+_DECISION_PATH = re.compile(r"^/envs/[^/]+/decision$")
 _LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 
@@ -84,7 +85,7 @@ def _allowed_request(method: str, raw_path: str) -> bool:
             and query["revealAll"][0] in {"true", "false"}
         )
 
-    if method == "POST" and _STEP_PATH.fullmatch(path):
+    if method == "POST" and (_STEP_PATH.fullmatch(path) or _DECISION_PATH.fullmatch(path)):
         return not query
 
     return False
