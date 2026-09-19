@@ -1,8 +1,7 @@
 from __future__ import annotations
 
+import unittest
 from typing import Any, Mapping, Sequence
-
-import pytest
 
 from commander_gym.orchestration import ArgentumOrchestrator
 from commander_gym.remote_proof import DirectOrchestrationProofError, run_direct_proof
@@ -77,72 +76,81 @@ class FakeBackend:
             self.envs.discard(env_id)
 
 
-def test_direct_proof_runs_complete_action_lifecycle_and_verifies_cleanup() -> None:
-    backend = FakeBackend()
-    proof = run_direct_proof(ArgentumOrchestrator(backend), {"seed": 42})
+class DirectOrchestrationProofTests(unittest.TestCase):
+    def test_complete_action_lifecycle_and_cleanup(self) -> None:
+        backend = FakeBackend()
+        proof = run_direct_proof(ArgentumOrchestrator(backend), {"seed": 42})
 
-    assert proof == {
-        "proof": "commander-gym-direct-orchestration-v1",
-        "service": "argentum-gym-server",
-        "schemaHash": "schema-v1",
-        "buildRevision": "build-abc",
-        "health": "ok",
-        "envId": "env-1",
-        "preexistingEnvironmentCount": 0,
-        "openingStateDigest": "before",
-        "mutation": {"kind": "action", "actionId": 7},
-        "resultingStateDigest": "after",
-        "disposed": True,
-        "serviceHealthyAfterDispose": True,
-    }
-    assert backend.envs == set()
-    assert backend.events == [
-        "health",
-        "status",
-        "schema",
-        "list",
-        "create",
-        "observe",
-        "step",
-        "observe",
-        "dispose",
-        "list",
-        "health",
-        "status",
-        "schema",
-    ]
+        self.assertEqual(
+            proof,
+            {
+                "proof": "commander-gym-direct-orchestration-v1",
+                "service": "argentum-gym-server",
+                "schemaHash": "schema-v1",
+                "buildRevision": "build-abc",
+                "health": "ok",
+                "envId": "env-1",
+                "preexistingEnvironmentCount": 0,
+                "openingStateDigest": "before",
+                "mutation": {"kind": "action", "actionId": 7},
+                "resultingStateDigest": "after",
+                "disposed": True,
+                "serviceHealthyAfterDispose": True,
+            },
+        )
+        self.assertEqual(backend.envs, set())
+        self.assertEqual(
+            backend.events,
+            [
+                "health",
+                "status",
+                "schema",
+                "list",
+                "create",
+                "observe",
+                "step",
+                "observe",
+                "dispose",
+                "list",
+                "health",
+                "status",
+                "schema",
+            ],
+        )
+
+    def test_native_structured_decision_path(self) -> None:
+        backend = FakeBackend()
+        backend.observation = {
+            "stateDigest": "decision-before",
+            "legalActions": [],
+            "pendingDecision": {"decisionId": "live-1", "type": "ChooseCards"},
+        }
+
+        proof = run_direct_proof(
+            ArgentumOrchestrator(backend),
+            {"seed": 42},
+            decision_response={"type": "ChooseCards", "decisionId": "live-1", "cardIds": []},
+        )
+
+        self.assertEqual(proof["mutation"], {"kind": "decision"})
+        self.assertEqual(proof["openingStateDigest"], "decision-before")
+        self.assertEqual(proof["resultingStateDigest"], "after-decision")
+        self.assertIn("decision", backend.events)
+        self.assertNotIn("step", backend.events)
+
+    def test_multiple_actions_fail_closed_and_cleanup(self) -> None:
+        backend = FakeBackend()
+        backend.observation["legalActions"] = [
+            {"actionId": 7, "kind": "PassPriority"},
+            {"actionId": 9, "kind": "PlayLand"},
+        ]
+
+        with self.assertRaisesRegex(DirectOrchestrationProofError, "exactly one legal action"):
+            run_direct_proof(ArgentumOrchestrator(backend), {"seed": 42})
+
+        self.assertEqual(backend.envs, set())
+        self.assertIn("dispose", backend.events)
 
 
-def test_direct_proof_supports_native_structured_decision_path() -> None:
-    backend = FakeBackend()
-    backend.observation = {
-        "stateDigest": "decision-before",
-        "legalActions": [],
-        "pendingDecision": {"decisionId": "live-1", "type": "ChooseCards"},
-    }
-
-    proof = run_direct_proof(
-        ArgentumOrchestrator(backend),
-        {"seed": 42},
-        decision_response={"type": "ChooseCards", "decisionId": "live-1", "cardIds": []},
-    )
-
-    assert proof["mutation"] == {"kind": "decision"}
-    assert proof["openingStateDigest"] == "decision-before"
-    assert proof["resultingStateDigest"] == "after-decision"
-    assert "decision" in backend.events
-    assert "step" not in backend.events
-
-
-def test_direct_proof_refuses_to_guess_among_multiple_legal_actions_and_still_disposes() -> None:
-    backend = FakeBackend()
-    backend.observation["legalActions"] = [
-        {"actionId": 7, "kind": "PassPriority"},
-        {"actionId": 9, "kind": "PlayLand"},
-    ]
-
-    with pytest.raises(DirectOrchestrationProofError, match="exactly one legal action"):
-        run_direct_proof(ArgentumOrchestrator(backend), {"seed": 42})
-
-    assert backend.envs == set()
-    assert "dispose" in backend.events
+if __name__ == "__main__":
+    unittest.main()
