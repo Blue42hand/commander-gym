@@ -29,6 +29,13 @@ from .deck_package import (
     DeckPackageError,
     validate_commander_package,
 )
+from .deck_sources import (
+    DECK_SOURCE_SCHEMA_VERSION,
+    DeckSourceEntry,
+    DeckSourceError,
+    DeckSourceSnapshot,
+    normalize_archidekt_snapshot,
+)
 from .orchestration import (
     ArgentumOrchestrator,
     CreationReconciliation,
@@ -100,8 +107,12 @@ __all__ = [
     "CreationReconciliation",
     "DEFAULT_FEATURE_SPACE",
     "DECK_PACKAGE_SCHEMA_VERSION",
+    "DECK_SOURCE_SCHEMA_VERSION",
     "DeckPackage",
     "DeckPackageError",
+    "DeckSourceEntry",
+    "DeckSourceError",
+    "DeckSourceSnapshot",
     "DecisionRecord",
     "EngineProvenance",
     "EnvironmentReconciliation",
@@ -134,6 +145,7 @@ __all__ = [
     "decision_record_from_execution_trace",
     "encode_decision_record",
     "first_legal_pilot",
+    "normalize_archidekt_snapshot",
     "policy_family_for_decision_type",
     "preferred_or_first_pilot",
     "run_benchmark",
