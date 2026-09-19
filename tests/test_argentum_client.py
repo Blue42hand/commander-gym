@@ -37,17 +37,25 @@ class ArgentumGymClientTests(unittest.TestCase):
         self.assertEqual(client.base_url, "http://127.0.0.1:8081")
 
     @patch("commander_gym.argentum_client.urlopen")
-    def test_health_uses_gateway_bearer_token(self, mocked_urlopen):
-        mocked_urlopen.return_value = FakeResponse({"status": "ok"})
+    def test_health_and_status_use_gateway_bearer_token(self, mocked_urlopen):
+        mocked_urlopen.side_effect = [
+            FakeResponse({"status": "ok"}),
+            FakeResponse({"status": "ok", "buildRevision": "abc123"}),
+        ]
         client = ArgentumGymClient("https://gym.example.test", bearer_token="secret")
 
         self.assertEqual(client.health(), {"status": "ok"})
+        self.assertEqual(client.status()["buildRevision"], "abc123")
 
-        request = mocked_urlopen.call_args.args[0]
-        self.assertEqual(request.full_url, "https://gym.example.test/health")
-        self.assertEqual(request.method, "GET")
-        self.assertEqual(request.headers["Authorization"], "Bearer secret")
-        self.assertEqual(mocked_urlopen.call_count, 1)
+        requests = [call.args[0] for call in mocked_urlopen.call_args_list]
+        self.assertEqual(
+            [request.full_url for request in requests],
+            ["https://gym.example.test/health", "https://gym.example.test/status"],
+        )
+        self.assertTrue(all(request.method == "GET" for request in requests))
+        self.assertTrue(
+            all(request.headers["Authorization"] == "Bearer secret" for request in requests)
+        )
 
     @patch("commander_gym.argentum_client.urlopen")
     def test_create_observe_step_and_dispose_match_argentum_surface(self, mocked_urlopen):

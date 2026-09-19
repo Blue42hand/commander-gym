@@ -73,6 +73,9 @@ class ArgentumGymClient:
     def health(self) -> Mapping[str, Any]:
         return self._request("GET", "/health")
 
+    def status(self) -> Mapping[str, Any]:
+        return self._request("GET", "/status")
+
     def schema_hash(self) -> Mapping[str, Any]:
         return self._request("GET", "/schema-hash")
 
