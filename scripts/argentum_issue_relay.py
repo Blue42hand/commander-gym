@@ -14,10 +14,16 @@ def main() -> int:
     url = os.environ.get("ARGENTUM_GATEWAY_URL", "").strip()
     token = os.environ.get("ARGENTUM_GATEWAY_TOKEN", "").strip()
     comment = os.environ.get("ARGENTUM_RELAY_COMMENT", "")
+    command_file = os.environ.get("ARGENTUM_RELAY_COMMAND_FILE", "").strip()
     output = Path(os.environ.get("ARGENTUM_RELAY_OUTPUT", "relay-result.md"))
+
+    if command_file:
+        comment = "/argentum " + Path(command_file).read_text(encoding="utf-8").strip()
 
     if not url or not token:
         raise SystemExit("ARGENTUM_GATEWAY_URL and ARGENTUM_GATEWAY_TOKEN are required")
+    if not comment:
+        raise SystemExit("ARGENTUM_RELAY_COMMENT or ARGENTUM_RELAY_COMMAND_FILE is required")
 
     client = ArgentumGymClient(url, bearer_token=token, timeout=20)
     relay = ArgentumRelay(client)
