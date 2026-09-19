@@ -50,6 +50,13 @@ from .pilot import (
     validate_pilot_choice,
 )
 from .records import ActionRecord, DecisionRecord, PilotProvenance, RecordValidationError
+from .sparse_features import (
+    DEFAULT_FEATURE_SPACE,
+    FEATURE_SCHEMA_VERSION,
+    SparseDecisionFeatures,
+    encode_decision_record,
+    policy_family_for_decision_type,
+)
 
 __all__ = [
     "ActionRecord",
@@ -70,11 +77,13 @@ __all__ = [
     "BenchmarkPilot",
     "CallablePilot",
     "CreationReconciliation",
+    "DEFAULT_FEATURE_SPACE",
     "DECK_PACKAGE_SCHEMA_VERSION",
     "DeckPackage",
     "DeckPackageError",
     "DecisionRecord",
     "EnvironmentReconciliation",
+    "FEATURE_SCHEMA_VERSION",
     "OrchestrationBackend",
     "OrchestrationCompatibilityError",
     "OrchestrationError",
@@ -86,9 +95,12 @@ __all__ = [
     "PilotProvenance",
     "RecordValidationError",
     "ServerIdentity",
+    "SparseDecisionFeatures",
     "StaleArgentumDecisionError",
     "choose_for_observation",
+    "encode_decision_record",
     "first_legal_pilot",
+    "policy_family_for_decision_type",
     "preferred_or_first_pilot",
     "run_benchmark",
     "validate_commander_package",
