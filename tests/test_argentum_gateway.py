@@ -1,6 +1,8 @@
+import io
 import json
 import threading
 import unittest
+from contextlib import redirect_stderr
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -32,6 +34,7 @@ class RecordingUpstreamHandler(BaseHTTPRequestHandler):
                 "method": self.command,
                 "path": self.path,
                 "authorization": self.headers.get("Authorization"),
+                "request_id": self.headers.get("X-Request-ID"),
                 "body": body,
             }
         )
@@ -75,10 +78,22 @@ class ArgentumGatewayTests(unittest.TestCase):
         self.upstream.shutdown()
         self.upstream.server_close()
 
-    def request(self, method, path, *, token="secret-token", body=None, content_type="application/json"):
+    def request(
+        self,
+        method,
+        path,
+        *,
+        token="secret-token",
+        body=None,
+        content_type="application/json",
+        request_id=None,
+        include_headers=False,
+    ):
         headers = {}
         if token is not None:
             headers["Authorization"] = f"Bearer {token}"
+        if request_id is not None:
+            headers["X-Request-ID"] = request_id
         data = None
         if body is not None:
             data = json.dumps(body).encode("utf-8")
@@ -86,9 +101,15 @@ class ArgentumGatewayTests(unittest.TestCase):
         request = Request(self.base_url + path, data=data, headers=headers, method=method)
         try:
             with urlopen(request, timeout=2) as response:
-                return response.status, json.loads(response.read().decode("utf-8"))
+                result = (response.status, json.loads(response.read().decode("utf-8")))
+                if include_headers:
+                    return result + (response.headers,)
+                return result
         except HTTPError as exc:
-            return exc.code, json.loads(exc.read().decode("utf-8"))
+            result = (exc.code, json.loads(exc.read().decode("utf-8")))
+            if include_headers:
+                return result + (exc.headers,)
+            return result
 
     def test_requires_bearer_token_before_forwarding(self):
         status, payload = self.request("GET", "/status", token=None)
@@ -144,6 +165,55 @@ class ArgentumGatewayTests(unittest.TestCase):
         )
         self.assertEqual(status, 415)
         self.assertIn("application/json", payload["error"])
+        self.assertEqual(RecordingUpstreamHandler.requests, [])
+
+    def test_structured_diagnostics_correlate_without_logging_secrets_or_bodies(self):
+        diagnostics = io.StringIO()
+        with redirect_stderr(diagnostics):
+            status, _, headers = self.request(
+                "POST",
+                "/envs",
+                body={"privateMarker": "do-not-log"},
+                request_id="cg-test-123",
+                include_headers=True,
+            )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(headers.get("X-Request-ID"), "cg-test-123")
+        self.assertEqual(RecordingUpstreamHandler.requests[0]["request_id"], "cg-test-123")
+
+        rendered = diagnostics.getvalue()
+        record = json.loads(rendered.strip().splitlines()[-1])
+        self.assertEqual(record["event"], "argentum_gateway_request")
+        self.assertEqual(record["requestId"], "cg-test-123")
+        self.assertEqual(record["method"], "POST")
+        self.assertEqual(record["path"], "/envs")
+        self.assertEqual(record["status"], 200)
+        self.assertEqual(record["upstreamStatus"], 200)
+        self.assertEqual(record["outcome"], "upstream_success")
+        self.assertGreaterEqual(record["durationMs"], 0)
+        self.assertNotIn("secret-token", rendered)
+        self.assertNotIn("do-not-log", rendered)
+
+    def test_unauthorized_diagnostic_is_gateway_scoped_and_correlated(self):
+        diagnostics = io.StringIO()
+        with redirect_stderr(diagnostics):
+            status, payload, headers = self.request(
+                "GET",
+                "/status",
+                token=None,
+                request_id="cg-denied-1",
+                include_headers=True,
+            )
+
+        self.assertEqual(status, 401)
+        self.assertEqual(payload, {"error": "unauthorized"})
+        self.assertEqual(headers.get("X-Request-ID"), "cg-denied-1")
+        record = json.loads(diagnostics.getvalue().strip().splitlines()[-1])
+        self.assertEqual(record["requestId"], "cg-denied-1")
+        self.assertEqual(record["outcome"], "gateway_unauthorized")
+        self.assertEqual(record["status"], 401)
+        self.assertNotIn("secret-token", diagnostics.getvalue())
         self.assertEqual(RecordingUpstreamHandler.requests, [])
 
     def test_configuration_refuses_public_bind_or_non_loopback_upstream(self):
