@@ -1,0 +1,45 @@
+{
+  "recorded_at": "2026-09-20",
+  "run_prefix": "linode-serial-repeatability-v1",
+  "fixture": "fixtures/full_game_krenko_mountains.json",
+  "game_count": 2,
+  "max_choices_per_game": 5000,
+  "engine": {
+    "revision": "320ab35a6ce4a32f53b93f7aa11bce1469467a2f",
+    "schema": "argentum-gym-contract@v1.8-multi-seat-seed"
+  },
+  "commander_gym_revision": "4c419472c8f1ad7699a60c88581ed678c0e2370a",
+  "runs": [
+    {
+      "run_id": "linode-serial-repeatability-v1-0001",
+      "seed": 20260926,
+      "qualification": "valid_complete",
+      "training_eligible": true,
+      "winner_id": "e3",
+      "decision_count": 1298,
+      "distinct_seats_acted": 4,
+      "all_four_seats_acted": true,
+      "disposed": true,
+      "service_healthy_after_dispose": true,
+      "artifact_sha256": "1e6f3544481bd7e8e7c4ffa11b828aea460ce4a0d7ee5a92fa9a1cb99d53c418"
+    },
+    {
+      "run_id": "linode-serial-repeatability-v1-0002",
+      "seed": 20260927,
+      "qualification": "valid_complete",
+      "training_eligible": true,
+      "winner_id": "e3",
+      "decision_count": 1298,
+      "distinct_seats_acted": 4,
+      "all_four_seats_acted": true,
+      "disposed": true,
+      "service_healthy_after_dispose": true,
+      "artifact_sha256": "eaaeac26718202a166a612efb9893a64382e624a17487ee853a4fcf2cbd917a3"
+    }
+  ],
+  "postflight": {
+    "active_environment_count": 0,
+    "service_healthy": true
+  },
+  "scope": "Public synthetic lifecycle repeatability proof; not current-deck coverage qualification."
+}

@@ -134,3 +134,18 @@ same Argentum revision, still has no complete four-deck pod. The highest-coverag
 Alela/Krenko/Meren/Rocco candidates and their exact missing cards are recorded in
 `docs/first-pod-blockers.json`. Card implementation belongs in Argentum; the runner
 must not silently replace unsupported cards or rules.
+
+## Serial repeatability milestone (2026-09-20)
+
+Run prefix `linode-serial-repeatability-v1` exercised the bounded serial loop with
+`--game-count 2`, starting seed `20260926`, and a 5,000-choice ceiling per game.
+The runner emitted suffixed run IDs `-0001` and `-0002` and incremented the second
+seed to `20260927`. Both games completed with `valid_complete`, all four seats acted,
+each environment was disposed, the service stayed healthy, and the final environment
+list was empty.
+
+The checked-in, non-private evidence summary is
+`docs/serial-repeatability-proof.json`. Full trajectories remain in the ignored
+private run directory and are bound to the summary by SHA-256. This completes the
+initial serial repeatability milestone; parallel rollout remains intentionally out of
+scope.
