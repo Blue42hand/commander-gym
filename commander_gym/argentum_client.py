@@ -24,10 +24,12 @@ class ArgentumClientConfigurationError(ArgentumClientError):
 class ArgentumRemoteError(ArgentumClientError):
     """Raised when the remote service returns an explicit HTTP error."""
 
-    def __init__(self, status: int, message: str):
-        super().__init__(f"Argentum service returned HTTP {status}: {message}")
+    def __init__(self, status: int, message: str, *, request_id: str | None = None):
+        suffix = f" [requestId={request_id}]" if request_id else ""
+        super().__init__(f"Argentum service returned HTTP {status}: {message}{suffix}")
         self.status = status
         self.message = message
+        self.request_id = request_id
 
 
 class ArgentumConnectionError(ArgentumClientError):
@@ -151,7 +153,8 @@ class ArgentumGymClient:
         except HTTPError as exc:
             raw = exc.read()
             message = raw.decode("utf-8", errors="replace") if raw else str(exc.reason)
-            raise ArgentumRemoteError(exc.code, message) from exc
+            request_id = exc.headers.get("X-Request-ID") if exc.headers else None
+            raise ArgentumRemoteError(exc.code, message, request_id=request_id) from exc
         except URLError as exc:
             if mutating:
                 raise ArgentumDeliveryUnknownError(
