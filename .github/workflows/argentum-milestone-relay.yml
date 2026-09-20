@@ -1,21 +1,28 @@
-name: Argentum milestone relay
+name: Argentum milestone relay (quarantined)
 
+# Transitional bootstrap path retained only for emergency archaeology/manual fallback.
+# The direct authenticated gateway path completed its live proof on 2026-09-20.
+# Do not restore a push/issue trigger here; normal orchestration must use
+# ArgentumGymClient / ArgentumOrchestrator through the direct gateway.
 on:
-  push:
-    branches: [argentum-relay-control]
-    paths:
-      - relay-command.json
+  workflow_dispatch:
+    inputs:
+      confirm_quarantined_relay:
+        description: "Type USE_QUARANTINED_RELAY to run the retired bootstrap transport"
+        required: true
+        type: string
 
 permissions:
   contents: read
   issues: write
 
 concurrency:
-  group: argentum-relay-control
+  group: argentum-relay-quarantined
   cancel-in-progress: false
 
 jobs:
   relay:
+    if: ${{ inputs.confirm_quarantined_relay == 'USE_QUARANTINED_RELAY' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
@@ -32,6 +39,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
+      - name: Explain quarantine
+        run: |
+          echo "::warning::This workflow is a quarantined transitional relay. Use the direct authenticated Commander Gym gateway for normal orchestration."
 
       - name: Execute strict Argentum relay command
         id: relay
