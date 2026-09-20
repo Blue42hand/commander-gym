@@ -41,6 +41,8 @@ class FakeResponses:
         self.calls.append(kwargs)
         if self.error is not None:
             raise self.error
+        if isinstance(self.response, list):
+            return self.response.pop(0)
         return self.response
 
 
@@ -129,7 +131,8 @@ class OpenAIResponsesPilotTests(unittest.TestCase):
 
         self.assertEqual(len(client.responses.calls), 1)
         request = client.responses.calls[0]
-        model_input = json.loads(request["input"])
+        self.assertTrue(request["input"].startswith("Return one JSON object"))
+        model_input = json.loads(request["input"].split("\n", 1)[1])
         self.assertNotIn("actionId", model_input["legalActions"][0])
         self.assertNotIn("actionId", model_input["legalActions"][1])
         self.assertEqual(
@@ -138,6 +141,39 @@ class OpenAIResponsesPilotTests(unittest.TestCase):
         )
         self.assertEqual(request["text"], {"format": {"type": "json_object"}})
         self.assertFalse(request["store"])
+        self.assertEqual(choice.metadata["retryCount"], 0)
+
+    def test_retries_one_invalid_unsubmitted_choice_and_records_retry(self):
+        client = FakeClient(
+            [
+                FakeResponse(
+                    json.dumps(
+                        {
+                            "channel": "action",
+                            "semanticId": "invented-action",
+                            "params": {},
+                        }
+                    )
+                ),
+                FakeResponse(
+                    json.dumps(
+                        {
+                            "channel": "action",
+                            "semanticId": "argentum-action-v1:pass",
+                            "params": {},
+                        }
+                    )
+                ),
+            ]
+        )
+        pilot = OpenAIResponsesPilot(client=client, model="gpt-test")
+
+        choice = choose_for_observation(pilot, action_observation())
+
+        self.assertEqual(choice.action_id, 2)
+        self.assertEqual(choice.metadata["retryCount"], 1)
+        self.assertEqual(len(client.responses.calls), 2)
+        self.assertIn("previous response was invalid", client.responses.calls[1]["input"])
 
     def test_structured_decision_injects_live_routing_id_locally(self):
         client = FakeClient(
@@ -166,7 +202,7 @@ class OpenAIResponsesPilotTests(unittest.TestCase):
                 "decisionId": "routing-live-9",
             },
         )
-        model_input = json.loads(client.responses.calls[0]["input"])
+        model_input = json.loads(client.responses.calls[0]["input"].split("\n", 1)[1])
         self.assertNotIn("decisionId", model_input["pendingDecision"])
         self.assertEqual(
             model_input["pendingDecision"]["semanticId"],

@@ -141,6 +141,11 @@ def _optional_model(metadata: Mapping[str, Any]) -> str | None:
     return model if isinstance(model, str) and model else None
 
 
+def _retry_count(metadata: Mapping[str, Any]) -> int:
+    value = metadata.get("retryCount", 0)
+    return value if type(value) is int and value >= 0 else 0
+
+
 def structured_decision_record_from_execution_trace(
     trace: PilotExecutionTrace,
     context: PilotRecordContext,
@@ -223,7 +228,7 @@ def structured_decision_record_from_execution_trace(
                 "pilot_elapsed_ms": trace.pilot_elapsed_ms,
                 "submission_elapsed_ms": trace.submission_elapsed_ms,
             },
-            "retry_count": 0,
+            "retry_count": _retry_count(trace.pilot_metadata),
         },
     )
     record.validate()
@@ -281,7 +286,7 @@ def decision_record_from_execution_trace(
             "pilot_elapsed_ms": trace.pilot_elapsed_ms,
             "submission_elapsed_ms": trace.submission_elapsed_ms,
         },
-        "retry_count": 0,
+        "retry_count": _retry_count(trace.pilot_metadata),
     }
 
     record = DecisionRecord(

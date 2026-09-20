@@ -39,6 +39,13 @@ or decision set. Use only the JSON observation provided. Return exactly one JSON
 For an enumerable legal action, return:
 {"channel":"action","semanticId":"<exact semanticId from legalActions>","params":{...}}
 
+The only supported params fields are native Argentum ActionParams:
+- attackers: object mapping attacker entity id to attacked player/permanent entity id;
+- blockers: object mapping blocker entity id to an array of attacker entity ids;
+- targets: array of target entity ids;
+- xValue: integer.
+Do not use attackerIds, attackTargetId, or other substitute field names.
+
 For a structured pending decision, return:
 {"channel":"decision","response":{...}}
 where response contains the native Argentum DecisionResponse fields required by the
@@ -46,6 +53,11 @@ pending decision, except decisionId. The caller injects the live routing decisio
 
 Never invent a legal action, semanticId, card/entity hidden from the observation, or
 routing identifier. Output JSON only.
+
+Play to win and make concrete progress toward a terminal result. Do not pass merely
+because passing is legal when a useful legal land play, spell, ability, or combat action
+advances the game. Preserve interaction when the observation gives a concrete tactical
+reason, not as a default excuse to stall.
 """
 
 
@@ -137,6 +149,26 @@ def _provider_metadata(response: Any, model: str) -> dict[str, Any]:
     return metadata
 
 
+def _provider_failure_summary(exc: Exception) -> str:
+    """Return bounded provider diagnostics without serializing the request or key."""
+
+    parts = [type(exc).__name__]
+    status_code = getattr(exc, "status_code", None)
+    if type(status_code) is int:
+        parts.append(f"status={status_code}")
+    body = getattr(exc, "body", None)
+    if isinstance(body, Mapping):
+        error = body.get("error", body)
+        if isinstance(error, Mapping):
+            code = error.get("code")
+            if isinstance(code, str) and code:
+                parts.append(f"code={code}")
+            message = error.get("message")
+            if isinstance(message, str) and message:
+                parts.append(f"message={message[:500]}")
+    return ", ".join(parts)
+
+
 def _require_string(value: Any, label: str) -> str:
     if not isinstance(value, str) or not value:
         raise OpenAIResponsesPilotError(f"{label} must be a non-empty string")
@@ -158,12 +190,18 @@ class OpenAIResponsesPilot:
     client: Any
     model: str
     instructions: str = _DEFAULT_INSTRUCTIONS
+    strategy: str | None = None
+    max_attempts: int = 2
     name: str = "openai-responses"
     version: str = "1"
 
     def __post_init__(self) -> None:
         _require_string(self.model, "OpenAI model")
         _require_string(self.instructions, "OpenAI pilot instructions")
+        if self.strategy is not None:
+            _require_string(self.strategy, "OpenAI pilot strategy")
+        if type(self.max_attempts) is not int or self.max_attempts < 1:
+            raise OpenAIResponsesPilotError("max_attempts must be a positive integer")
         responses = getattr(self.client, "responses", None)
         create = getattr(responses, "create", None)
         if not callable(create):
@@ -173,23 +211,60 @@ class OpenAIResponsesPilot:
 
     def choose(self, observation: Mapping[str, Any]) -> PilotChoice:
         model_observation = _without_live_routing(observation)
+        base_input = "Return one JSON object for this observation:\n" + json.dumps(
+            model_observation,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
         request = {
             "model": self.model,
-            "instructions": self.instructions,
-            "input": json.dumps(
-                model_observation,
-                sort_keys=True,
-                separators=(",", ":"),
-            ),
+            "instructions": self.instructions
+            + (f"\n\nRun-specific strategy:\n{self.strategy}" if self.strategy else ""),
+            # The Responses JSON-object mode requires the user input itself to name
+            # JSON; mentioning it only in instructions is not sufficient.
+            "input": base_input,
             "text": {"format": {"type": "json_object"}},
             "store": False,
         }
 
-        try:
-            response = self.client.responses.create(**request)
-        except Exception as exc:  # provider/transport errors must never become actions.
-            raise OpenAIResponsesPilotError("OpenAI Responses request failed") from exc
+        validation_error: OpenAIResponsesPilotError | None = None
+        for attempt in range(self.max_attempts):
+            if validation_error is not None:
+                request["input"] = (
+                    base_input
+                    + "\nThe previous response was invalid: "
+                    + str(validation_error)
+                    + "\nReturn a corrected JSON object using only the current observation."
+                )
+            try:
+                response = self.client.responses.create(**request)
+            except Exception as exc:  # Provider SDK owns transport-level retries.
+                raise OpenAIResponsesPilotError(
+                    f"OpenAI Responses request failed ({_provider_failure_summary(exc)})"
+                ) from exc
 
+            try:
+                return self._choice_from_response(
+                    response,
+                    observation,
+                    retry_count=attempt,
+                )
+            except OpenAIResponsesPilotError as exc:
+                validation_error = exc
+
+        assert validation_error is not None
+        raise OpenAIResponsesPilotError(
+            f"OpenAI pilot exhausted {self.max_attempts} validation attempts: "
+            f"{validation_error}"
+        ) from validation_error
+
+    def _choice_from_response(
+        self,
+        response: Any,
+        observation: Mapping[str, Any],
+        *,
+        retry_count: int,
+    ) -> PilotChoice:
         provider_error = _field(response, "error")
         if provider_error:
             raise OpenAIResponsesPilotError(
@@ -212,6 +287,7 @@ class OpenAIResponsesPilot:
             raise OpenAIResponsesPilotError("OpenAI pilot output must be a JSON object")
 
         metadata = _provider_metadata(response, self.model)
+        metadata["retryCount"] = retry_count
         channel = decision.get("channel")
         if channel == "action":
             return self._action_choice(decision, observation, metadata)
@@ -242,7 +318,8 @@ class OpenAIResponsesPilot:
         ]
         if len(matches) != 1:
             raise OpenAIResponsesPilotError(
-                "selected semanticId is not exactly one current Argentum legal action"
+                f"selected semanticId {semantic_id!r} is not exactly one current "
+                "Argentum legal action"
             )
         action_id = matches[0].get("actionId")
         if type(action_id) is not int:

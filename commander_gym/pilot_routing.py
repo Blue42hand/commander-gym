@@ -60,7 +60,16 @@ class ForcedParameterlessChoiceHandler:
         if not isinstance(action, Mapping) or type(action.get("actionId")) is not int:
             return None
 
-        if action.get("kind") != "PassPriority" and action.get("isDecisionOption") is not True:
+        if action.get("kind") == "PassPriority":
+            # Argentum currently serializes generic target-bound defaults on every
+            # legal action (including PassPriority). The action kind is authoritative:
+            # passing priority never consumes ActionParams, so those unrelated default
+            # fields must not turn a forced pass into a model wake.
+            if action.get("affordable") is False:
+                return None
+            return ArgentumActionChoice(action_id=action["actionId"])
+
+        if action.get("isDecisionOption") is not True:
             return None
         if action.get("affordable") is False or action.get("hasXCost") is True:
             return None

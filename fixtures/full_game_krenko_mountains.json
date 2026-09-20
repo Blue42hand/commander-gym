@@ -1,0 +1,97 @@
+{
+  "argentum_config": {
+    "format": {
+      "type": "com.wingedsheep.sdk.core.Format.Commander",
+      "commanderDamageThreshold": 21,
+      "deckSize": 100,
+      "startingLife": 40,
+      "startingHandSize": 7,
+      "alwaysDivertToCommand": false
+    },
+    "skipMulligans": false,
+    "useHandSmoother": false,
+    "startingPlayerIndex": 0,
+    "perspectivePlayerIndex": 0,
+    "revealAll": false,
+    "players": [
+      {
+        "name": "Synthetic Krenko 0",
+        "deck": {
+          "type": "Explicit",
+          "cards": {
+            "Mountain": 99
+          }
+        },
+        "startingLife": 40,
+        "commanderCardName": "Krenko, Mob Boss"
+      },
+      {
+        "name": "Synthetic Krenko 1",
+        "deck": {
+          "type": "Explicit",
+          "cards": {
+            "Mountain": 99
+          }
+        },
+        "startingLife": 40,
+        "commanderCardName": "Krenko, Mob Boss"
+      },
+      {
+        "name": "Synthetic Krenko 2",
+        "deck": {
+          "type": "Explicit",
+          "cards": {
+            "Mountain": 99
+          }
+        },
+        "startingLife": 40,
+        "commanderCardName": "Krenko, Mob Boss"
+      },
+      {
+        "name": "Synthetic Krenko 3",
+        "deck": {
+          "type": "Explicit",
+          "cards": {
+            "Mountain": 99
+          }
+        },
+        "startingLife": 40,
+        "commanderCardName": "Krenko, Mob Boss"
+      }
+    ]
+  },
+  "seats": [
+    {
+      "player_name": "Synthetic Krenko 0",
+      "deck_id": "public-synthetic-krenko-mountains-v1",
+      "deck_version": "9858d8cd6685bd696ed749b5ff618ce39146a3b3a27ed1ef17d6a262e2a90ae2",
+      "pilot": {
+        "backend": "qualification_aggro"
+      }
+    },
+    {
+      "player_name": "Synthetic Krenko 1",
+      "deck_id": "public-synthetic-krenko-mountains-v1",
+      "deck_version": "9858d8cd6685bd696ed749b5ff618ce39146a3b3a27ed1ef17d6a262e2a90ae2",
+      "pilot": {
+        "backend": "qualification_aggro"
+      }
+    },
+    {
+      "player_name": "Synthetic Krenko 2",
+      "deck_id": "public-synthetic-krenko-mountains-v1",
+      "deck_version": "9858d8cd6685bd696ed749b5ff618ce39146a3b3a27ed1ef17d6a262e2a90ae2",
+      "pilot": {
+        "backend": "qualification_aggro"
+      }
+    },
+    {
+      "player_name": "Synthetic Krenko 3",
+      "deck_id": "public-synthetic-krenko-mountains-v1",
+      "deck_version": "9858d8cd6685bd696ed749b5ff618ce39146a3b3a27ed1ef17d6a262e2a90ae2",
+      "pilot": {
+        "backend": "qualification_aggro"
+      }
+    }
+  ]
+}

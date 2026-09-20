@@ -1,0 +1,29 @@
+{
+  "recorded_at": "2026-09-20",
+  "run_id": "linode-first-terminal-four-seat-local-v3",
+  "fixture": "fixtures/full_game_krenko_mountains.json",
+  "seed": 20260925,
+  "qualification": "valid_complete",
+  "training_eligible": true,
+  "winner_id": "e3",
+  "decision_count": 1298,
+  "distinct_seats_acted": 4,
+  "all_four_seats_acted": true,
+  "decision_types": {
+    "ActivateAbility": 22,
+    "CastSpell": 4,
+    "DeclareAttackers": 18,
+    "DeclareBlockers": 18,
+    "PassPriority": 1198,
+    "PlayLand": 38
+  },
+  "engine": {
+    "revision": "320ab35a6ce4a32f53b93f7aa11bce1469467a2f",
+    "schema": "argentum-gym-contract@v1.8-multi-seat-seed"
+  },
+  "commander_gym_revision": "a9bed3c26300eaad7ed145af72ccdad569544ecd",
+  "disposed": true,
+  "service_healthy_after_dispose": true,
+  "full_artifact_sha256": "60d25ad4ff9f5907baadd9781db56b724546117bafb162c7d2b678795e84860f",
+  "scope": "Public synthetic lifecycle qualification; not current-deck coverage qualification."
+}
