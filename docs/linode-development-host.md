@@ -238,11 +238,11 @@ The first live direct proof succeeded on 2026-09-20 against Argentum build
 
 The permanent-hostname proof also succeeded on 2026-09-20 through `https://gym.commander-gym.com`, including create, observe, step, observe, dispose, disposal verification, and post-disposal health verification.
 
-## Legacy relay
+## Retired GitHub relay
 
-The GitHub Actions relay is transitional evidence only. Its workflow is manual-only and requires an explicit quarantine confirmation string.
+The temporary GitHub Actions/control-branch relay used for the bootstrap proof was removed from `main` on 2026-09-20 after the permanent direct path and reboot persistence were proven. Do not recreate it or add repository-write/Actions latency back into normal orchestration. Historical commits remain sufficient evidence of how the bootstrap proof worked.
 
-Do not add features to it or restore automatic triggers. Normal orchestration uses the direct gateway through `ArgentumGymClient` / `ArgentumOrchestrator`.
+The dedicated `argentum-relay-control` branch and the old `ARGENTUM_GATEWAY_URL` / `ARGENTUM_GATEWAY_TOKEN` repository secrets are no longer required by Commander Gym. Delete them from GitHub once no external automation depends on those legacy names. The live host token at `/etc/commander-gym/gateway.token` remains required for the direct gateway and is unrelated to the retired GitHub Actions secrets.
 
 ## Updating a pinned runtime
 
