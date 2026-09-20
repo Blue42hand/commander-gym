@@ -114,7 +114,7 @@ The current persistent development/test architecture uses a dedicated Linux host
 - an HTTPS tunnel only to the narrow gateway, never directly to raw Argentum;
 - pinned clean runtime checkouts, with development performed in separate worktrees.
 
-The direct `health → create → observe → step/decision → observe → dispose` path was proven live without the GitHub relay on 2026-09-20. The old GitHub Actions relay is quarantined and must not be treated as a first-class control plane.
+The direct `health → create → observe → step/decision → observe → dispose` path was proven live without the GitHub relay on 2026-09-20 and remained healthy after host reboot through `https://gym.commander-gym.com`. The obsolete GitHub Actions/control-branch relay has been removed from the normal repository path so direct authenticated orchestration is the single first-class control plane.
 
 See `docs/linode-development-host.md` for the reproducible host layout and service installation.
 
