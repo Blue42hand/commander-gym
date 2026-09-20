@@ -219,6 +219,11 @@ def structured_decision_record_from_execution_trace(
             "pilot_metadata": dict(trace.pilot_metadata),
             "input_state_digest": state_digest,
             "result_state_digest": result_digest,
+            "timing": {
+                "pilot_elapsed_ms": trace.pilot_elapsed_ms,
+                "submission_elapsed_ms": trace.submission_elapsed_ms,
+            },
+            "retry_count": 0,
         },
     )
     record.validate()
@@ -272,6 +277,11 @@ def decision_record_from_execution_trace(
         "pilot_metadata": dict(trace.pilot_metadata),
         "input_state_digest": state_digest,
         "result_state_digest": result_digest,
+        "timing": {
+            "pilot_elapsed_ms": trace.pilot_elapsed_ms,
+            "submission_elapsed_ms": trace.submission_elapsed_ms,
+        },
+        "retry_count": 0,
     }
 
     record = DecisionRecord(

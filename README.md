@@ -135,3 +135,9 @@ writes the validated run and its decision records as one JSON artifact.
 Real qualification artifacts can contain private deck identities and seat-visible game
 state. Persist them in `commander-gym-private` or another private experiment store, not
 in this public repository.
+
+The terminal, serial runner is `python -m commander_gym.full_game`. It requests a fresh
+acting-seat projection for every decision, classifies failed runs out of the training
+pool, preserves partial trajectories, and verifies disposal plus post-game health.
+Configuration and current engine/card blockers are documented in
+`docs/full-game-runner.md`.

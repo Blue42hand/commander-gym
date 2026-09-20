@@ -90,6 +90,24 @@ class ArgentumGymClientTests(unittest.TestCase):
         )
 
     @patch("commander_gym.argentum_client.urlopen")
+    def test_observe_can_request_one_authorized_seat_perspective(self, mocked_urlopen):
+        mocked_urlopen.return_value = FakeResponse({"perspectivePlayerId": "player 2"})
+        client = ArgentumGymClient("http://localhost:8081")
+
+        observed = client.observe_env(
+            "env-1",
+            reveal_all=False,
+            perspective_player_id="player 2",
+        )
+
+        self.assertEqual(observed["perspectivePlayerId"], "player 2")
+        request = mocked_urlopen.call_args.args[0]
+        self.assertEqual(
+            request.full_url,
+            "http://localhost:8081/envs/env-1?revealAll=false&perspectivePlayerId=player+2",
+        )
+
+    @patch("commander_gym.argentum_client.urlopen")
     def test_explicit_remote_rejection_is_not_retried(self, mocked_urlopen):
         mocked_urlopen.side_effect = HTTPError(
             "http://localhost:8081/envs/env-1/step",

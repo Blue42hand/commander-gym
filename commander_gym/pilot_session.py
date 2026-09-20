@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from time import perf_counter
@@ -57,6 +57,7 @@ class PilotSeat:
     primer_version: str | None = None
     pilot_source: str = "commander-gym"
     pilot_model: str | None = None
+    pilot_config: Mapping[str, Any] = field(default_factory=dict)
 
     def provenance(self) -> PilotProvenance:
         return PilotProvenance(
@@ -136,6 +137,8 @@ def _validate_seats(seats: Sequence[PilotSeat], max_choices: int) -> None:
         names.append(_required_string(seat.player_name, f"seat {index} player_name"))
         _required_string(seat.deck_id, f"seat {index} deck_id")
         _required_string(seat.deck_version, f"seat {index} deck_version")
+        if not isinstance(seat.pilot_config, Mapping):
+            raise PilotSessionError(f"seat {index} pilot_config must be a mapping")
         seat.provenance()
     if len(names) != len(set(names)):
         raise PilotSessionError("pilot seat player names must be unique")
@@ -383,6 +386,7 @@ def run_four_seat_pilot_session(
             "winner_id": last_observation.get("winnerId") if terminal else None,
             "final_state_digest": last_observation.get("stateDigest"),
             "disposed": disposed,
+            "pilot_configurations": [dict(seat.pilot_config) for seat in seats],
         },
     )
     run.validate()

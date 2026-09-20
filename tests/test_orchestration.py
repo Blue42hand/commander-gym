@@ -43,8 +43,8 @@ class FakeBackend:
         self.envs[env_id] = observation
         return {"envId": env_id, "observation": observation}
 
-    def observe_env(self, env_id, *, reveal_all=None):
-        self.calls.append(("observe_env", env_id, reveal_all))
+    def observe_env(self, env_id, *, reveal_all=None, perspective_player_id=None):
+        self.calls.append(("observe_env", env_id, reveal_all, perspective_player_id))
         return self.envs[env_id]
 
     def step_env(self, env_id, action_id, *, params=None):
@@ -97,7 +97,7 @@ class ArgentumOrchestratorTests(unittest.TestCase):
 
         created = orchestrator.create_environment({"players": [{"name": "A"}]})
         env_id = created["envId"]
-        observed = orchestrator.observe_environment(env_id)
+        observed = orchestrator.observe_environment(env_id, perspective_player_id="player-1")
         stepped = orchestrator.step_environment(env_id, 7, params={"x": 1})
         decided = orchestrator.submit_decision(env_id, {"decisionId": "d1", "choice": 0})
         orchestrator.dispose_environment(env_id)

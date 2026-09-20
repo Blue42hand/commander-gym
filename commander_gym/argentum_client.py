@@ -90,10 +90,25 @@ class ArgentumGymClient:
     def create_env(self, config: Mapping[str, Any]) -> Mapping[str, Any]:
         return self._request("POST", "/envs", body=config, mutating=True)
 
-    def observe_env(self, env_id: str, *, reveal_all: bool | None = None) -> Mapping[str, Any]:
+    def observe_env(
+        self,
+        env_id: str,
+        *,
+        reveal_all: bool | None = None,
+        perspective_player_id: str | None = None,
+    ) -> Mapping[str, Any]:
         path = f"/envs/{quote(env_id, safe='')}"
+        query: dict[str, str] = {}
         if reveal_all is not None:
-            path += "?" + urlencode({"revealAll": str(reveal_all).lower()})
+            query["revealAll"] = str(reveal_all).lower()
+        if perspective_player_id is not None:
+            if not isinstance(perspective_player_id, str) or not perspective_player_id:
+                raise ArgentumClientConfigurationError(
+                    "perspective_player_id must be a non-empty string or null"
+                )
+            query["perspectivePlayerId"] = perspective_player_id
+        if query:
+            path += "?" + urlencode(query)
         return self._request("GET", path)
 
     def step_env(
