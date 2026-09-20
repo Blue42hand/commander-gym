@@ -115,15 +115,88 @@ curl -sS -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8082/status
 
 ## Remote HTTPS transport
 
-Expose only `http://127.0.0.1:8082` through Cloudflare Tunnel or an equivalent authenticated/reverse-proxy transport. Do not expose Argentum's 8081 port.
+Expose only `http://127.0.0.1:8082` through Cloudflare Tunnel or an equivalent outbound reverse-proxy transport. Do not expose Argentum's 8081 port, the gateway's 8082 port, or add router/NAT port forwarding for either service.
 
-A Cloudflare Quick Tunnel is sufficient for temporary integration proofs:
+A Cloudflare Quick Tunnel is sufficient only for temporary integration proofs:
 
 ```bash
 cloudflared tunnel --url http://127.0.0.1:8082
 ```
 
-For durable operation, use a named/persistent tunnel and a controlled hostname.
+Quick Tunnel hostnames are ephemeral and the foreground process is not the production transport. The durable path is a named tunnel with a controlled hostname and a boot-persistent `cloudflared` service.
+
+### Durable named Cloudflare Tunnel
+
+The checked-in `deploy/cloudflared/config.yml.example` publishes exactly one hostname to the loopback-only Commander Gym gateway and returns 404 for unmatched hostnames. The tunnel credentials JSON is a secret and must stay outside Git.
+
+Create and DNS-route the tunnel from an administrator workstation that can complete Cloudflare browser login:
+
+```bash
+cloudflared tunnel login
+cloudflared tunnel create commander-gym-argentum
+# record the printed UUID as TUNNEL_UUID
+cloudflared tunnel route dns "$TUNNEL_UUID" gym.example.com
+```
+
+`cloudflared tunnel login` creates the account authorization certificate used for management commands. The production host does not need that certificate merely to run the named tunnel; it needs the tunnel-specific credentials JSON produced by `tunnel create`.
+
+Transfer only that tunnel credentials JSON to the host over the administrator path (for example Tailscale SSH/SCP), then install it as a root-readable secret:
+
+```bash
+sudo install -d -m 755 /etc/cloudflared
+sudo install -o root -g root -m 600 /tmp/$TUNNEL_UUID.json \
+  /etc/cloudflared/$TUNNEL_UUID.json
+```
+
+Render the repository template on the host:
+
+```bash
+cd /srv/commander-gym/repo
+HOSTNAME='gym.example.com'
+sed \
+  -e "s/__TUNNEL_UUID__/$TUNNEL_UUID/g" \
+  -e "s/__GATEWAY_HOSTNAME__/$HOSTNAME/g" \
+  deploy/cloudflared/config.yml.example \
+  | sudo tee /etc/cloudflared/config.yml >/dev/null
+
+sudo cloudflared --config /etc/cloudflared/config.yml tunnel ingress validate
+sudo cloudflared --config /etc/cloudflared/config.yml tunnel ingress rule "https://$HOSTNAME/status"
+```
+
+Stop the temporary Quick Tunnel process before installing the persistent service. A host should have one intended `cloudflared` service/control plane for this route.
+
+Install and start Cloudflare's system service using the explicit configuration path:
+
+```bash
+sudo cloudflared --config /etc/cloudflared/config.yml service install
+sudo systemctl enable --now cloudflared
+sudo systemctl status cloudflared --no-pager
+```
+
+The named tunnel is outbound from the host to Cloudflare, so no public inbound firewall rule is required for ports 8081 or 8082. Keep those services bound to loopback. Keep Tailscale as the administrator path.
+
+Validate the external boundary before treating the tunnel as durable:
+
+```bash
+curl -i "https://$HOSTNAME/health"
+# expected: 401 from the Commander Gym bearer gateway
+
+TOKEN="$(sudo cat /etc/commander-gym/gateway.token)"
+curl -sS \
+  -H "Authorization: Bearer $TOKEN" \
+  "https://$HOSTNAME/status"
+```
+
+Then run the direct orchestration proof through the named hostname. A durable deployment is not complete until `systemctl status cloudflared` is healthy after a host reboot and the direct proof still succeeds.
+
+If tunnel configuration changes, validate it first and restart the service explicitly:
+
+```bash
+sudo cloudflared --config /etc/cloudflared/config.yml tunnel ingress validate
+sudo systemctl restart cloudflared
+```
+
+Do not commit `cert.pem`, tunnel credential JSON files, gateway bearer tokens, Cloudflare API tokens, or environment files containing them.
 
 ## Direct orchestration proof
 

@@ -1,0 +1,12 @@
+# Persistent named Cloudflare Tunnel for the Commander Gym Argentum gateway.
+#
+# Replace both placeholders before installing on the host. The tunnel UUID is not
+# a bearer credential, but the referenced credentials JSON is secret and must
+# never be committed to this repository.
+tunnel: __TUNNEL_UUID__
+credentials-file: /etc/cloudflared/__TUNNEL_UUID__.json
+
+ingress:
+  - hostname: __GATEWAY_HOSTNAME__
+    service: http://127.0.0.1:8082
+  - service: http_status:404
