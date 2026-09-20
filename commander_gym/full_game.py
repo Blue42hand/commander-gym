@@ -20,6 +20,7 @@ from typing import Any, Mapping, Sequence
 
 from .argentum_client import (
     ArgentumClientError,
+    ArgentumConnectionError,
     ArgentumDeliveryUnknownError,
     ArgentumGymClient,
     ArgentumRemoteError,
@@ -58,7 +59,7 @@ from .run_records import (
 )
 from .records import SCHEMA_VERSION as DECISION_RECORD_SCHEMA_VERSION
 
-FULL_GAME_ARTIFACT_VERSION = 1
+FULL_GAME_ARTIFACT_VERSION = 2
 
 QUALIFICATION_VALID_COMPLETE = "valid_complete"
 QUALIFICATION_TECHNICAL_CENSORED = "technical_censored"
@@ -75,24 +76,48 @@ QUALIFICATIONS = frozenset(
     }
 )
 
+FAILURE_DOMAIN_ENGINE = "engine"
+FAILURE_DOMAIN_PILOT = "pilot"
+FAILURE_DOMAIN_MODEL = "model"
+FAILURE_DOMAIN_TRANSPORT = "transport"
+FAILURE_DOMAIN_ORCHESTRATION = "orchestration"
+FAILURE_DOMAINS = frozenset(
+    {
+        FAILURE_DOMAIN_ENGINE,
+        FAILURE_DOMAIN_PILOT,
+        FAILURE_DOMAIN_MODEL,
+        FAILURE_DOMAIN_TRANSPORT,
+        FAILURE_DOMAIN_ORCHESTRATION,
+    }
+)
+_ENGINE_STAGES = frozenset(
+    {"inspect", "create", "observe", "seat_observe", "dispose", "postflight"}
+)
+
 
 @dataclass(frozen=True)
 class FullGameFailure:
     qualification: str
+    failure_domain: str
     stage: str
     error_type: str
     message: str
     decision_index: int | None = None
     seat: int | None = None
+    request_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
+        if self.failure_domain not in FAILURE_DOMAINS:
+            raise PilotSessionError(f"unknown failure domain {self.failure_domain!r}")
         return {
             "qualification": self.qualification,
+            "failure_domain": self.failure_domain,
             "stage": self.stage,
             "error_type": self.error_type,
             "message": self.message,
             "decision_index": self.decision_index,
             "seat": self.seat,
+            "request_id": self.request_id,
         }
 
 
@@ -165,6 +190,33 @@ def _classify(exc: Exception) -> str:
     return QUALIFICATION_TECHNICAL_CENSORED
 
 
+def _failure_domain(exc: Exception, *, stage: str) -> str:
+    """Classify operational ownership separately from run qualification.
+
+    Qualification answers whether evidence is usable; failure domain answers which
+    layer failed.  Keeping those axes separate makes run artifacts useful for
+    transport and provider operations without changing strategic policy.
+    """
+
+    if isinstance(exc, OpenAIResponsesPilotError):
+        return FAILURE_DOMAIN_MODEL
+    if isinstance(exc, (PilotContractError, PilotRecordError)):
+        return FAILURE_DOMAIN_PILOT
+    if isinstance(exc, (ArgentumDeliveryUnknownError, ArgentumConnectionError)):
+        return FAILURE_DOMAIN_TRANSPORT
+    if isinstance(exc, ArgentumRemoteError):
+        return FAILURE_DOMAIN_ENGINE
+    if isinstance(exc, ArgentumClientError):
+        return FAILURE_DOMAIN_TRANSPORT
+    if isinstance(exc, OrchestrationError):
+        return FAILURE_DOMAIN_ENGINE
+    if stage == "pilot":
+        return FAILURE_DOMAIN_PILOT
+    if stage in _ENGINE_STAGES:
+        return FAILURE_DOMAIN_ENGINE
+    return FAILURE_DOMAIN_ORCHESTRATION
+
+
 def _failure(
     exc: Exception,
     *,
@@ -177,11 +229,13 @@ def _failure(
     )
     return FullGameFailure(
         qualification=qualification,
+        failure_domain=_failure_domain(exc, stage=stage),
         stage=stage,
         error_type=type(exc).__name__,
         message=str(exc) or type(exc).__name__,
         decision_index=decision_index,
         seat=seat,
+        request_id=(exc.request_id if isinstance(exc, ArgentumRemoteError) else None),
     )
 
 
@@ -390,7 +444,7 @@ def run_full_game(
         termination = RunTermination(
             status=RUN_STATUS_FAILED,
             reason=failures[0].message,
-            failure_domain=failures[0].qualification,
+            failure_domain=failures[0].failure_domain,
         )
     else:
         termination = RunTermination(
@@ -423,7 +477,7 @@ def run_full_game(
             "terminal": terminal,
         },
         metadata={
-            "runner": "commander-gym-full-game-v1",
+            "runner": "commander-gym-full-game-v2",
             "qualification": qualification,
             "winner_id": winner_id,
             "draw": terminal and winner_id is None,
