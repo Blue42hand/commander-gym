@@ -45,7 +45,13 @@ class OrchestrationBackend(Protocol):
 
     def create_env(self, config: Mapping[str, Any]) -> Mapping[str, Any]: ...
 
-    def observe_env(self, env_id: str, *, reveal_all: bool | None = None) -> Mapping[str, Any]: ...
+    def observe_env(
+        self,
+        env_id: str,
+        *,
+        reveal_all: bool | None = None,
+        perspective_player_id: str | None = None,
+    ) -> Mapping[str, Any]: ...
 
     def step_env(
         self,
@@ -181,9 +187,19 @@ class ArgentumOrchestrator:
         return created
 
     def observe_environment(
-        self, env_id: str, *, reveal_all: bool | None = None
+        self,
+        env_id: str,
+        *,
+        reveal_all: bool | None = None,
+        perspective_player_id: str | None = None,
     ) -> Mapping[str, Any]:
-        return self.backend.observe_env(env_id, reveal_all=reveal_all)
+        if perspective_player_id is None:
+            return self.backend.observe_env(env_id, reveal_all=reveal_all)
+        return self.backend.observe_env(
+            env_id,
+            reveal_all=reveal_all,
+            perspective_player_id=perspective_player_id,
+        )
 
     def step_environment(
         self,

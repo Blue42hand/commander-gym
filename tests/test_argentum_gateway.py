@@ -106,7 +106,11 @@ class ArgentumGatewayTests(unittest.TestCase):
     def test_forwards_environment_lifecycle_surface(self):
         calls = [
             ("POST", "/envs", {"players": [{"name": "A"}]}),
-            ("GET", "/envs/env-1?revealAll=false", None),
+            (
+                "GET",
+                "/envs/env-1?revealAll=false&perspectivePlayerId=player-1",
+                None,
+            ),
             ("POST", "/envs/env-1/step", {"actionId": 7, "params": {}}),
             (
                 "POST",
@@ -129,6 +133,8 @@ class ArgentumGatewayTests(unittest.TestCase):
             ("GET", "/v3/api-docs"),
             ("POST", "/envs/env-1/reset"),
             ("GET", "/envs/env-1?revealAll=maybe"),
+            ("GET", "/envs/env-1?perspectivePlayerId="),
+            ("GET", "/envs/env-1?perspectivePlayerId=a&perspectivePlayerId=b"),
         ]:
             status, payload = self.request(method, path, body={} if method == "POST" else None)
             self.assertEqual(status, 404)

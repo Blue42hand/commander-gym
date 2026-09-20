@@ -79,11 +79,19 @@ def _allowed_request(method: str, raw_path: str) -> bool:
     if method == "GET" and _ENV_PATH.fullmatch(path):
         if not query:
             return True
-        return (
-            set(query) == {"revealAll"}
-            and len(query["revealAll"]) == 1
-            and query["revealAll"][0] in {"true", "false"}
-        )
+        if not set(query).issubset({"revealAll", "perspectivePlayerId"}):
+            return False
+        if "revealAll" in query and (
+            len(query["revealAll"]) != 1
+            or query["revealAll"][0] not in {"true", "false"}
+        ):
+            return False
+        if "perspectivePlayerId" in query and (
+            len(query["perspectivePlayerId"]) != 1
+            or not query["perspectivePlayerId"][0]
+        ):
+            return False
+        return True
 
     if method == "POST" and (_STEP_PATH.fullmatch(path) or _DECISION_PATH.fullmatch(path)):
         return not query

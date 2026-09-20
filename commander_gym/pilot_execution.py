@@ -13,6 +13,7 @@ without changing pilot strategy or decision routing.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from time import monotonic
 from typing import Any, Mapping, Protocol
 
 from .pilot import (
@@ -59,6 +60,8 @@ class PilotExecutionTrace:
     submitted: Mapping[str, Any]
     result_observation: Mapping[str, Any]
     pilot_metadata: Mapping[str, Any]
+    pilot_elapsed_ms: float = 0.0
+    submission_elapsed_ms: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -70,6 +73,10 @@ class PilotExecutionTrace:
             "submitted": dict(self.submitted),
             "resultObservation": dict(self.result_observation),
             "pilotMetadata": dict(self.pilot_metadata),
+            "timing": {
+                "pilotElapsedMs": self.pilot_elapsed_ms,
+                "submissionElapsedMs": self.submission_elapsed_ms,
+            },
         }
 
 
@@ -122,21 +129,27 @@ def execute_pilot_choice(
     if not isinstance(observation, Mapping):
         raise PilotContractError("Argentum environment observation must be a mapping")
 
+    pilot_started = monotonic()
     choice = choose_for_observation(pilot, observation)
+    pilot_elapsed_ms = (monotonic() - pilot_started) * 1000.0
     pilot_name = _required_string(getattr(pilot, "name", None), "pilot name")
     pilot_version = _required_string(getattr(pilot, "version", None), "pilot version")
 
     if isinstance(choice, ArgentumActionChoice):
         semantic_id = _action_semantic_id(choice, observation)
         submitted = {"actionId": choice.action_id, "params": dict(choice.params)}
+        submission_started = monotonic()
         result = environment.submit_action(choice.action_id, choice.params)
+        submission_elapsed_ms = (monotonic() - submission_started) * 1000.0
         channel = "action"
         live_routing_id: int | str = choice.action_id
         metadata = choice.metadata
     elif isinstance(choice, ArgentumDecisionChoice):
         semantic_id, live_routing_id = _decision_semantic_id(observation)
         submitted = dict(choice.response)
+        submission_started = monotonic()
         result = environment.submit_decision(choice.response)
+        submission_elapsed_ms = (monotonic() - submission_started) * 1000.0
         channel = "decision"
         metadata = choice.metadata
     else:  # pragma: no cover - choose_for_observation currently guarantees the union.
@@ -155,6 +168,8 @@ def execute_pilot_choice(
         submitted=submitted,
         result_observation=result,
         pilot_metadata=metadata,
+        pilot_elapsed_ms=pilot_elapsed_ms,
+        submission_elapsed_ms=submission_elapsed_ms,
     )
 
 
