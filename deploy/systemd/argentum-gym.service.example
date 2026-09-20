@@ -1,0 +1,17 @@
+[Unit]
+Description=Argentum Gym Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=commander
+Group=commander
+WorkingDirectory=/srv/argentum/repo
+ExecStart=/bin/bash /srv/argentum/repo/scripts/run-gym-server-service.sh /srv/argentum/repo __ARGENTUM_REVISION__
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

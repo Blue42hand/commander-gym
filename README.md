@@ -102,3 +102,18 @@ The immediate rules for migration are:
 - **do not make the Argentum fork a hidden fourth product layer;**
 - prefer vanilla/upstream Argentum capabilities and upstream missing generic capabilities;
 - keep Commander Gym focused on the artificial player.
+
+
+## Development host
+
+The current persistent development/test architecture uses a dedicated Linux host with:
+
+- Argentum Gym bound to loopback and supervised by systemd;
+- the Commander Gym authenticated gateway bound to loopback;
+- Tailscale for administrator SSH access;
+- an HTTPS tunnel only to the narrow gateway, never directly to raw Argentum;
+- pinned clean runtime checkouts, with development performed in separate worktrees.
+
+The direct `health → create → observe → step/decision → observe → dispose` path was proven live without the GitHub relay on 2026-09-20. The old GitHub Actions relay is quarantined and must not be treated as a first-class control plane.
+
+See `docs/linode-development-host.md` for the reproducible host layout and service installation.

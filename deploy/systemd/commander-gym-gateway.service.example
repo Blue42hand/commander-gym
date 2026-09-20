@@ -1,0 +1,19 @@
+[Unit]
+Description=Commander Gym Argentum Gateway
+After=network-online.target argentum-gym.service
+Wants=network-online.target
+Requires=argentum-gym.service
+
+[Service]
+Type=simple
+User=commander
+Group=commander
+WorkingDirectory=/srv/commander-gym/repo
+ExecStart=/bin/bash /srv/commander-gym/repo/scripts/run_argentum_gateway_service.sh /srv/commander-gym/repo __COMMANDER_GYM_REVISION__ /etc/commander-gym/gateway.token
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
