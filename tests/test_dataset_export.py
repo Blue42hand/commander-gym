@@ -32,8 +32,8 @@ class DatasetExportTests(unittest.TestCase):
                 "perspectivePlayerId": 1,
                 "stateDigest": "state-a",
                 "legalActions": [
-                    {"actionId": 7, "semanticId": "semantic-pass"},
-                    {"actionId": 8, "semanticId": "semantic-play"},
+                    {"semanticId": "semantic-pass"},
+                    {"semanticId": "semantic-play"},
                 ],
             },
             legal_actions=[
@@ -49,6 +49,7 @@ class DatasetExportTests(unittest.TestCase):
             deck_id="public-fixture",
             deck_version="revision-1",
             outcome={"stateDigest": "state-b"},
+            metadata={"live_routing_id": 8, "diagnostic": "not-a-feature"},
         )
 
     def structured_record(self):
@@ -91,29 +92,43 @@ class DatasetExportTests(unittest.TestCase):
             decision_ids=["decision-1", "decision-2"],
         )
 
-    def test_rows_preserve_native_evidence_and_run_provenance(self):
+    def test_rows_separate_inputs_targets_and_provenance(self):
         rows = build_run_dataset_rows(
             self.run_record(),
             [self.action_record(), self.structured_record()],
         )
 
         self.assertEqual(len(rows), 2)
-        self.assertEqual(rows[0]["dataset_schema_version"], DATASET_EXPORT_SCHEMA_VERSION)
-        self.assertEqual(rows[0]["run_id"], "run-1")
-        self.assertEqual(rows[0]["seed"], 17)
-        self.assertEqual(rows[0]["engine"]["schema"], "argentum-schema-v1")
-        self.assertEqual(rows[0]["record_kind"], "action")
+        action = rows[0]
+        self.assertEqual(action["dataset_schema_version"], DATASET_EXPORT_SCHEMA_VERSION)
+        self.assertEqual(action["record_kind"], "action")
+        self.assertEqual(action["provenance"]["run_id"], "run-1")
+        self.assertEqual(action["provenance"]["seed"], 17)
         self.assertEqual(
-            [action["action_id"] for action in rows[0]["decision"]["legal_actions"]],
+            action["provenance"]["engine"]["schema"], "argentum-schema-v1"
+        )
+        self.assertEqual(
+            [candidate["action_id"] for candidate in action["input"]["legal_actions"]],
             ["semantic-pass", "semantic-play"],
         )
-        self.assertEqual(rows[0]["decision"]["observation"]["stateDigest"], "state-a")
-        self.assertEqual(rows[1]["record_kind"], "structured_decision")
+        self.assertEqual(action["input"]["observation"]["stateDigest"], "state-a")
+        self.assertEqual(action["target"], {"chosen_action_id": "semantic-play"})
+        for excluded in ("pilot", "deck_id", "outcome", "metadata", "chosen_action_id"):
+            self.assertNotIn(excluded, action["input"])
+        self.assertEqual(action["provenance"]["metadata"]["live_routing_id"], 8)
+
+        structured = rows[1]
+        self.assertEqual(structured["record_kind"], "structured_decision")
         self.assertEqual(
-            rows[1]["decision"]["native_decision_semantic_id"],
+            structured["input"]["native_decision_semantic_id"],
             "semantic-target-choice",
         )
-        self.assertNotIn("decisionId", rows[1]["decision"]["response"])
+        self.assertEqual(
+            structured["target"]["response"],
+            {"type": "ChooseTargetsResponse", "targets": ["entity-3"]},
+        )
+        self.assertNotIn("response", structured["input"])
+        self.assertNotIn("decisionId", structured["target"]["response"])
 
     def test_requires_exact_run_join_and_game_identity(self):
         run = self.run_record()
@@ -180,8 +195,13 @@ class DatasetExportTests(unittest.TestCase):
 
             self.assertEqual(first.read_bytes(), second.read_bytes())
             rows = [json.loads(line) for line in first.read_text().splitlines()]
-            self.assertEqual([row["decision"]["decision_id"] for row in rows], run.decision_ids)
-            self.assertTrue(all(row["engine"]["revision"] == "build-123" for row in rows))
+            self.assertEqual(
+                [row["provenance"]["decision_id"] for row in rows],
+                run.decision_ids,
+            )
+            self.assertTrue(
+                all(row["provenance"]["engine"]["revision"] == "build-123" for row in rows)
+            )
 
 
 if __name__ == "__main__":
