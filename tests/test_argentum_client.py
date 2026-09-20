@@ -95,7 +95,7 @@ class ArgentumGymClientTests(unittest.TestCase):
             "http://localhost:8081/envs/env-1/step",
             400,
             "Bad Request",
-            {},
+            {"X-Request-ID": "gateway-request-123"},
             io.BytesIO(b'{"code":"invalid_action","message":"stale action"}'),
         )
         client = ArgentumGymClient("http://localhost:8081")
@@ -105,6 +105,8 @@ class ArgentumGymClientTests(unittest.TestCase):
 
         self.assertEqual(raised.exception.status, 400)
         self.assertIn("stale action", raised.exception.message)
+        self.assertEqual(raised.exception.request_id, "gateway-request-123")
+        self.assertIn("gateway-request-123", str(raised.exception))
         self.assertEqual(mocked_urlopen.call_count, 1)
 
     @patch("commander_gym.argentum_client.urlopen")
