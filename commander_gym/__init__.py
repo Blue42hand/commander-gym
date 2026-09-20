@@ -22,6 +22,12 @@ from .benchmark_runner import (
     preferred_or_first_pilot,
     run_benchmark,
 )
+from .dataset_export import (
+    DATASET_EXPORT_SCHEMA_VERSION,
+    DatasetExportError,
+    build_run_dataset_rows,
+    write_run_dataset_jsonl,
+)
 from .deck_package import (
     DECK_PACKAGE_SCHEMA_VERSION,
     ArtifactRef,
@@ -122,9 +128,11 @@ __all__ = [
     "CallablePilot",
     "CertifiedMechanicalHandler",
     "CreationReconciliation",
+    "DATASET_EXPORT_SCHEMA_VERSION",
     "DEFAULT_FEATURE_SPACE",
     "DECK_PACKAGE_SCHEMA_VERSION",
     "DECK_SOURCE_SCHEMA_VERSION",
+    "DatasetExportError",
     "DeckPackage",
     "DeckPackageError",
     "DeckSourceEntry",
@@ -166,6 +174,7 @@ __all__ = [
     "SparseDecisionFeatures",
     "StructuredDecisionRecord",
     "StaleArgentumDecisionError",
+    "build_run_dataset_rows",
     "choose_for_observation",
     "decision_record_from_execution_trace",
     "structured_decision_record_from_execution_trace",
@@ -180,4 +189,5 @@ __all__ = [
     "validate_commander_package",
     "validate_pilot_choice",
     "write_pilot_session_artifact",
+    "write_run_dataset_jsonl",
 ]
