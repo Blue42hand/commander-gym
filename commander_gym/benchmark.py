@@ -7,14 +7,16 @@ or private deck corpus.
 
 from __future__ import annotations
 
+import hashlib
 import json
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from .records import DecisionRecord, RecordValidationError
 
 BENCHMARK_SCHEMA_VERSION = 1
+BENCHMARK_SUITE_IDENTITY_SCHEMA = "commander-gym-benchmark-suite@v1"
 
 
 @dataclass(frozen=True)
@@ -117,6 +119,49 @@ class BenchmarkCase:
         )
         case.validate()
         return case
+
+
+def benchmark_suite_identity(cases: Sequence[BenchmarkCase]) -> Dict[str, Any]:
+    """Return a stable identity for the exact ordered benchmark evidence set.
+
+    This is research-artifact provenance, not a replacement for Argentum semantic
+    action or decision identity. The complete benchmark case is included so changing
+    an input, judgment, or source provenance cannot silently compare as the same
+    held-out suite. Mapping key order is canonicalized while list/case order remains
+    significant because evaluation order can affect stateful or remote pilots.
+    """
+
+    seen: set[str] = set()
+    serialized_cases: List[Dict[str, Any]] = []
+    for case in cases:
+        case.validate()
+        if case.case_id in seen:
+            raise RecordValidationError(f"duplicate benchmark case_id {case.case_id!r}")
+        seen.add(case.case_id)
+        serialized_cases.append(asdict(case))
+
+    payload = {
+        "schema": BENCHMARK_SUITE_IDENTITY_SCHEMA,
+        "cases": serialized_cases,
+    }
+    try:
+        canonical = json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise RecordValidationError(
+            f"benchmark suite must be canonically JSON serializable: {exc}"
+        ) from exc
+
+    return {
+        "schema": BENCHMARK_SUITE_IDENTITY_SCHEMA,
+        "case_count": len(serialized_cases),
+        "fingerprint": f"sha256:{hashlib.sha256(canonical).hexdigest()}",
+    }
 
 
 def load_jsonl(path: Path | str) -> List[BenchmarkCase]:
