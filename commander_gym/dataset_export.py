@@ -1,9 +1,9 @@
 """Deterministic dataset export from durable Commander Gym run evidence.
 
 The exporter consumes already-recorded Commander Gym evidence; it does not inspect or
-reconstruct authoritative game state.  Each JSONL row retains the seat-authorized
-observation and Argentum-native semantic provenance already present in the source
-record, while the run envelope supplies reproducibility metadata.
+reconstruct authoritative game state.  Dataset rows explicitly separate model-facing
+inputs from targets and provenance so chosen actions, outcomes, diagnostic metadata,
+and private package identity are not silently mixed into the input feature surface.
 
 Actual run artifacts may contain private deck identities and seat observations.  This
 module writes only to a caller-supplied local path and never publishes or uploads data.
@@ -39,6 +39,56 @@ def _record_kind(record: EvidenceRecord) -> str:
     raise DatasetExportError(
         "dataset records must be DecisionRecord or StructuredDecisionRecord values"
     )
+
+
+def _input_for_record(record: EvidenceRecord) -> dict[str, Any]:
+    """Return only information available when the recorded choice was made."""
+
+    common = {
+        "decision_type": record.decision_type,
+        "seat": record.seat,
+        "observation_schema": record.observation_schema,
+        "observation": record.observation,
+    }
+    if isinstance(record, DecisionRecord):
+        return {
+            **common,
+            "legal_actions": [asdict(action) for action in record.legal_actions],
+        }
+    if isinstance(record, StructuredDecisionRecord):
+        return {
+            **common,
+            "native_decision_semantic_id": record.native_decision_semantic_id,
+        }
+    raise DatasetExportError(
+        "dataset records must be DecisionRecord or StructuredDecisionRecord values"
+    )
+
+
+def _target_for_record(record: EvidenceRecord) -> dict[str, Any]:
+    if isinstance(record, DecisionRecord):
+        return {"chosen_action_id": record.chosen_action_id}
+    if isinstance(record, StructuredDecisionRecord):
+        return {"response": record.response}
+    raise DatasetExportError(
+        "dataset records must be DecisionRecord or StructuredDecisionRecord values"
+    )
+
+
+def _record_provenance(record: EvidenceRecord) -> dict[str, Any]:
+    """Keep reproducibility/diagnostic fields outside the model-facing input."""
+
+    return {
+        "game_id": record.game_id,
+        "decision_id": record.decision_id,
+        "record_schema_version": record.schema_version,
+        "pilot": asdict(record.pilot),
+        "deck_id": record.deck_id,
+        "deck_version": record.deck_version,
+        "primer_version": record.primer_version,
+        "outcome": record.outcome,
+        "metadata": record.metadata,
+    }
 
 
 def build_run_dataset_rows(
@@ -88,19 +138,25 @@ def build_run_dataset_rows(
             + ", ".join(leaked)
         )
 
-    engine = asdict(run.engine)
+    run_provenance = {
+        "run_id": run.run_id,
+        "experiment_id": run.experiment_id,
+        "benchmark_id": run.benchmark_id,
+        "seed": run.seed,
+        "engine": asdict(run.engine),
+    }
     rows: list[dict[str, Any]] = []
     for record in materialized:
         rows.append(
             {
                 "dataset_schema_version": DATASET_EXPORT_SCHEMA_VERSION,
-                "run_id": run.run_id,
-                "experiment_id": run.experiment_id,
-                "benchmark_id": run.benchmark_id,
-                "seed": run.seed,
-                "engine": engine,
                 "record_kind": _record_kind(record),
-                "decision": record.to_dict(),
+                "input": _input_for_record(record),
+                "target": _target_for_record(record),
+                "provenance": {
+                    **run_provenance,
+                    **_record_provenance(record),
+                },
             }
         )
     return rows
