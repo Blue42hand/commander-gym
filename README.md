@@ -117,3 +117,21 @@ The current persistent development/test architecture uses a dedicated Linux host
 The direct `health → create → observe → step/decision → observe → dispose` path was proven live without the GitHub relay on 2026-09-20. The old GitHub Actions relay is quarantined and must not be treated as a first-class control plane.
 
 See `docs/linode-development-host.md` for the reproducible host layout and service installation.
+
+## Four-seat pilot qualification
+
+`commander_gym.pilot_session.run_four_seat_pilot_session` is the bounded integration
+surface for the current Argentum migration proof. It binds four independent
+`ArtificialPlayer` instances to the exact four-player roster returned by Argentum,
+routes only the current `agentToAct`, and converts every successful native action or
+structured decision into the existing durable record schemas.
+
+The runner deliberately provides no heuristic fallback, automatic pass, concession,
+or mutation retry. A pilot/provider failure propagates and the environment is disposed.
+A successful bounded return is marked `stopped`; only an authoritative terminal
+Argentum observation is marked `completed`. `write_pilot_session_artifact` atomically
+writes the validated run and its decision records as one JSON artifact.
+
+Real qualification artifacts can contain private deck identities and seat-visible game
+state. Persist them in `commander-gym-private` or another private experiment store, not
+in this public repository.

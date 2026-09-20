@@ -69,6 +69,14 @@ from .pilot_routing import (
     ForcedParameterlessChoiceHandler,
     RoutingPilot,
 )
+from .pilot_session import (
+    PILOT_SESSION_ARTIFACT_VERSION,
+    PilotSeat,
+    PilotSessionError,
+    PilotSessionResult,
+    run_four_seat_pilot_session,
+    write_pilot_session_artifact,
+)
 from .records import (
     ActionRecord,
     DecisionRecord,
@@ -141,6 +149,10 @@ __all__ = [
     "PilotProvenance",
     "PilotRecordContext",
     "PilotRecordError",
+    "PILOT_SESSION_ARTIFACT_VERSION",
+    "PilotSeat",
+    "PilotSessionError",
+    "PilotSessionResult",
     "RUN_RECORD_SCHEMA_VERSION",
     "RUN_STATUS_COMPLETED",
     "RUN_STATUS_FAILED",
@@ -164,6 +176,8 @@ __all__ = [
     "policy_family_for_decision_type",
     "preferred_or_first_pilot",
     "run_benchmark",
+    "run_four_seat_pilot_session",
     "validate_commander_package",
     "validate_pilot_choice",
+    "write_pilot_session_artifact",
 ]
