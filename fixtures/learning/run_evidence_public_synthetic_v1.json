@@ -1,0 +1,154 @@
+{
+  "run": {
+    "schema_version": 1,
+    "run_id": "public-synthetic-run-001",
+    "started_at": "2026-09-20T18:00:00Z",
+    "finished_at": "2026-09-20T18:00:05Z",
+    "engine": {
+      "implementation": "argentum",
+      "version": "fixture-build",
+      "schema": "argentum-public-fixture@v1",
+      "revision": "fixture-revision"
+    },
+    "termination": {
+      "status": "completed",
+      "reason": null,
+      "failure_domain": null
+    },
+    "participants": [
+      {
+        "seat": 0,
+        "pilot": {
+          "source": "commander-gym",
+          "implementation": "public-fixture-pilot",
+          "version": "v1",
+          "model": "synthetic-model-a"
+        },
+        "deck_id": "public-synthetic-training-deck-a",
+        "deck_version": "v1",
+        "primer_version": null
+      },
+      {
+        "seat": 1,
+        "pilot": {
+          "source": "commander-gym",
+          "implementation": "public-fixture-pilot",
+          "version": "v1",
+          "model": "synthetic-model-b"
+        },
+        "deck_id": "public-synthetic-training-deck-b",
+        "deck_version": "v1",
+        "primer_version": null
+      }
+    ],
+    "experiment_id": "public-synthetic-experiment-v1",
+    "benchmark_id": null,
+    "game_id": "public-training-game-1",
+    "seed": 4242,
+    "decision_ids": [
+      "public-training-decision-1",
+      "public-training-decision-2"
+    ],
+    "metrics": {
+      "turns_observed": 1
+    },
+    "metadata": {
+      "synthetic": true
+    }
+  },
+  "records": [
+    {
+      "record_kind": "action",
+      "record": {
+        "schema_version": 1,
+        "game_id": "public-training-game-1",
+        "decision_id": "public-training-decision-1",
+        "decision_type": "LEGAL_ACTION",
+        "seat": 0,
+        "observation_schema": "argentum-public-fixture@v1",
+        "observation": {
+          "perspectivePlayerId": 1,
+          "stateDigest": "training-state-a",
+          "public": {
+            "phase": "MAIN1"
+          }
+        },
+        "legal_actions": [
+          {
+            "action_id": "argentum-semantic-pass",
+            "payload": {
+              "kind": "pass"
+            },
+            "label": "Pass priority"
+          },
+          {
+            "action_id": "argentum-semantic-cast",
+            "payload": {
+              "kind": "cast",
+              "card": "Synthetic Spell"
+            },
+            "label": "Cast Synthetic Spell"
+          }
+        ],
+        "chosen_action_id": "argentum-semantic-cast",
+        "pilot": {
+          "source": "commander-gym",
+          "implementation": "public-fixture-pilot",
+          "version": "v1",
+          "model": "synthetic-model-a"
+        },
+        "deck_id": "public-synthetic-training-deck-a",
+        "deck_version": "v1",
+        "primer_version": null,
+        "outcome": {
+          "stateDigest": "training-state-b"
+        },
+        "metadata": {
+          "synthetic": true,
+          "request_id": "fixture-request-1"
+        }
+      }
+    },
+    {
+      "record_kind": "structured_decision",
+      "record": {
+        "schema_version": 1,
+        "game_id": "public-training-game-1",
+        "decision_id": "public-training-decision-2",
+        "decision_type": "CHOOSE_TARGETS",
+        "seat": 1,
+        "observation_schema": "argentum-public-fixture@v1",
+        "observation": {
+          "perspectivePlayerId": 2,
+          "stateDigest": "training-state-b",
+          "pendingDecision": {
+            "semanticId": "argentum-semantic-target-choice"
+          }
+        },
+        "native_decision_semantic_id": "argentum-semantic-target-choice",
+        "response": {
+          "type": "ChooseTargetsResponse",
+          "targets": [
+            "synthetic-entity-3"
+          ]
+        },
+        "pilot": {
+          "source": "commander-gym",
+          "implementation": "public-fixture-pilot",
+          "version": "v1",
+          "model": "synthetic-model-b"
+        },
+        "deck_id": "public-synthetic-training-deck-b",
+        "deck_version": "v1",
+        "primer_version": null,
+        "outcome": {
+          "stateDigest": "training-state-c"
+        },
+        "metadata": {
+          "synthetic": true,
+          "request_id": "fixture-request-2"
+        }
+      }
+    }
+  ]
+}
