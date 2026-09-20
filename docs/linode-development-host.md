@@ -123,13 +123,17 @@ A Cloudflare Quick Tunnel is sufficient only for temporary integration proofs:
 cloudflared tunnel --url http://127.0.0.1:8082
 ```
 
-Quick Tunnel hostnames are ephemeral and the foreground process is not the production transport. The durable path is a named tunnel with a controlled hostname and a boot-persistent `cloudflared` service.
+Quick Tunnel hostnames are ephemeral and the foreground process is not the production transport. The durable path is a named tunnel with a controlled hostname and a boot-persistent `cloudflared` service. The current production-style development endpoint is `https://gym.commander-gym.com`.
 
 ### Durable named Cloudflare Tunnel
 
-The checked-in `deploy/cloudflared/config.yml.example` publishes exactly one hostname to the loopback-only Commander Gym gateway and returns 404 for unmatched hostnames. The tunnel credentials JSON is a secret and must stay outside Git.
+The live development deployment uses a remotely managed Cloudflare Tunnel publishing `gym.commander-gym.com` to the loopback-only Commander Gym gateway at `http://127.0.0.1:8082`. Raw Argentum remains private on `127.0.0.1:8081`.
 
-Create and DNS-route the tunnel from an administrator workstation that can complete Cloudflare browser login:
+A locally managed tunnel using the checked-in `deploy/cloudflared/config.yml.example` is also supported if needed; its tunnel credentials JSON is a secret and must stay outside Git.
+
+For the remotely managed path, create the tunnel in the Cloudflare dashboard, install the connector on the host using the generated service-install token, and publish the hostname to `http://127.0.0.1:8082`. No public inbound rule is required for 8081 or 8082.
+
+For the alternative locally managed path, create and DNS-route the tunnel from an administrator workstation that can complete Cloudflare browser login:
 
 ```bash
 cloudflared tunnel login
@@ -189,6 +193,8 @@ curl -sS \
 
 Then run the direct orchestration proof through the named hostname. A durable deployment is not complete until `systemctl status cloudflared` is healthy after a host reboot and the direct proof still succeeds.
 
+Because this endpoint is machine-to-machine rather than browser-facing, Cloudflare Browser Integrity Check must not block API clients on `gym.commander-gym.com`. In the live deployment, Browser Integrity Check is disabled specifically for this hostname via a Cloudflare configuration rule; bearer authentication remains enforced by the Commander Gym gateway.
+
 If tunnel configuration changes, validate it first and restart the service explicitly:
 
 ```bash
@@ -229,6 +235,8 @@ final health / identity verification
 The first live direct proof succeeded on 2026-09-20 against Argentum build
 `dbb3e0577c7dd9e297dfc3bf52b42079c18db557` and schema
 `argentum-gym-contract@v1.7-semantic-state-provenance`.
+
+The permanent-hostname proof also succeeded on 2026-09-20 through `https://gym.commander-gym.com`, including create, observe, step, observe, dispose, disposal verification, and post-disposal health verification.
 
 ## Legacy relay
 
