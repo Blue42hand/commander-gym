@@ -8,7 +8,14 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 from unittest.mock import patch
 
+from commander_gym.argentum_client import ArgentumConnectionError, ArgentumRemoteError
 from commander_gym.full_game import (
+    FAILURE_DOMAIN_ENGINE,
+    FAILURE_DOMAIN_MODEL,
+    FAILURE_DOMAIN_PILOT,
+    FAILURE_DOMAIN_TRANSPORT,
+    FULL_GAME_ARTIFACT_VERSION,
+    QUALIFICATION_ENGINE_FAILURE,
     QUALIFICATION_PILOT_FAILURE,
     QUALIFICATION_TECHNICAL_CENSORED,
     QUALIFICATION_VALID_COMPLETE,
@@ -16,6 +23,7 @@ from commander_gym.full_game import (
     run_full_game,
     write_full_game_artifact,
 )
+from commander_gym.openai_responses_pilot import OpenAIResponsesPilotError
 from commander_gym.orchestration import ArgentumOrchestrator
 from commander_gym.pilot import ArgentumActionChoice
 from commander_gym.pilot_session import PilotSeat
@@ -184,8 +192,71 @@ class FullGameTests(unittest.TestCase):
         self.assertEqual(result.run.termination.status, RUN_STATUS_FAILED)
         self.assertEqual(len(result.decisions), 2)
         self.assertEqual(result.failures[0].qualification, QUALIFICATION_PILOT_FAILURE)
+        self.assertEqual(result.failures[0].failure_domain, FAILURE_DOMAIN_PILOT)
+        self.assertEqual(result.run.termination.failure_domain, FAILURE_DOMAIN_PILOT)
         self.assertEqual(result.failures[0].stage, "pilot")
         self.assertEqual(backend.envs, set())
+
+    def test_model_failure_domain_is_separate_from_pilot_qualification(self) -> None:
+        class ModelFailurePilot(FirstPilot):
+            def choose(self, observation: Mapping[str, Any]):
+                raise OpenAIResponsesPilotError("model service unavailable")
+
+        configured = seats()
+        configured[0] = PilotSeat(
+            player_name="Seat 0",
+            pilot=ModelFailurePilot("model-failure"),
+            deck_id="deck-0",
+            deck_version="deck-version-0",
+        )
+        result = run_full_game(
+            ArgentumOrchestrator(SeatAwareBackend()),
+            {"players": []},
+            configured,
+            run_id="game-model-failure",
+            max_choices=8,
+        )
+
+        self.assertEqual(result.qualification, QUALIFICATION_PILOT_FAILURE)
+        self.assertEqual(result.failures[0].failure_domain, FAILURE_DOMAIN_MODEL)
+        self.assertEqual(result.run.termination.failure_domain, FAILURE_DOMAIN_MODEL)
+        self.assertEqual(result.to_dict()["artifact_version"], FULL_GAME_ARTIFACT_VERSION)
+
+    def test_transport_failure_domain_is_not_engine_failure(self) -> None:
+        class TransportFailureBackend(SeatAwareBackend):
+            def health(self) -> Mapping[str, Any]:
+                raise ArgentumConnectionError("could not reach gateway")
+
+        result = run_full_game(
+            ArgentumOrchestrator(TransportFailureBackend()),
+            {"players": []},
+            seats(),
+            run_id="game-transport-failure",
+            max_choices=8,
+        )
+
+        self.assertEqual(result.qualification, QUALIFICATION_TECHNICAL_CENSORED)
+        self.assertEqual(result.failures[0].failure_domain, FAILURE_DOMAIN_TRANSPORT)
+        self.assertEqual(result.run.termination.failure_domain, FAILURE_DOMAIN_TRANSPORT)
+
+    def test_engine_failure_preserves_gateway_request_id(self) -> None:
+        class EngineFailureBackend(SeatAwareBackend):
+            def create_env(self, config: Mapping[str, Any]) -> Mapping[str, Any]:
+                raise ArgentumRemoteError(503, "engine unavailable", request_id="req-123")
+
+        result = run_full_game(
+            ArgentumOrchestrator(EngineFailureBackend()),
+            {"players": []},
+            seats(),
+            run_id="game-engine-failure",
+            max_choices=8,
+        )
+
+        self.assertEqual(result.qualification, QUALIFICATION_ENGINE_FAILURE)
+        self.assertEqual(result.failures[0].failure_domain, FAILURE_DOMAIN_ENGINE)
+        self.assertEqual(result.failures[0].request_id, "req-123")
+        self.assertEqual(result.run.termination.failure_domain, FAILURE_DOMAIN_ENGINE)
+        self.assertEqual(result.to_dict()["failures"][0]["request_id"], "req-123")
 
     def test_contract_pilot_failure_is_classified_separately(self) -> None:
         class MalformedPilot(FirstPilot):
@@ -221,6 +292,7 @@ class FullGameTests(unittest.TestCase):
 
         self.assertEqual(result.qualification, QUALIFICATION_TECHNICAL_CENSORED)
         self.assertEqual(result.failures[0].stage, "seat_observe")
+        self.assertEqual(result.failures[0].failure_domain, FAILURE_DOMAIN_ENGINE)
         self.assertEqual(len(result.decisions), 1)
 
     def test_choice_bound_is_censored_and_artifact_is_atomic(self) -> None:
