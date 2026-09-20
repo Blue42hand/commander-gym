@@ -5,7 +5,7 @@ already-captured :class:`BenchmarkCase` records and records enough provenance to
 compare implementations without starting Argentum, Forge, or any other runtime.
 
 Held-out judgments and post-decision provenance are scoring evidence, not pilot
-input.  The runner projects each case onto :class:`BenchmarkInput` before calling
+input. The runner projects each case onto :class:`BenchmarkInput` before calling
 the pilot so a benchmark adapter cannot accidentally read the reference judgment,
 recorded choice/outcome, deck identity, or source pilot provenance.
 """
@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from time import perf_counter
 from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Protocol, Tuple, Union
 
-from .benchmark import BenchmarkCase, score_action
+from .benchmark import BenchmarkCase, benchmark_suite_identity, score_action
 from .records import ActionRecord
 
 BENCHMARK_REPORT_VERSION = 1
@@ -28,7 +28,7 @@ BENCHMARK_REPORT_VERSION = 1
 class BenchmarkInput:
     """Information that was available to the evaluated pilot at decision time.
 
-    This intentionally mirrors the leakage boundary used by dataset export.  It
+    This intentionally mirrors the leakage boundary used by dataset export. It
     excludes benchmark judgments/categories/tags plus all post-decision and
     provenance fields carried by ``DecisionRecord``.
     """
@@ -155,13 +155,18 @@ def run_benchmark(cases: Iterable[BenchmarkCase], pilot: BenchmarkPilot) -> Dict
     output for that case and benchmark execution continues with later cases.
 
     The pilot receives only :class:`BenchmarkInput`; reference judgments and
-    post-decision provenance remain runner-side for scoring and reporting.
+    post-decision provenance remain runner-side for scoring and reporting. The
+    report carries a fingerprint of the exact held-out suite so comparisons fail
+    closed instead of treating different benchmark evidence as equivalent.
     """
 
     if not isinstance(pilot.name, str) or not pilot.name:
         raise ValueError("pilot.name must be a non-empty string")
     if not isinstance(pilot.version, str) or not pilot.version:
         raise ValueError("pilot.version must be a non-empty string")
+
+    case_list = list(cases)
+    benchmark_identity = benchmark_suite_identity(case_list)
 
     rows: list[Dict[str, Any]] = []
     by_category: Dict[str, list[Dict[str, Any]]] = defaultdict(list)
@@ -173,8 +178,7 @@ def run_benchmark(cases: Iterable[BenchmarkCase], pilot: BenchmarkPilot) -> Dict
     saw_output_tokens = False
     saw_cost = False
 
-    for case in cases:
-        case.validate()
+    for case in case_list:
         benchmark_input = benchmark_input_for_case(case)
         started = perf_counter()
         try:
@@ -214,6 +218,7 @@ def run_benchmark(cases: Iterable[BenchmarkCase], pilot: BenchmarkPilot) -> Dict
 
     return {
         "schema_version": BENCHMARK_REPORT_VERSION,
+        "benchmark": benchmark_identity,
         "pilot": {"name": pilot.name, "version": pilot.version},
         "summary": {
             **_summarize(rows),
