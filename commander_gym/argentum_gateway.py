@@ -12,6 +12,9 @@ import hmac
 import json
 import os
 import re
+import sys
+import time
+import uuid
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -24,6 +27,7 @@ MAX_REQUEST_BYTES = 1024 * 1024
 _ENV_PATH = re.compile(r"^/envs/[^/]+$")
 _STEP_PATH = re.compile(r"^/envs/[^/]+/step$")
 _DECISION_PATH = re.compile(r"^/envs/[^/]+/decision$")
+_REQUEST_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 
@@ -117,31 +121,47 @@ class ArgentumGatewayHandler(BaseHTTPRequestHandler):
     def do_PATCH(self) -> None:  # noqa: N802
         self._reject_not_found()
 
+    def log_message(self, _format: str, *_args: Any) -> None:
+        """Suppress BaseHTTPRequestHandler's unstructured access log.
+
+        Every handled request emits one structured diagnostic record instead.
+        """
+
     def _handle(self) -> None:
+        started_at = time.monotonic()
+        request_id = self._request_id()
         config = self.server.gateway_config  # type: ignore[attr-defined]
 
         supplied = self.headers.get("Authorization", "")
         expected = f"Bearer {config.token}"
         if not hmac.compare_digest(supplied, expected):
-            self._write_json(401, {"error": "unauthorized"})
+            self._diagnostic(request_id, "gateway_unauthorized", 401, started_at)
+            self._write_json(401, {"error": "unauthorized"}, request_id=request_id)
             return
 
         if not _allowed_request(self.command, self.path):
-            self._reject_not_found()
+            self._diagnostic(request_id, "gateway_route_rejected", 404, started_at)
+            self._write_json(404, {"error": "not_found"}, request_id=request_id)
             return
 
         try:
             body = self._read_body()
         except ValueError as exc:
-            self._write_json(413, {"error": str(exc)})
+            self._diagnostic(request_id, "gateway_request_rejected", 413, started_at)
+            self._write_json(413, {"error": str(exc)}, request_id=request_id)
             return
 
         target = config.upstream_url.rstrip("/") + self.path
-        headers = {"Accept": "application/json"}
+        headers = {"Accept": "application/json", "X-Request-ID": request_id}
         content_type = self.headers.get("Content-Type")
         if body is not None:
             if content_type and content_type.split(";", 1)[0].strip().lower() != "application/json":
-                self._write_json(415, {"error": "mutating requests must use application/json"})
+                self._diagnostic(request_id, "gateway_request_rejected", 415, started_at)
+                self._write_json(
+                    415,
+                    {"error": "mutating requests must use application/json"},
+                    request_id=request_id,
+                )
                 return
             headers["Content-Type"] = "application/json"
 
@@ -155,18 +175,67 @@ class ArgentumGatewayHandler(BaseHTTPRequestHandler):
             payload = exc.read()
             status = exc.code
             response_type = exc.headers.get("Content-Type", "application/json")
+            self._diagnostic(
+                request_id,
+                "upstream_http_error",
+                status,
+                started_at,
+                upstream_status=status,
+            )
         except (URLError, OSError, TimeoutError):
-            self._write_json(502, {"error": "argentum_upstream_unavailable"})
+            self._diagnostic(request_id, "upstream_transport_error", 502, started_at)
+            self._write_json(
+                502,
+                {"error": "argentum_upstream_unavailable"},
+                request_id=request_id,
+            )
             return
+        else:
+            self._diagnostic(
+                request_id,
+                "upstream_success",
+                status,
+                started_at,
+                upstream_status=status,
+            )
 
         self.send_response(status)
         self.send_header("Content-Type", response_type)
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Request-ID", request_id)
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
         if payload:
             self.wfile.write(payload)
+
+    def _request_id(self) -> str:
+        supplied = self.headers.get("X-Request-ID", "").strip()
+        if supplied and _REQUEST_ID.fullmatch(supplied):
+            return supplied
+        return uuid.uuid4().hex
+
+    def _diagnostic(
+        self,
+        request_id: str,
+        outcome: str,
+        status: int,
+        started_at: float,
+        *,
+        upstream_status: int | None = None,
+    ) -> None:
+        record: dict[str, Any] = {
+            "event": "argentum_gateway_request",
+            "requestId": request_id,
+            "method": self.command,
+            "path": urlparse(self.path).path,
+            "status": status,
+            "outcome": outcome,
+            "durationMs": round((time.monotonic() - started_at) * 1000, 3),
+        }
+        if upstream_status is not None:
+            record["upstreamStatus"] = upstream_status
+        print(json.dumps(record, separators=(",", ":"), sort_keys=True), file=sys.stderr, flush=True)
 
     def _read_body(self) -> bytes | None:
         if self.command not in {"POST", "DELETE"}:
@@ -184,14 +253,18 @@ class ArgentumGatewayHandler(BaseHTTPRequestHandler):
         return self.rfile.read(length)
 
     def _reject_not_found(self) -> None:
-        self._write_json(404, {"error": "not_found"})
+        started_at = time.monotonic()
+        request_id = self._request_id()
+        self._diagnostic(request_id, "gateway_route_rejected", 404, started_at)
+        self._write_json(404, {"error": "not_found"}, request_id=request_id)
 
-    def _write_json(self, status: int, payload: dict[str, Any]) -> None:
+    def _write_json(self, status: int, payload: dict[str, Any], *, request_id: str) -> None:
         body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Request-ID", request_id)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
