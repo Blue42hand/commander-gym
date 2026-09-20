@@ -17,6 +17,7 @@ import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from time import perf_counter
 from typing import Any, Mapping, Sequence
 
 from .orchestration import ArgentumOrchestrator, OrchestrationInspection
@@ -203,6 +204,29 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def _record_routing_metrics(
+    trace: PilotExecutionTrace,
+    counters: dict[str, int],
+) -> None:
+    """Count policy routing without interpreting Argentum game semantics."""
+
+    routing = trace.pilot_metadata.get("routing")
+    if not isinstance(routing, Mapping):
+        counters["unclassified"] += 1
+        return
+
+    path = routing.get("path")
+    if path == "mechanical":
+        counters["mechanical"] += 1
+    elif path == "strategic":
+        counters["strategic"] += 1
+    else:
+        counters["unclassified"] += 1
+
+    if routing.get("strategicWakeAvoided") is True:
+        counters["strategic_wakes_avoided"] += 1
+
+
 def run_four_seat_pilot_session(
     orchestrator: ArgentumOrchestrator,
     config: Mapping[str, Any],
@@ -218,6 +242,11 @@ def run_four_seat_pilot_session(
     Pilot/provider failures propagate.  No heuristic, pass, concession, retry, or
     alternate pilot is substituted.  The environment is disposed in all cases, and a
     successful return additionally proves disposal and stable server identity.
+
+    Successful runs include wall-time and routing telemetry suitable for the #6 live
+    qualification: strategic escalations, certified mechanical decisions, avoided
+    strategic wakes, and the explicit zero mutation-retry count.  Fail-closed rejected
+    choices still raise rather than being converted into gameplay actions.
     """
 
     _required_string(run_id, "run_id")
@@ -225,6 +254,7 @@ def run_four_seat_pilot_session(
         raise PilotSessionError("config must be a mapping")
     _validate_seats(seats, max_choices)
 
+    session_clock_started = perf_counter()
     started_at = _utc_now()
     inspection = orchestrator.inspect()
     env_id: str | None = None
@@ -232,6 +262,13 @@ def run_four_seat_pilot_session(
     acted_seats: set[int] = set()
     last_observation: Mapping[str, Any] | None = None
     disposed = False
+    decision_wall_times_ms: list[float] = []
+    routing_counters = {
+        "mechanical": 0,
+        "strategic": 0,
+        "unclassified": 0,
+        "strategic_wakes_avoided": 0,
+    }
 
     try:
         created = orchestrator.create_environment(config)
@@ -251,7 +288,12 @@ def run_four_seat_pilot_session(
                 ) from exc
 
             environment = _PinnedObservationEnvironment(orchestrator, env_id, observation)
+            decision_clock_started = perf_counter()
             trace = execute_pilot_choice(seat.pilot, environment)
+            decision_wall_times_ms.append(
+                max(0.0, (perf_counter() - decision_clock_started) * 1000.0)
+            )
+            _record_routing_metrics(trace, routing_counters)
             record = _record_trace(
                 trace,
                 env_id=env_id,
@@ -302,6 +344,12 @@ def run_four_seat_pilot_session(
         )
         for index, seat in enumerate(seats)
     ]
+    decision_wall_time_total_ms = sum(decision_wall_times_ms)
+    decision_wall_time_mean_ms = (
+        decision_wall_time_total_ms / len(decision_wall_times_ms)
+        if decision_wall_times_ms
+        else 0.0
+    )
     run = RunRecord(
         run_id=run_id,
         started_at=started_at,
@@ -317,6 +365,18 @@ def run_four_seat_pilot_session(
             "distinct_seats_acted": len(acted_seats),
             "all_four_seats_acted": acted_seats == {0, 1, 2, 3},
             "terminal": terminal,
+            "mechanical_decisions": routing_counters["mechanical"],
+            "strategic_decisions": routing_counters["strategic"],
+            "decision_escalations": routing_counters["strategic"],
+            "unclassified_decisions": routing_counters["unclassified"],
+            "strategic_wakes_avoided": routing_counters["strategic_wakes_avoided"],
+            "mutation_retries": 0,
+            "decision_wall_time_ms_total": decision_wall_time_total_ms,
+            "decision_wall_time_ms_mean": decision_wall_time_mean_ms,
+            "decision_wall_time_ms_max": max(decision_wall_times_ms, default=0.0),
+            "session_wall_time_ms": max(
+                0.0, (perf_counter() - session_clock_started) * 1000.0
+            ),
         },
         metadata={
             "proof": "commander-gym-four-seat-pilot-session-v1",
