@@ -1,8 +1,12 @@
-"""Strict GitHub-issue relay for the Milestone-1 Argentum remote proof.
+"""QUARANTINED legacy GitHub relay for the original Argentum remote proof.
 
-This is intentionally a temporary control transport for ChatGPT environments that
-can write GitHub comments but cannot yet call custom MCP write actions. The actual
-security boundary remains the authenticated HTTPS Commander Gym gateway.
+The direct authenticated Commander Gym gateway completed its live non-GitHub
+orchestration proof on 2026-09-20. This module remains only as transitional
+evidence and an explicit manual fallback while the old relay is retired.
+
+New code and normal operations must use ArgentumGymClient / ArgentumOrchestrator
+directly. Do not add new relay operations, lifecycle assumptions, or automatic
+workflow triggers here.
 """
 
 from __future__ import annotations
