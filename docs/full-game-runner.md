@@ -28,7 +28,14 @@ manifest shape is:
 ```json
 {
   "argentum_config": {
-    "format": "Commander",
+    "format": {
+      "type": "com.wingedsheep.sdk.core.Format.Commander",
+      "commanderDamageThreshold": 21,
+      "deckSize": 100,
+      "startingLife": 40,
+      "startingHandSize": 7,
+      "alwaysDivertToCommand": false
+    },
     "skipMulligans": false,
     "useHandSmoother": false,
     "startingPlayerIndex": 0,
@@ -57,6 +64,14 @@ manifest shape is:
 Supply exactly four `players` and four matching `seats`, in seating order. Build
 the `Explicit.cards` maps from validated DeckPackage v2 artifacts; do not commit
 private deck contents to this repository.
+
+For transport and lifecycle qualification without private deck disclosure, the public
+`fixtures/full_game_krenko_mountains.json` pod uses four legal, fully supported
+Krenko-plus-99-Mountains Commander decks. It is intentionally synthetic evidence, not
+a benchmark deck or a substitute for current-deck coverage qualification. It explicitly
+selects the narrow `qualification_aggro` pilot, which plays lands, casts and activates
+the commander, attacks all legal attackers, and declines optional blocks. That backend
+fails closed for any decision outside this public fixture's small action surface.
 
 ## Run against Linode
 
@@ -100,17 +115,22 @@ nonzero if any run is not `valid_complete`.
 
 Only `valid_complete` artifacts set `training_eligible=true`.
 
-## Current first-game blockers (2026-09-20)
+## First terminal-game milestone and remaining blocker (2026-09-20)
 
-The persistent Linode runtime is still Argentum
-`dbb3e0577c7dd9e297dfc3bf52b42079c18db557`, schema
-`argentum-gym-contract@v1.7-semantic-state-provenance`. It has a fixed default
-perspective and no per-observe acting-seat projection, so it cannot safely drive four
-pilots. The current `EnvConfig` also does not expose its underlying game seed.
+The persistent Linode now runs Argentum
+`320ab35a6ce4a32f53b93f7aa11bce1469467a2f`, schema
+`argentum-gym-contract@v1.8-multi-seat-seed`. Run
+`linode-first-terminal-four-seat-local-v3` completed the public synthetic pod with
+`valid_complete`: all four seats acted, Argentum declared seat `e3` the winner after
+1,298 decisions, the environment was disposed, and the service remained healthy.
+The checked-in evidence summary is `docs/first-terminal-game.json`; the complete
+private artifact has SHA-256
+`60d25ad4ff9f5907baadd9781db56b724546117bafb162c7d2b678795e84860f`.
 
-The latest authoritative coverage report at Argentum
-`168b8d508ecc4d69f32b4abc9a7778b96df32d55` has no complete four-deck pod. The
-highest-coverage Alela/Krenko/Meren/Kadena pod is still missing the exact cards listed
-in `docs/first-pod-blockers.json` (copied from the authoritative private coverage
-artifact). Card work belongs in Argentum; the runner must not replace those cards or
-rules.
+This closes the transport, multi-seat projection, deterministic seed, routing,
+trajectory, cleanup, and terminal-result lifecycle milestone. It does not qualify a
+current user deck. The latest authoritative coverage report, generated against the
+same Argentum revision, still has no complete four-deck pod. The highest-coverage
+Alela/Krenko/Meren/Rocco candidates and their exact missing cards are recorded in
+`docs/first-pod-blockers.json`. Card implementation belongs in Argentum; the runner
+must not silently replace unsupported cards or rules.

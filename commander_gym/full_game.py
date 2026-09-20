@@ -34,6 +34,7 @@ from .pilot import PilotContractError
 from .pilot_execution import execute_pilot_choice
 from .pilot_records import PilotRecordError
 from .pilot_routing import RoutingPilot
+from .qualification_pilot import QualificationAggroPilot
 from .pilot_session import (
     DurablePilotDecision,
     PilotSeat,
@@ -433,7 +434,9 @@ def run_full_game(
             "service_healthy_after_dispose": healthy_after,
             "max_choices": max_choices,
             "repeated_state_limit": repeated_state_limit,
-            "retry_count": 0,
+            "retry_count": sum(
+                int(record.metadata.get("retry_count", 0)) for record in annotated
+            ),
             "pilot_configurations": [dict(seat.pilot_config) for seat in seats],
             "commander_gym": {
                 "revision": _commander_gym_revision(),
@@ -489,15 +492,7 @@ def _openai_seats(manifest: Mapping[str, Any]) -> list[PilotSeat]:
     raw_seats = manifest.get("seats")
     if not isinstance(raw_seats, list) or len(raw_seats) != 4:
         raise PilotSessionError("manifest seats must contain exactly four entries")
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        raise PilotSessionError("OPENAI_API_KEY is required for openai_responses seats")
-    try:
-        from openai import OpenAI
-    except ImportError as exc:
-        raise PilotSessionError("the openai package is required for openai_responses") from exc
-
-    client = OpenAI(api_key=api_key)
+    openai_client: Any | None = None
     seats: list[PilotSeat] = []
     for index, raw in enumerate(raw_seats):
         if not isinstance(raw, Mapping):
@@ -505,12 +500,55 @@ def _openai_seats(manifest: Mapping[str, Any]) -> list[PilotSeat]:
         pilot_config = raw.get("pilot")
         if not isinstance(pilot_config, Mapping):
             raise PilotSessionError(f"manifest seat {index} pilot must be an object")
-        if pilot_config.get("backend") != "openai_responses":
+        backend = pilot_config.get("backend")
+        if backend == "openai_responses":
+            if openai_client is None:
+                api_key = os.environ.get("OPENAI_API_KEY")
+                if not api_key:
+                    raise PilotSessionError(
+                        "OPENAI_API_KEY is required for openai_responses seats"
+                    )
+                try:
+                    from openai import OpenAI
+                except ImportError as exc:
+                    raise PilotSessionError(
+                        "the openai package is required for openai_responses"
+                    ) from exc
+                openai_client = OpenAI(api_key=api_key)
+            model = _required_string(
+                pilot_config.get("model"), f"seat {index} pilot model"
+            )
+            strategy = pilot_config.get("strategy")
+            if strategy is not None:
+                strategy = _required_string(strategy, f"seat {index} pilot strategy")
+            strategic = OpenAIResponsesPilot(
+                client=openai_client,
+                model=model,
+                strategy=strategy,
+            )
+            pilot_model: str | None = model
+            durable_config = {
+                "backend": "openai_responses",
+                "model": model,
+                "strategy": strategy,
+                "pilot_version": strategic.version,
+                "routing": "certified-routing",
+                "routing_version": "1",
+            }
+        elif backend == "qualification_aggro":
+            strategic = QualificationAggroPilot()
+            pilot_model = None
+            durable_config = {
+                "backend": "qualification_aggro",
+                "pilot_version": strategic.version,
+                "scope": "public-synthetic-lifecycle-qualification-only",
+                "routing": "certified-routing",
+                "routing_version": "1",
+            }
+        else:
             raise PilotSessionError(
                 f"manifest seat {index} uses unsupported pilot backend"
             )
-        model = _required_string(pilot_config.get("model"), f"seat {index} pilot model")
-        strategic = OpenAIResponsesPilot(client=client, model=model)
         seats.append(
             PilotSeat(
                 player_name=_required_string(raw.get("player_name"), f"seat {index} player_name"),
@@ -520,14 +558,8 @@ def _openai_seats(manifest: Mapping[str, Any]) -> list[PilotSeat]:
                     raw.get("deck_version"), f"seat {index} deck_version"
                 ),
                 primer_version=raw.get("primer_version"),
-                pilot_model=model,
-                pilot_config={
-                    "backend": "openai_responses",
-                    "model": model,
-                    "pilot_version": strategic.version,
-                    "routing": "certified-routing",
-                    "routing_version": "1",
-                },
+                pilot_model=pilot_model,
+                pilot_config=durable_config,
             )
         )
     return seats

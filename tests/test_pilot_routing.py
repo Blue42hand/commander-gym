@@ -65,6 +65,18 @@ class RoutingPilotTests(unittest.TestCase):
         self.assertEqual(choice.metadata["routing"]["handler"], "forced-parameterless-choice")
         self.assertTrue(choice.metadata["routing"]["strategicWakeAvoided"])
 
+    def test_forced_pass_ignores_generic_target_defaults_from_argentum(self):
+        action = pass_action()
+        action.update({"minTargets": 1, "maxTargets": 1})
+        strategic = CountingPilot(ArgentumActionChoice(action_id=999))
+        router = RoutingPilot(strategic)
+
+        choice = choose_for_observation(router, observation(action))
+
+        self.assertEqual(strategic.calls, 0)
+        self.assertEqual(choice.action_id, 0)
+        self.assertEqual(choice.metadata["routing"]["path"], "mechanical")
+
     def test_parameter_bearing_action_escalates_to_strategic_pilot(self):
         attack = {
             "actionId": 4,

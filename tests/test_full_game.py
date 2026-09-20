@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+from unittest.mock import patch
 
 from commander_gym.full_game import (
     QUALIFICATION_PILOT_FAILURE,
     QUALIFICATION_TECHNICAL_CENSORED,
     QUALIFICATION_VALID_COMPLETE,
+    _openai_seats,
     run_full_game,
     write_full_game_artifact,
 )
@@ -130,6 +133,23 @@ def seats(*, fail_index: int | None = None) -> list[PilotSeat]:
 
 
 class FullGameTests(unittest.TestCase):
+    def test_public_qualification_manifest_does_not_require_provider_credentials(self) -> None:
+        manifest = json.loads(
+            (Path(__file__).parent.parent / "fixtures" / "full_game_krenko_mountains.json")
+            .read_text(encoding="utf-8")
+        )
+
+        with patch.dict(os.environ, {}, clear=True):
+            configured = _openai_seats(manifest)
+
+        self.assertEqual(len(configured), 4)
+        self.assertTrue(
+            all(
+                seat.pilot_config["backend"] == "qualification_aggro"
+                for seat in configured
+            )
+        )
+
     def test_terminal_game_is_training_eligible_and_annotates_every_decision(self) -> None:
         backend = SeatAwareBackend()
         result = run_full_game(
