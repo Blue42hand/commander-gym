@@ -15,11 +15,12 @@ from .argentum_client import (
 )
 from .benchmark_runner import (
     BENCHMARK_REPORT_VERSION,
+    BenchmarkInput,
     BenchmarkPilot,
     CallablePilot,
     PilotDecision,
+    benchmark_input_for_case,
     first_legal_pilot,
-    preferred_or_first_pilot,
     run_benchmark,
 )
 from .dataset_export import (
@@ -124,6 +125,7 @@ __all__ = [
     "ArgentumRemoteError",
     "ArtifactRef",
     "BENCHMARK_REPORT_VERSION",
+    "BenchmarkInput",
     "BenchmarkPilot",
     "CallablePilot",
     "CertifiedMechanicalHandler",
@@ -174,6 +176,7 @@ __all__ = [
     "SparseDecisionFeatures",
     "StructuredDecisionRecord",
     "StaleArgentumDecisionError",
+    "benchmark_input_for_case",
     "build_run_dataset_rows",
     "choose_for_observation",
     "decision_record_from_execution_trace",
@@ -183,7 +186,6 @@ __all__ = [
     "first_legal_pilot",
     "normalize_archidekt_snapshot",
     "policy_family_for_decision_type",
-    "preferred_or_first_pilot",
     "run_benchmark",
     "run_four_seat_pilot_session",
     "validate_commander_package",

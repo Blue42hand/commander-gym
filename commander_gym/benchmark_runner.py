@@ -3,18 +3,41 @@
 This module is deliberately engine-independent. It evaluates a pilot against
 already-captured :class:`BenchmarkCase` records and records enough provenance to
 compare implementations without starting Argentum, Forge, or any other runtime.
+
+Held-out judgments and post-decision provenance are scoring evidence, not pilot
+input.  The runner projects each case onto :class:`BenchmarkInput` before calling
+the pilot so a benchmark adapter cannot accidentally read the reference judgment,
+recorded choice/outcome, deck identity, or source pilot provenance.
 """
 
 from __future__ import annotations
 
 from collections import defaultdict
+from copy import deepcopy
 from dataclasses import dataclass, field
 from time import perf_counter
-from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Protocol, Union
+from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Protocol, Tuple, Union
 
 from .benchmark import BenchmarkCase, score_action
+from .records import ActionRecord
 
 BENCHMARK_REPORT_VERSION = 1
+
+
+@dataclass(frozen=True)
+class BenchmarkInput:
+    """Information that was available to the evaluated pilot at decision time.
+
+    This intentionally mirrors the leakage boundary used by dataset export.  It
+    excludes benchmark judgments/categories/tags plus all post-decision and
+    provenance fields carried by ``DecisionRecord``.
+    """
+
+    decision_type: str
+    seat: int
+    observation_schema: str
+    observation: Dict[str, Any]
+    legal_actions: Tuple[ActionRecord, ...]
 
 
 @dataclass(frozen=True)
@@ -32,12 +55,12 @@ PilotResult = Union[str, PilotDecision]
 
 
 class BenchmarkPilot(Protocol):
-    """Minimal interface required by the offline benchmark runner."""
+    """Minimal interface required by the leakage-safe offline benchmark runner."""
 
     name: str
     version: str
 
-    def choose_action(self, case: BenchmarkCase) -> PilotResult:
+    def choose_action(self, benchmark_input: BenchmarkInput) -> PilotResult:
         ...
 
 
@@ -47,10 +70,35 @@ class CallablePilot:
 
     name: str
     version: str
-    chooser: Callable[[BenchmarkCase], PilotResult]
+    chooser: Callable[[BenchmarkInput], PilotResult]
 
-    def choose_action(self, case: BenchmarkCase) -> PilotResult:
-        return self.chooser(case)
+    def choose_action(self, benchmark_input: BenchmarkInput) -> PilotResult:
+        return self.chooser(benchmark_input)
+
+
+def benchmark_input_for_case(case: BenchmarkCase) -> BenchmarkInput:
+    """Project a held-out case onto only the information available at choice time.
+
+    Nested mappings are deep-copied so a mutable benchmark adapter cannot alter the
+    held-out case or scoring evidence while it is being evaluated.
+    """
+
+    case.validate()
+    decision = case.decision
+    return BenchmarkInput(
+        decision_type=decision.decision_type,
+        seat=decision.seat,
+        observation_schema=decision.observation_schema,
+        observation=deepcopy(decision.observation),
+        legal_actions=tuple(
+            ActionRecord(
+                action_id=action.action_id,
+                payload=deepcopy(action.payload),
+                label=action.label,
+            )
+            for action in decision.legal_actions
+        ),
+    )
 
 
 def _normalize_decision(value: PilotResult) -> PilotDecision:
@@ -105,6 +153,9 @@ def run_benchmark(cases: Iterable[BenchmarkCase], pilot: BenchmarkPilot) -> Dict
     Pilot failures are evidence, not reasons to substitute another policy. A
     model/adapter exception or malformed response is recorded as an invalid
     output for that case and benchmark execution continues with later cases.
+
+    The pilot receives only :class:`BenchmarkInput`; reference judgments and
+    post-decision provenance remain runner-side for scoring and reporting.
     """
 
     if not isinstance(pilot.name, str) or not pilot.name:
@@ -124,9 +175,10 @@ def run_benchmark(cases: Iterable[BenchmarkCase], pilot: BenchmarkPilot) -> Dict
 
     for case in cases:
         case.validate()
+        benchmark_input = benchmark_input_for_case(case)
         started = perf_counter()
         try:
-            decision = _normalize_decision(pilot.choose_action(case))
+            decision = _normalize_decision(pilot.choose_action(benchmark_input))
             error = None
         except Exception as exc:  # benchmark evidence must retain pilot failures
             decision = PilotDecision(action_id="")
@@ -181,17 +233,4 @@ def run_benchmark(cases: Iterable[BenchmarkCase], pilot: BenchmarkPilot) -> Dict
 def first_legal_pilot(name: str = "first-legal", version: str = "1") -> CallablePilot:
     """Public deterministic baseline that always chooses the first legal action."""
 
-    return CallablePilot(name, version, lambda case: case.decision.legal_actions[0].action_id)
-
-
-def preferred_or_first_pilot(
-    name: str = "oracle-fixture", version: str = "1"
-) -> CallablePilot:
-    """Fixture oracle for tests; never use as a production policy."""
-
-    def choose(case: BenchmarkCase) -> str:
-        if case.judgment.preferred_action_ids:
-            return case.judgment.preferred_action_ids[0]
-        return case.decision.legal_actions[0].action_id
-
-    return CallablePilot(name, version, choose)
+    return CallablePilot(name, version, lambda benchmark_input: benchmark_input.legal_actions[0].action_id)
