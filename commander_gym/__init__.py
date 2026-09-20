@@ -44,6 +44,16 @@ from .deck_sources import (
     DeckSourceSnapshot,
     normalize_archidekt_snapshot,
 )
+from .experiment import (
+    EXPERIMENT_ARTIFACT_VERSION,
+    EXPERIMENT_PLAN_SCHEMA_VERSION,
+    ExperimentError,
+    ExperimentPlan,
+    ExperimentResult,
+    ExperimentRunSpec,
+    run_experiment,
+    write_experiment_artifact,
+)
 from .openai_responses_pilot import OpenAIResponsesPilot, OpenAIResponsesPilotError
 from .orchestration import (
     ArgentumOrchestrator,
@@ -142,8 +152,14 @@ __all__ = [
     "DeckSourceFetchError",
     "DeckSourceSnapshot",
     "DecisionRecord",
+    "EXPERIMENT_ARTIFACT_VERSION",
+    "EXPERIMENT_PLAN_SCHEMA_VERSION",
     "EngineProvenance",
     "EnvironmentReconciliation",
+    "ExperimentError",
+    "ExperimentPlan",
+    "ExperimentResult",
+    "ExperimentRunSpec",
     "FEATURE_SCHEMA_VERSION",
     "ForcedParameterlessChoiceHandler",
     "OpenAIResponsesPilot",
@@ -187,9 +203,11 @@ __all__ = [
     "normalize_archidekt_snapshot",
     "policy_family_for_decision_type",
     "run_benchmark",
+    "run_experiment",
     "run_four_seat_pilot_session",
     "validate_commander_package",
     "validate_pilot_choice",
+    "write_experiment_artifact",
     "write_pilot_session_artifact",
     "write_run_dataset_jsonl",
 ]
