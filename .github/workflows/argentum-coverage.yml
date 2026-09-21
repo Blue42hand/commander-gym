@@ -1,0 +1,145 @@
+name: Argentum active-roster CardRegistry coverage
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "argentum-coverage-source.json"
+      - "rosters/argentum-native-v1/**"
+      - "scripts/run_argentum_roster_coverage.py"
+      - ".github/workflows/argentum-coverage.yml"
+  push:
+    branches: [main]
+    paths:
+      - "argentum-coverage-source.json"
+      - "rosters/argentum-native-v1/**"
+      - "scripts/run_argentum_roster_coverage.py"
+      - ".github/workflows/argentum-coverage.yml"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: argentum-coverage-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Commander Gym
+        uses: actions/checkout@v6
+
+      - name: Read Argentum source pin
+        id: argentum
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          from urllib.parse import urlparse
+
+          source = json.load(open("argentum-coverage-source.json"))
+          path = urlparse(source["repository"]).path.strip("/")
+          if path.endswith(".git"):
+              path = path[:-4]
+          print(f"repository={path}")
+          print(f"commit={source['commit']}")
+          PY
+
+      - name: Checkout pinned Argentum fork
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ steps.argentum.outputs.repository }}
+          ref: ${{ steps.argentum.outputs.commit }}
+          path: argentum-engine
+          persist-credentials: false
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Run authoritative CardRegistry coverage
+        run: |
+          python3 scripts/run_argentum_roster_coverage.py \
+            --argentum-source "$GITHUB_WORKSPACE/argentum-engine" \
+            --output "$GITHUB_WORKSPACE/argentum-coverage.json"
+
+      - name: Emit machine-readable coverage report
+        run: |
+          echo "ARGENTUM_COVERAGE_JSON_BEGIN"
+          cat argentum-coverage.json
+          echo "ARGENTUM_COVERAGE_JSON_END"
+
+      - name: Emit retrievable compressed coverage report
+        run: |
+          python3 - <<'PY'
+          import base64
+          import gzip
+
+          data = open("argentum-coverage.json", "rb").read()
+          print("ARGENTUM_COVERAGE_GZIP_B64=" + base64.b64encode(gzip.compress(data)).decode("ascii"))
+          PY
+
+      - name: Upload coverage report
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: argentum-active-roster-coverage
+          path: argentum-coverage.json
+          if-no-files-found: error
+
+      - name: Publish coverage payload to pull request
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          python3 - <<'PY' > /tmp/argentum-coverage-comment.md
+          import base64
+          import gzip
+          import json
+
+          report = json.load(open("argentum-coverage.json"))
+          data = open("argentum-coverage.json", "rb").read()
+          payload = base64.b64encode(gzip.compress(data)).decode("ascii")
+
+          print("<!-- argentum-active-roster-coverage -->")
+          print(
+              "Authoritative live CardRegistry coverage for "
+              f"Commander Gym `{report['commanderGym']['commit']}` against "
+              f"Argentum `{report['argentum']['commit']}`."
+          )
+          print()
+          print(f"Registry card names: **{report['registryCardNames']:,}**")
+          print()
+          print("### Deck coverage")
+          print("| Commander | Exact slots | Exact coverage | Normalized coverage |")
+          print("|---|---:|---:|---:|")
+          for deck in report["decks"]:
+              print(
+                  f"| {deck['commander']} | "
+                  f"{deck['exactImplementedSlots']}/{deck['totalSlotsIncludingCommander']} | "
+                  f"{deck['exactCoveragePercent']:.1f}% | "
+                  f"{deck['normalizedCoveragePercent']:.1f}% |"
+              )
+
+          print()
+          gaps = report["union"]["missing"]
+          if gaps:
+              print("### Highest-reach missing cards")
+              for gap in gaps[:20]:
+                  print(f"- **{gap['name']}** — {gap['deckCount']} decks / {gap['slotCount']} slots")
+          else:
+              print("**No active-roster card names are missing after explicit front-face normalization.**")
+
+          print()
+          print("Exact machine-readable report (gzip/base64):")
+          print()
+          print(f"`ARGENTUM_COVERAGE_GZIP_B64={payload}`")
+          PY
+          gh pr comment "$PR_NUMBER" --body-file /tmp/argentum-coverage-comment.md
