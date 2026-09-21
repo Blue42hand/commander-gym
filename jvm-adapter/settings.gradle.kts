@@ -9,7 +9,6 @@ includeBuild(argentumDir) {
     dependencySubstitution {
         substitute(module("com.wingedsheep:argentum-ai")).using(project(":ai"))
         substitute(module("com.wingedsheep:argentum-game-server")).using(project(":game-server"))
-        substitute(module("com.wingedsheep:argentum-gym")).using(project(":gym"))
         substitute(module("com.wingedsheep:argentum-rules-engine")).using(project(":rules-engine"))
         substitute(module("com.wingedsheep:argentum-sdk")).using(project(":mtg-sdk"))
     }
