@@ -153,6 +153,7 @@ class GameServerSidecarHandler(BaseHTTPRequestHandler):
                     "kind": "action",
                     "actionId": result.action_id,
                     "action": result.action,
+                    "params": result.params,
                     "metadata": result.metadata,
                 }
             if isinstance(result, NativeDecisionResponse):
