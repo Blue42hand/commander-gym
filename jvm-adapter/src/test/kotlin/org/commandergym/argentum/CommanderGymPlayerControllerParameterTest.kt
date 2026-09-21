@@ -5,7 +5,7 @@ import com.wingedsheep.ai.ActionResponse
 import com.wingedsheep.engine.core.DeclareAttackers
 import com.wingedsheep.engine.view.ClientGameState
 import com.wingedsheep.engine.view.LegalActionInfo
-import com.wingedsheep.gym.contract.ActionParams
+import com.wingedsheep.engine.core.ActionParams
 import com.wingedsheep.sdk.core.Phase
 import com.wingedsheep.sdk.core.Step
 import com.wingedsheep.sdk.model.EntityId
