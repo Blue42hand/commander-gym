@@ -75,6 +75,13 @@ from .pilot import (
     choose_for_observation,
     validate_pilot_choice,
 )
+from .game_server_seat import (
+    GameServerSeatAdapter,
+    GameServerSeatError,
+    NativeActionResponse,
+    NativeDecisionResponse,
+    SeatProvenance,
+)
 from .pilot_records import (
     PilotRecordContext,
     PilotRecordError,
@@ -122,6 +129,11 @@ from .sparse_features import (
 __all__ = [
     "ActionRecord",
     "ArtificialPlayer",
+    "GameServerSeatAdapter",
+    "GameServerSeatError",
+    "NativeActionResponse",
+    "NativeDecisionResponse",
+    "SeatProvenance",
     "ArgentumActionChoice",
     "ArgentumCanonicalDecision",
     "ArgentumCanonicalError",
