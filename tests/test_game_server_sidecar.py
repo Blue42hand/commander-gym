@@ -12,6 +12,7 @@ from commander_gym.game_server_sidecar import (
     GameServerSidecarConfigurationError,
     GameServerSidecarServer,
 )
+from commander_gym.openai_responses_pilot import OpenAIResponsesPilotError
 from commander_gym.pilot import ArgentumActionChoice, ArgentumDecisionChoice
 
 
@@ -145,6 +146,26 @@ class GameServerSidecarTests(unittest.TestCase):
         )
         self.assertEqual(status, 503)
         self.assertEqual(response["error"], "pilot_failure")
+        self.assertEqual(response["detail"], "RuntimeError")
+
+        provider_failure = GameServerSeatAdapter(
+            ScriptedPilot(
+                OpenAIResponsesPilotError(
+                    "OpenAI Responses request failed (BadRequestError, status=400, "
+                    "code=invalid_request_error, message=unsupported parameter)"
+                )
+            ),
+            "provider-broken",
+        )
+        self.server.seats["provider-broken"] = provider_failure
+        status, response = self.post(
+            "/v1/decide-mulligan",
+            {"playerId": "provider-broken", "mulligan": {"hand": ["a"]}},
+        )
+        self.assertEqual(status, 503)
+        self.assertEqual(response["error"], "pilot_failure")
+        self.assertIn("status=400", response["detail"])
+        self.assertIn("unsupported parameter", response["detail"])
 
     def test_lazy_factory_binds_generated_player_id_once(self):
         self.server.shutdown()
