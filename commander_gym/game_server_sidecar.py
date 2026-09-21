@@ -1,18 +1,19 @@
-"""Loopback-only transport for vanilla Argentum ``AiPlayerController`` callbacks.
+"""Loopback-only transport for vanilla Argentum AiPlayerController callbacks.
 
-The transport is deliberately smaller than the pilot contract.  It accepts only the
-masked values supplied to ``AiPlayerController`` and delegates every strategic choice
-to :class:`GameServerSeatAdapter`.  In particular, there is no field for
-``AiControllerContext.snapshot``.
+The transport is deliberately smaller than the pilot contract. It accepts only the
+masked values supplied to AiPlayerController and delegates every strategic choice
+to GameServerSeatAdapter. In particular, there is no field for
+AiControllerContext.snapshot.
 """
 
 from __future__ import annotations
 
 import hmac
 import json
+import threading
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 from .game_server_seat import (
     GameServerSeatAdapter,
@@ -28,6 +29,8 @@ _CALLBACK_PATHS = {
     "/v1/decide-mulligan": "decideMulligan",
     "/v1/choose-bottom-cards": "chooseBottomCards",
 }
+
+SeatFactory = Callable[[str], GameServerSeatAdapter]
 
 
 class GameServerSidecarConfigurationError(RuntimeError):
@@ -56,11 +59,40 @@ class GameServerSidecarServer(ThreadingHTTPServer):
         self,
         server_address: tuple[str, int],
         config: GameServerSidecarConfig,
-        seats: Mapping[str, GameServerSeatAdapter],
+        seats: Mapping[str, GameServerSeatAdapter] | None = None,
+        *,
+        seat_factory: SeatFactory | None = None,
     ) -> None:
         self.sidecar_config = config
-        self.seats = dict(seats)
+        self.seats = dict(seats or {})
+        self._seat_factory = seat_factory
+        self._seat_lock = threading.Lock()
         super().__init__(server_address, GameServerSidecarHandler)
+
+    def resolve_seat(self, player_id: str) -> GameServerSeatAdapter:
+        """Return the stable adapter for one Argentum seat.
+
+        Normal game-server flows allocate the AI entity id inside Argentum, so the
+        policy process cannot always pre-register a concrete seat id. A configured
+        seat_factory lazily creates the Commander Gym adapter on the first masked
+        callback for that id and caches it for the rest of the game. There is still
+        no registration endpoint and no trusted-state input.
+        """
+
+        adapter = self.seats.get(player_id)
+        if adapter is not None:
+            return adapter
+        if self._seat_factory is None:
+            raise KeyError(player_id)
+
+        with self._seat_lock:
+            adapter = self.seats.get(player_id)
+            if adapter is None:
+                adapter = self._seat_factory(player_id)
+                if not isinstance(adapter, GameServerSeatAdapter):
+                    raise TypeError("seat_factory must return GameServerSeatAdapter")
+                self.seats[player_id] = adapter
+            return adapter
 
 
 class GameServerSidecarHandler(BaseHTTPRequestHandler):
@@ -81,7 +113,7 @@ class GameServerSidecarHandler(BaseHTTPRequestHandler):
             player_id = request.get("playerId")
             if not isinstance(player_id, str) or not player_id:
                 raise ValueError("callback requires playerId")
-            adapter = self.server.seats[player_id]  # type: ignore[attr-defined]
+            adapter = self.server.resolve_seat(player_id)  # type: ignore[attr-defined]
             response = self._invoke(callback, adapter, request)
         except KeyError:
             self._write(404, {"error": "unknown_seat"})
@@ -89,7 +121,7 @@ class GameServerSidecarHandler(BaseHTTPRequestHandler):
         except (TypeError, ValueError) as exc:
             self._write(422, {"error": str(exc)})
             return
-        except Exception as exc:  # fail closed; never substitute another policy
+        except Exception as exc:
             self._write(503, {"error": "pilot_failure", "detail": type(exc).__name__})
             return
         self._write(200, response)
