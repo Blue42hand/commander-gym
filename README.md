@@ -91,6 +91,13 @@ Commander Gym's card-coverage work should therefore produce upstream-quality Arg
 4. **Connect deck building and piloting.** Deck construction and specialized piloting are related competencies and should eventually be optimized together on top of a strong generalist substrate.
 5. **Minimize fork ownership.** Prefer upstream Argentum improvements over permanent fork-specific infrastructure.
 6. **Measure what matters.** Automated strength and reliability benchmarks are development tools; human play quality is the eventual product metric.
+7. **Treat table interaction as player competence.** Human-facing pilots should eventually understand and participate in table talk, diplomacy, deals, threat signaling, and other social play without mixing persona generation into the core strategic reasoning loop.
+
+## Reference implementations
+
+Commander Gym should prefer adopting or adapting proven player-side patterns from compatible projects rather than rewriting them without reason. [mage-bench](https://github.com/GregorStocks/mage-bench) is a reference for LLM pilot orchestration, structured game/LLM telemetry, harness versioning, context deduplication, and human-facing table chat. XMage-specific rules and bridge workarounds remain out of scope because equivalent game/environment capability belongs in Argentum.
+
+See [`docs/mage-bench-adoption.md`](docs/mage-bench-adoption.md) for the concrete adoption boundary and implementation order.
 
 ## Current status
 
