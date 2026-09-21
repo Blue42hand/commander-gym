@@ -14,7 +14,14 @@ dependencies {
 
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
     implementation("org.springframework.boot:spring-boot-autoconfigure:4.1.0")
+
     testImplementation(kotlin("test"))
+    // Acceptance tests boot the actual vanilla Argentum game-server from the composite build.
+    // These remain test-only so the adapter artifact itself does not own Argentum runtime deps.
+    testImplementation("com.wingedsheep:argentum-game-server")
+    testImplementation("com.wingedsheep:argentum-rules-engine")
+    testImplementation("com.wingedsheep:argentum-sdk")
+    testImplementation("org.springframework.boot:spring-boot-starter-test:4.1.0")
 }
 
 kotlin { jvmToolchain(21) }
