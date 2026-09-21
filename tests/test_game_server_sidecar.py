@@ -78,8 +78,45 @@ class GameServerSidecarTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(response["kind"], "action")
         self.assertEqual(response["action"], body["legalActions"][0]["action"])
+        self.assertEqual(response["params"], {})
         self.assertEqual(self.pilot.observations[0]["state"], body["state"])
         self.assertNotIn("snapshot", self.pilot.observations[0])
+
+    def test_parameterized_action_round_trip_defers_completion_to_native_edge(self):
+        self.server.seats["ai"] = GameServerSeatAdapter(
+            ScriptedPilot(
+                ArgentumActionChoice(
+                    0,
+                    params={
+                        "attackers": {"creature-1": "human"},
+                        "xValue": 3,
+                    },
+                )
+            ),
+            "ai",
+        )
+        body = {
+            "playerId": "ai",
+            "state": {"viewingPlayerId": "ai"},
+            "legalActions": [
+                {
+                    "actionType": "DeclareAttackers",
+                    "action": {"type": "DeclareAttackers", "playerId": "ai", "attackers": {}},
+                }
+            ],
+            "pendingDecision": None,
+            "recentGameLog": [],
+        }
+
+        status, response = self.post("/v1/choose-action", body)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(response["kind"], "action")
+        self.assertEqual(
+            response["params"],
+            {"attackers": {"creature-1": "human"}, "xValue": 3},
+        )
+        self.assertEqual(response["action"], body["legalActions"][0]["action"])
 
     def test_mulligan_bottom_cards_and_fail_closed_provider_path(self):
         bottom_pilot = ScriptedPilot(
