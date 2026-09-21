@@ -13,8 +13,8 @@ import com.wingedsheep.engine.view.ClientGameState
 import com.wingedsheep.engine.view.LegalActionInfo
 import com.wingedsheep.gameserver.ai.AiControllerContext
 import com.wingedsheep.gameserver.ai.AiControllerProvider
-import com.wingedsheep.gym.contract.ActionParameterizer
-import com.wingedsheep.gym.contract.ActionParams
+import com.wingedsheep.engine.core.ActionParameterizer
+import com.wingedsheep.engine.core.ActionParams
 import com.wingedsheep.sdk.model.EntityId
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.*
