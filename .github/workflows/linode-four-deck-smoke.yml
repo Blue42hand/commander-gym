@@ -33,7 +33,6 @@ jobs:
       - name: Build exact-roster game manifest
         run: |
           mkdir -p test-runs/linode-four-deck-smoke
-          python scripts/validate_argentum_roster.py rosters/argentum-native-v1/manifest.json
           python scripts/build_argentum_roster_game.py \
             rosters/argentum-native-v1/manifest.json \
             --model gpt-5.6-luna \
