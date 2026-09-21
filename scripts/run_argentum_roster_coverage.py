@@ -128,6 +128,7 @@ def run_probe(
     argentum: Path,
     output: Path,
     decks: list[tuple[dict, Path, dict]],
+    registry_names_output: Path | None = None,
 ) -> dict[str, Path]:
     gradle_runner = argentum / "scripts" / "gradle-locked"
     if not gradle_runner.is_file():
@@ -143,18 +144,18 @@ def run_probe(
             prepared.append(probe_path)
             source_map[str(probe_path.resolve())] = source_path.resolve()
 
-        subprocess.run(
-            [
-                str(gradle_runner),
-                "--no-configuration-cache",
-                "-q",
-                ":gym-server:commanderGymDeckCoverage",
-                f"-PdeckFiles={';'.join(str(path.resolve()) for path in prepared)}",
-                f"-PcoverageOutput={output.resolve()}",
-            ],
-            cwd=argentum,
-            check=True,
-        )
+        command = [
+            str(gradle_runner),
+            "--no-configuration-cache",
+            "-q",
+            ":gym-server:commanderGymDeckCoverage",
+            f"-PdeckFiles={';'.join(str(path.resolve()) for path in prepared)}",
+            f"-PcoverageOutput={output.resolve()}",
+        ]
+        if registry_names_output is not None:
+            command.append(f"-PregistryNamesOutput={registry_names_output.resolve()}")
+
+        subprocess.run(command, cwd=argentum, check=True)
         return source_map
 
 
@@ -239,6 +240,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     parser.add_argument("--source-pin", type=Path, default=DEFAULT_SOURCE_PIN)
     parser.add_argument("--output", type=Path, default=ROOT / "argentum-coverage.json")
+    parser.add_argument("--registry-names-output", type=Path)
     return parser.parse_args()
 
 
@@ -249,7 +251,14 @@ def main() -> None:
     manifest, decks = load_roster(args.manifest)
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    source_map = run_probe(args.argentum_source.resolve(), args.output, decks)
+    if args.registry_names_output is not None:
+        args.registry_names_output.parent.mkdir(parents=True, exist_ok=True)
+    source_map = run_probe(
+        args.argentum_source.resolve(),
+        args.output,
+        decks,
+        args.registry_names_output,
+    )
     report = load_json(args.output)
     report = enrich_report(
         args.output,

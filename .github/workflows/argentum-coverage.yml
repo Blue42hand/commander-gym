@@ -67,7 +67,8 @@ jobs:
         run: |
           python3 scripts/run_argentum_roster_coverage.py \
             --argentum-source "$GITHUB_WORKSPACE/argentum-engine" \
-            --output "$GITHUB_WORKSPACE/argentum-coverage.json"
+            --output "$GITHUB_WORKSPACE/argentum-coverage.json" \
+            --registry-names-output "$GITHUB_WORKSPACE/argentum-registry-card-names.txt"
 
       - name: Emit machine-readable coverage report
         run: |
@@ -85,12 +86,29 @@ jobs:
           print("ARGENTUM_COVERAGE_GZIP_B64=" + base64.b64encode(gzip.compress(data)).decode("ascii"))
           PY
 
-      - name: Upload coverage report
+      - name: Verify registry-name export matches report count
+        run: |
+          python3 - <<'PY'
+          import json
+
+          report = json.load(open("argentum-coverage.json"))
+          names = open("argentum-registry-card-names.txt", encoding="utf-8").read().splitlines()
+          assert names == sorted(names), "registry-name export is not sorted"
+          assert len(names) == len(set(names)), "registry-name export contains duplicates"
+          assert len(names) == report["registryCardNames"], (
+              f"registry-name export count {len(names)} != report count {report['registryCardNames']}"
+          )
+          print(f"Verified {len(names):,} live CardRegistry names")
+          PY
+
+      - name: Upload coverage report and registry names
         continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: argentum-active-roster-coverage
-          path: argentum-coverage.json
+          path: |
+            argentum-coverage.json
+            argentum-registry-card-names.txt
           if-no-files-found: error
 
       - name: Publish coverage payload to pull request
@@ -137,6 +155,8 @@ jobs:
           else:
               print("**No active-roster card names are missing after explicit front-face normalization.**")
 
+          print()
+          print("The workflow artifact also preserves the sorted live CardRegistry name set for private benchmark comparison without publishing private deck contents.")
           print()
           print("Exact machine-readable report (gzip/base64):")
           print()
