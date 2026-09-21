@@ -179,7 +179,19 @@ class CommanderGymPlayerController(
             .build()
         val response = http.send(request, HttpResponse.BodyHandlers.ofString())
         require(response.statusCode() == 200) {
-            "Commander Gym policy callback failed with HTTP ${response.statusCode()}"
+            val detail = runCatching {
+                json.parseToJsonElement(response.body()).jsonObject["detail"]
+                    ?.jsonPrimitive
+                    ?.contentOrNull
+            }.getOrNull()
+            buildString {
+                append("Commander Gym policy callback failed with HTTP ")
+                append(response.statusCode())
+                if (!detail.isNullOrBlank()) {
+                    append(": ")
+                    append(detail.take(1200))
+                }
+            }
         }
         return json.parseToJsonElement(response.body()).jsonObject
     }
