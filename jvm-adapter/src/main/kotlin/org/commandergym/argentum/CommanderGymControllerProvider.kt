@@ -6,12 +6,15 @@ import com.wingedsheep.ai.llm.BottomCardsInfo
 import com.wingedsheep.ai.llm.CardSummary
 import com.wingedsheep.ai.llm.MulliganInfo
 import com.wingedsheep.engine.core.DecisionResponse
+import com.wingedsheep.engine.core.GameAction
 import com.wingedsheep.engine.core.PendingDecision
 import com.wingedsheep.engine.core.engineSerializersModule
 import com.wingedsheep.engine.view.ClientGameState
 import com.wingedsheep.engine.view.LegalActionInfo
 import com.wingedsheep.gameserver.ai.AiControllerContext
 import com.wingedsheep.gameserver.ai.AiControllerProvider
+import com.wingedsheep.gym.contract.ActionParameterizer
+import com.wingedsheep.gym.contract.ActionParams
 import com.wingedsheep.sdk.model.EntityId
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.*
@@ -37,9 +40,27 @@ class CommanderGymControllerProvider(
         require(token.isNotBlank()) { "Commander Gym policy token must not be blank" }
     }
 
-    override fun create(context: AiControllerContext): AiPlayerController =
-        CommanderGymPlayerController(context.playerId, endpoint, token, timeout)
-    // Deliberately do not retain context or call context.snapshot().
+    override fun create(context: AiControllerContext): AiPlayerController {
+        // The policy process never receives or observes this trusted snapshot. The closure is kept
+        // only at the native edge so Argentum's own ActionParameterizer can turn model-selected
+        // ActionParams into the original GameAction template immediately before submission.
+        val snapshotProvider = context.snapshot
+        return CommanderGymPlayerController(
+            playerId = context.playerId,
+            endpoint = endpoint,
+            token = token,
+            timeout = timeout,
+            parameterize = { action, params ->
+                if (params.isEmpty) {
+                    action
+                } else {
+                    val snapshot = snapshotProvider()
+                        ?: error("Commander Gym action params require a live Argentum runtime snapshot")
+                    ActionParameterizer.apply(action, params, snapshot.state)
+                }
+            },
+        )
+    }
 }
 
 class CommanderGymPlayerController(
@@ -47,6 +68,7 @@ class CommanderGymPlayerController(
     endpoint: URI,
     token: String,
     timeout: Duration,
+    private val parameterize: (GameAction, ActionParams) -> GameAction,
     private val http: HttpClient = HttpClient.newBuilder().connectTimeout(timeout).build(),
 ) : AiPlayerController {
     private val base = endpoint.toString().trimEnd('/')
@@ -78,7 +100,8 @@ class CommanderGymPlayerController(
                 val index = response.requiredInt("actionId")
                 val native = legalActions.getOrNull(index)
                     ?: error("Commander Gym returned a stale legal action index")
-                ActionResponse.SubmitAction(native.action)
+                val params = json.decodeFromJsonElement<ActionParams>(response.requiredObject("params"))
+                ActionResponse.SubmitAction(parameterize(native.action, params))
             }
             "decision" -> {
                 require(response.requiredString("playerId") == playerId.value) {
