@@ -62,6 +62,23 @@ class GameServerSeatAdapterTests(unittest.TestCase):
         self.assertEqual(records[0].callback, "chooseAction")
         self.assertNotIn("snapshot", records[0].observation)
 
+    def test_game_server_action_fields_are_aliased_to_pilot_vocabulary(self):
+        pilot = ScriptedPilot(ArgentumActionChoice(0))
+        adapter = GameServerSeatAdapter(pilot, "ai")
+        action = {
+            "actionType": "PassPriority",
+            "isAffordable": True,
+            "semanticId": "argentum-action-v1:test",
+            "action": {"type": "PassPriority", "playerId": "ai"},
+        }
+
+        adapter.choose_action(self.state, [action], None)
+
+        observed = pilot.observations[0]["legalActions"][0]
+        self.assertEqual(observed["kind"], "PassPriority")
+        self.assertTrue(observed["affordable"])
+        self.assertEqual(observed["semanticId"], "argentum-action-v1:test")
+
     def test_native_structured_decision_round_trip(self):
         pending = {
             "decisionId": "decision-7",
