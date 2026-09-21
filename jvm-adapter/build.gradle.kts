@@ -16,6 +16,10 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-autoconfigure:4.1.0")
 
     testImplementation(kotlin("test"))
+    // Composite project substitution does not carry Argentum's Spring dependency-management
+    // plugin into this standalone build. Import the same Boot BOM so versionless runtime
+    // dependencies declared by game-server (Flyway/Postgres, etc.) resolve exactly as upstream.
+    testImplementation(platform("org.springframework.boot:spring-boot-dependencies:4.1.0"))
     // Acceptance tests boot the actual vanilla Argentum game-server from the composite build.
     // These remain test-only so the adapter artifact itself does not own Argentum runtime deps.
     testImplementation("com.wingedsheep:argentum-game-server")
