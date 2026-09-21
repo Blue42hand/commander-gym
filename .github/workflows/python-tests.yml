@@ -31,9 +31,9 @@ jobs:
           path: commander-gym
       - uses: actions/checkout@v6
         with:
-          repository: Blue42hand/argentum-engine
+          repository: wingedsheep/argentum-engine
           path: argentum-engine
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '21'
