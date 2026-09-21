@@ -29,7 +29,19 @@ jobs:
       - uses: actions/checkout@v6
         with:
           path: commander-gym
-      - uses: actions/checkout@v6
+      # #62 consumes the generic rules-engine parameterizer staged in
+      # Blue42hand/argentum-engine#116. Keep every other branch pinned to vanilla upstream;
+      # once #116 lands upstream this special-case can be removed.
+      - name: Checkout staged Argentum dependency
+        if: github.event_name == 'pull_request' && github.head_ref == 'codex/game-server-action-params'
+        uses: actions/checkout@v6
+        with:
+          repository: Blue42hand/argentum-engine
+          ref: codex/promote-action-parameterizer
+          path: argentum-engine
+      - name: Checkout vanilla Argentum
+        if: github.event_name != 'pull_request' || github.head_ref != 'codex/game-server-action-params'
+        uses: actions/checkout@v6
         with:
           repository: wingedsheep/argentum-engine
           path: argentum-engine
@@ -41,7 +53,7 @@ jobs:
         with:
           python-version: '3.12'
       - uses: gradle/actions/setup-gradle@v4
-      - name: Compile and test vanilla-Argentum adapter
+      - name: Compile and test Argentum adapter
         run: ./argentum-engine/gradlew -p commander-gym/jvm-adapter test
         env:
           ARGENTUM_ENGINE_DIR: ${{ github.workspace }}/argentum-engine
