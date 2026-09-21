@@ -222,6 +222,13 @@ class GameServerSeatAdapter:
                 raise GameServerSeatError("each native legal action must contain an action object")
             item = deepcopy(dict(raw))
             item["actionId"] = action_id
+            # Keep the ArtificialPlayer observation vocabulary aligned with the Gym path while
+            # preserving the native game-server fields verbatim. These are aliases only: no
+            # legality or strategic meaning is inferred in Python.
+            if "kind" not in item and isinstance(item.get("actionType"), str):
+                item["kind"] = item["actionType"]
+            if "affordable" not in item and isinstance(item.get("isAffordable"), bool):
+                item["affordable"] = item["isAffordable"]
             actions.append(item)
 
         if pending_decision is not None and not isinstance(pending_decision, Mapping):
