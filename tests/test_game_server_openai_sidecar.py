@@ -206,7 +206,7 @@ class OpenAIGameServerSidecarTests(unittest.TestCase):
             server.server_close()
 
         request = client.responses.calls[0]
-        model_input = json.loads(request["input"].split("\\n", 1)[1])
+        model_input = json.loads(request["input"].split("\n", 1)[1])
         self.assertEqual(
             [action["semanticId"] for action in model_input["legalActions"]],
             [
