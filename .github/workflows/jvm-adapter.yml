@@ -1,0 +1,31 @@
+name: JVM adapter
+
+on:
+  pull_request:
+    paths:
+      - "jvm-adapter/**"
+      - ".github/workflows/jvm-adapter.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: commander-gym
+      - uses: actions/checkout@v4
+        with:
+          repository: Blue42hand/argentum-engine
+          path: argentum-engine
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Compile and test vanilla-Argentum adapter
+        run: ./argentum-engine/gradlew -p commander-gym/jvm-adapter test
+        env:
+          ARGENTUM_ENGINE_DIR: ${{ github.workspace }}/argentum-engine
