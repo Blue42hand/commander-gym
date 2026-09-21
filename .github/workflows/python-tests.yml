@@ -1,4 +1,4 @@
-name: Python tests
+name: Tests
 
 on:
   pull_request:
@@ -9,11 +9,11 @@ permissions:
   contents: read
 
 concurrency:
-  group: python-tests-${{ github.ref }}
+  group: tests-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  test:
+  python:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -22,3 +22,26 @@ jobs:
           python-version: '3.12'
       - name: Run unit tests
         run: python -m unittest discover -s tests -v
+
+  jvm-adapter:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          path: commander-gym
+      - uses: actions/checkout@v6
+        with:
+          repository: wingedsheep/argentum-engine
+          path: argentum-engine
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Compile and test vanilla-Argentum adapter
+        run: ./argentum-engine/gradlew -p commander-gym/jvm-adapter test
+        env:
+          ARGENTUM_ENGINE_DIR: ${{ github.workspace }}/argentum-engine

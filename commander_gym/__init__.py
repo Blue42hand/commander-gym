@@ -82,6 +82,11 @@ from .game_server_seat import (
     NativeDecisionResponse,
     SeatProvenance,
 )
+from .game_server_sidecar import (
+    GameServerSidecarConfig,
+    GameServerSidecarConfigurationError,
+    GameServerSidecarServer,
+)
 from .pilot_records import (
     PilotRecordContext,
     PilotRecordError,
@@ -134,6 +139,9 @@ __all__ = [
     "NativeActionResponse",
     "NativeDecisionResponse",
     "SeatProvenance",
+    "GameServerSidecarConfig",
+    "GameServerSidecarConfigurationError",
+    "GameServerSidecarServer",
     "ArgentumActionChoice",
     "ArgentumCanonicalDecision",
     "ArgentumCanonicalError",

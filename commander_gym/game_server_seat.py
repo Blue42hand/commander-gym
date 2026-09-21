@@ -33,6 +33,7 @@ class GameServerSeatError(PilotContractError):
 class NativeActionResponse:
     """Return one of the exact native legal action payloads supplied by Argentum."""
 
+    action_id: int
     action: Mapping[str, Any]
     metadata: Mapping[str, Any]
 
@@ -110,6 +111,7 @@ class GameServerSeatAdapter:
             except (IndexError, TypeError) as exc:
                 raise GameServerSeatError("selected native action is no longer present") from exc
             response = NativeActionResponse(
+                action_id=choice.action_id,
                 action=deepcopy(dict(native["action"])),
                 metadata=deepcopy(dict(choice.metadata)),
             )
@@ -151,9 +153,9 @@ class GameServerSeatAdapter:
         return keep
 
     def choose_bottom_cards(self, bottom: Mapping[str, Any]) -> list[Any]:
-        decision_id = bottom.get("decisionId")
+        decision_id = bottom.get("decisionId", f"bottom-cards:{self._player_id}")
         if not isinstance(decision_id, str) or not decision_id:
-            raise GameServerSeatError("bottom-cards callback requires decisionId")
+            raise GameServerSeatError("bottom-cards callback decisionId must be a string when supplied")
         pending = {
             "decisionId": decision_id,
             "kind": "BottomCards",
