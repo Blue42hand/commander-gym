@@ -41,14 +41,14 @@ Argentum messages or written into provenance.
 From the Commander Gym repository:
 
 ```bash
-scripts/run_live_human_three_luna_acceptance.sh
+bash scripts/run_live_human_three_luna_acceptance.sh
 ```
 
 If Argentum is elsewhere:
 
 ```bash
 ARGENTUM_ENGINE_DIR=/path/to/argentum-engine \
-  scripts/run_live_human_three_luna_acceptance.sh
+  bash scripts/run_live_human_three_luna_acceptance.sh
 ```
 
 Optional overrides:
