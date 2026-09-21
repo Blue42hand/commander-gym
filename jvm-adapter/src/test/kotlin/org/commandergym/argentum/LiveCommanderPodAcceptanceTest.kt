@@ -216,7 +216,7 @@ class LiveCommanderPodAcceptanceTest {
                 ClientMessage.SetLobbyAiDeck(
                     playerId = playerId,
                     spec = AiDeckSpec.Fixed(
-                        deckList = deck.cards,
+                        deckList = deck.libraryCards(),
                         label = deck.name,
                         commander = deck.commander,
                     ),
@@ -230,7 +230,7 @@ class LiveCommanderPodAcceptanceTest {
         }
 
         val humanDeck = decks.getValue("human")
-        client.send(ClientMessage.SubmitSealedDeck(humanDeck.cards, commander = humanDeck.commander))
+        client.send(ClientMessage.SubmitSealedDeck(humanDeck.libraryCards(), commander = humanDeck.commander))
         await(Duration.ofSeconds(20), "human exact roster deck submission") {
             client.latestLobby()?.players?.firstOrNull { it.playerId == humanId }?.deckSubmitted == true
         }
@@ -458,7 +458,15 @@ class LiveCommanderPodAcceptanceTest {
         val name: String,
         val commander: String,
         val cards: Map<String, Int>,
-    )
+    ) {
+        fun libraryCards(): Map<String, Int> {
+            val commanderCount = cards[commander]
+            check(commanderCount == 1) {
+                "$name must contain exactly one copy of its commander $commander (found $commanderCount)"
+            }
+            return cards - commander
+        }
+    }
 
     private data class ActionWindow(
         val actions: List<LegalActionInfo>,
