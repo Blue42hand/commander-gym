@@ -109,6 +109,46 @@ class GameServerSidecarTests(unittest.TestCase):
         self.assertEqual(status, 503)
         self.assertEqual(response["error"], "pilot_failure")
 
+    def test_lazy_factory_binds_generated_player_id_once(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+        created = []
+        pilots = {}
+
+        def factory(player_id):
+            created.append(player_id)
+            pilot = ScriptedPilot(ArgentumActionChoice(0), ArgentumActionChoice(0))
+            pilots[player_id] = pilot
+            return GameServerSeatAdapter(pilot, player_id)
+
+        config = GameServerSidecarConfig(token="local-secret")
+        self.server = GameServerSidecarServer(
+            ("127.0.0.1", 0),
+            config,
+            seat_factory=factory,
+        )
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.base_url = f"http://127.0.0.1:{self.server.server_port}"
+
+        body = {
+            "playerId": "ai-generated-123",
+            "state": {"viewingPlayerId": "ai-generated-123"},
+            "legalActions": [
+                {
+                    "actionType": "PassPriority",
+                    "action": {"type": "PassPriority", "playerId": "ai-generated-123"},
+                }
+            ],
+            "pendingDecision": None,
+            "recentGameLog": [],
+        }
+        self.assertEqual(self.post("/v1/choose-action", body)[0], 200)
+        self.assertEqual(self.post("/v1/choose-action", body)[0], 200)
+        self.assertEqual(created, ["ai-generated-123"])
+        self.assertEqual(len(pilots["ai-generated-123"].observations), 2)
+
     def test_rejects_snapshot_unknown_fields_and_cross_seat_state(self):
         base = {
             "playerId": "ai",
