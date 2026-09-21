@@ -159,7 +159,9 @@ class LiveCommanderPodAcceptanceTest {
 
         client.send(
             ClientMessage.CreateTournamentLobby(
-                setCodes = emptyList(),
+                // Argentum currently requires one catalogued set even for PREMADE_DECKS.
+                // Boosters are unused here; M21 only satisfies the lobby-create precondition.
+                setCodes = listOf("M21"),
                 format = "PREMADE_DECKS",
                 boosterCount = 0,
                 maxPlayers = 4,
