@@ -97,19 +97,18 @@ class GameServerAcceptanceTest {
         waitForPort(sidecarPort, Duration.ofSeconds(10))
 
         context = SpringApplicationBuilder(GameServerApplication::class.java)
-            .properties(
-                "server.port=" + serverPort,
-                "spring.main.banner-mode=off",
-                "game.ai.enabled=true",
-                "game.ai.mode=commander-gym",
-                "game.ai.thinking-delay-ms=0",
-                "commander-gym.sidecar.url=http://127.0.0.1:" + sidecarPort,
-                "commander-gym.sidecar.token=" + token,
-                "commander-gym.sidecar.timeout-ms=2000",
-                "logging.level.com.wingedsheep.gameserver=INFO",
-                "logging.level.org.springframework.web.socket=WARN",
+            .run(
+                "--server.port=" + serverPort,
+                "--spring.main.banner-mode=off",
+                "--game.ai.enabled=true",
+                "--game.ai.mode=commander-gym",
+                "--game.ai.thinking-delay-ms=0",
+                "--commander-gym.sidecar.url=http://127.0.0.1:" + sidecarPort,
+                "--commander-gym.sidecar.token=" + token,
+                "--commander-gym.sidecar.timeout-ms=2000",
+                "--logging.level.com.wingedsheep.gameserver=INFO",
+                "--logging.level.org.springframework.web.socket=WARN",
             )
-            .run()
 
         waitForPort(serverPort, Duration.ofSeconds(20))
     }
