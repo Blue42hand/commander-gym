@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "deck_id": "krenko-argentum-native-v1",
+  "name": "Krenko — Argentum Native",
+  "commander": "Krenko, Mob Boss",
+  "cards": {
+    "Krenko, Mob Boss": 1,
+    "Skirk Prospector": 1, "Goblin Chirurgeon": 1, "Mogg Raider": 1, "Goblin Sledder": 1,
+    "Goblin Bushwhacker": 1, "Goblin Instigator": 1, "Mogg Fanatic": 1, "Fanatical Firebrand": 1,
+    "Goblin Motivator": 1, "Goblin Piledriver": 1, "Goblin Matron": 1, "Goblin Warchief": 1,
+    "Goblin Chieftain": 1, "Goblin King": 1, "Krenko, Tin Street Kingpin": 1, "Battle Cry Goblin": 1,
+    "Wily Goblin": 1, "Goblin Ringleader": 1, "Goblin Trashmaster": 1, "Pashalik Mons": 1,
+    "Goblin Sharpshooter": 1, "Goblin Cratermaker": 1, "Moggcatcher": 1, "Imperial Recruiter": 1,
+    "Siege-Gang Commander": 1, "Skullclamp": 1, "Sol Ring": 1, "Arcane Signet": 1,
+    "Fellwar Stone": 1, "Mind Stone": 1, "Ruby Medallion": 1, "Springleaf Drum": 1,
+    "Chrome Mox": 1, "Mox Opal": 1, "Mox Amber": 1, "Lotus Petal": 1,
+    "Ashnod's Altar": 1, "Phyrexian Altar": 1, "The One Ring": 1, "Idol of Oblivion": 1,
+    "Thousand-Year Elixir": 1, "Staff of Domination": 1, "Rings of Brighthearth": 1,
+    "Sting, the Glinting Dagger": 1, "Lightning Greaves": 1, "Mana Echoes": 1,
+    "Impact Tremors": 1, "Goblin Bombardment": 1, "Mass Hysteria": 1, "Rising of the Day": 1,
+    "Blood Moon": 1, "Aggravated Assault": 1, "Breath of Fury": 1, "Gamble": 1,
+    "Brightstone Ritual": 1, "Seething Song": 1, "Reforge the Soul": 1, "Faithless Looting": 1,
+    "Reckless Impulse": 1, "Wrenn's Resolve": 1, "Chaos Warp": 1, "Abrade": 1,
+    "Red Elemental Blast": 1, "Bolt Bend": 1,
+    "Mountain": 20, "Ancient Tomb": 1, "Cavern of Souls": 1, "Goblin Burrows": 1,
+    "Path of Ancestry": 1, "Myriad Landscape": 1, "Buried Ruin": 1, "Inventors' Fair": 1,
+    "Castle Embereth": 1, "Hanweir Battlements": 1, "Arena of Glory": 1,
+    "Sokenzan, Crucible of Defiance": 1, "Great Furnace": 1, "Darksteel Citadel": 1,
+    "Strip Mine": 1, "Wasteland": 1
+  }
+}
+

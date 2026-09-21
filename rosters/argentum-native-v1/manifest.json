@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "roster_id": "argentum-native-v1",
+  "format": "commander",
+  "purpose": "first exact-card four-seat Argentum qualification and infrastructure roster",
+  "argentum": {
+    "repository": "Blue42hand/argentum-engine",
+    "revision": "24e366be5457667c4588c9aa11863dcc8c2ec655"
+  },
+  "decks": [
+    {"id": "krenko-argentum-native-v1", "file": "krenko.json", "sha256": "cabac87a9f535790dd63ebf94d444ccd0bf2511e19994fc71d37f6ebdb10c9db", "primer": "krenko-primer.md", "primer_sha256": "0a887b293878803916df318a225222c5d24265d0edc647b18d5f3820af53e507"},
+    {"id": "talrand-argentum-native-v1", "file": "talrand.json", "sha256": "789e09a6b76bbb15cb3d6f7f1bfe59cca26f29aaec79a9b9ed29a80e5780d740", "primer": "talrand-primer.md", "primer_sha256": "7d2d181f298c09871c148ffafe97c0e6f1f1828143ae13eaa0d18fa68b62cdce"},
+    {"id": "sythis-argentum-native-v1", "file": "sythis.json", "sha256": "8dcf6eed56bb1659060f82cde171f579c5efa59df6feaaf6e71a7049e4a5b689", "primer": "sythis-primer.md", "primer_sha256": "952740fe720babf13d75947d1fb9edc32ebe98d20507e35b67a60c39aefc1717"},
+    {"id": "lathril-argentum-native-v1", "file": "lathril.json", "sha256": "314f612b5d91b3747842d8d2d4a49920078940aa11d8e5a2cbd93b844088f563", "primer": "lathril-primer.md", "primer_sha256": "0145df02b0ada4f130f708bb0f10f1e554ffaff6101bbddcc8bf523747cb5dd5"}
+  ]
+}
