@@ -9,6 +9,7 @@ dependencies {
     // (database drivers, Flyway, etc.) into the standalone adapter's runtime resolution.
     compileOnly("com.wingedsheep:argentum-ai")
     compileOnly("com.wingedsheep:argentum-game-server")
+    compileOnly("com.wingedsheep:argentum-gym")
     compileOnly("com.wingedsheep:argentum-rules-engine")
     compileOnly("com.wingedsheep:argentum-sdk")
 
@@ -23,6 +24,7 @@ dependencies {
     // Acceptance tests boot the actual vanilla Argentum game-server from the composite build.
     // These remain test-only so the adapter artifact itself does not own Argentum runtime deps.
     testImplementation("com.wingedsheep:argentum-game-server")
+    testImplementation("com.wingedsheep:argentum-gym")
     testImplementation("com.wingedsheep:argentum-rules-engine")
     testImplementation("com.wingedsheep:argentum-sdk")
     testImplementation("org.springframework.boot:spring-boot-starter-test:4.1.0")
