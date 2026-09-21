@@ -89,18 +89,22 @@ commander-gym.sidecar.token=<same value as COMMANDER_GYM_SIDECAR_TOKEN>
 The sidecar bearer token is separate from `OPENAI_API_KEY`. Argentum never receives
 the OpenAI credential.
 
-## Current integration boundary
+## Live-game compatibility
 
-This change only replaces the scripted acceptance policy with a real Luna-backed
-policy process. It does not broaden the bounded game-server adapter.
+The game-server policy bridge now covers the two compatibility seams needed by a real
+Luna seat:
 
-Two compatibility gates remain before a real human-vs-Luna game can run through all
-normal callbacks:
+- mulligan keep/take choices carry stable callback-local semantic identities, so the
+  same `OpenAIResponsesPilot` can choose them without inventing live routing ids;
+- native `ActionParams` for attackers, blockers, targets, and X values cross the
+  loopback boundary unchanged and are applied only at the JVM/native edge through
+  Argentum's authoritative `ActionParameterizer`.
 
-1. the game-server mulligan shim still needs stable semantic identities suitable for
-   `OpenAIResponsesPilot`;
-2. non-empty native `ActionParams` (combat, targets, X values, and similar choices)
-   still fail closed rather than being applied at the Kotlin/native edge.
+Parameterized actions may require Argentum's trusted runtime snapshot to resolve a bare
+target entity id into its native target variant. That snapshot is consumed only inside
+the native parameterizer. It is never serialized to the sidecar, included in policy
+provenance, or exposed to Luna.
 
-Those are intentionally separate from the provider launcher so model/runtime wiring
-does not become coupled to rules/action-template completion.
+The next gate is an end-to-end normal multiplayer acceptance game with one human and
+three Luna-controlled seats, followed by packaging the same stack for the persistent
+server.
