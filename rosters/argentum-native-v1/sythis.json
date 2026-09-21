@@ -1,0 +1,28 @@
+{
+  "schema_version": 1, "deck_id": "sythis-argentum-native-v1", "name": "Sythis — Argentum Native",
+  "commander": "Sythis, Harvest's Hand", "cards": {
+    "Sythis, Harvest's Hand": 1,
+    "Argothian Enchantress": 1, "Mesa Enchantress": 1, "Satyr Enchanter": 1,
+    "Verduran Enchantress": 1, "Setessan Champion": 1, "Sanctum Weaver": 1,
+    "Jukai Naturalist": 1, "Generous Visitor": 1, "Spirited Companion": 1,
+    "Archon of Sun's Grace": 1, "Starfield Mystic": 1, "Herald of the Pantheon": 1,
+    "Sol Ring": 1, "Arcane Signet": 1, "Selesnya Signet": 1, "Talisman of Unity": 1,
+    "Authority of the Consuls": 1, "Dawn of Hope": 1, "Fertile Ground": 1, "Seal of Primordium": 1,
+    "Pacifism": 1, "Arrest": 1, "Faith's Fetters": 1, "Suppression Field": 1,
+    "Sterling Grove": 1, "Greater Good": 1, "Privileged Position": 1,
+    "Doubling Season": 1, "Aura Shards": 1, "Dueling Grounds": 1,
+    "Sigil of the Empty Throne": 1, "Hallowed Haunting": 1, "Felidar Retreat": 1,
+    "History of Benalia": 1, "Darksteel Mutation": 1, "Unflinching Courage": 1,
+    "Flickering Ward": 1, "Banishing Light": 1, "Oblivion Ring": 1, "Seal of Cleansing": 1,
+    "Setessan Training": 1, "Rest in Peace": 1, "Garruk's Uprising": 1, "Ghostly Prison": 1,
+    "Tocasia's Welcome": 1, "Welcoming Vampire": 1, "Rule of Law": 1,
+    "Enchantress's Presence": 1, "Armadillo Cloak": 1, "Mirri's Guile": 1,
+    "Abundant Growth": 1, "Angelic Destiny": 1, "Cartouche of Solidarity": 1, "All That Glitters": 1,
+    "Gryff's Boon": 1, "Ethereal Armor": 1, "Swords to Plowshares": 1,
+    "Generous Gift": 1, "Ossification": 1, "Enlightened Tutor": 1,
+    "Idyllic Tutor": 1, "Seal Away": 1, "Stasis Snare": 1, "Austere Command": 1,
+    "Forest": 15, "Plains": 13, "Command Tower": 1, "Temple Garden": 1,
+    "Sunpetal Grove": 1, "Canopy Vista": 1, "Brushland": 1,
+    "Lignify": 1, "Serra's Sanctum": 1
+  }
+}

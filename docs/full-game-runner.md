@@ -129,11 +129,12 @@ private artifact has SHA-256
 
 This closes the transport, multi-seat projection, deterministic seed, routing,
 trajectory, cleanup, and terminal-result lifecycle milestone. It does not qualify a
-current user deck. The latest authoritative coverage report, generated against the
-same Argentum revision, still has no complete four-deck pod. The highest-coverage
-Alela/Krenko/Meren/Rocco candidates and their exact missing cards are recorded in
-`docs/first-pod-blockers.json`. Card implementation belongs in Argentum; the runner
-must not silently replace unsupported cards or rules.
+current user deck. The historical Alela/Krenko/Meren/Rocco coverage snapshot remains in
+`docs/first-pod-blockers.json`, but it no longer blocks real-card infrastructure work.
+`rosters/argentum-native-v1` now supplies four exact 100-card lists and primers whose
+card names are source-validated against their pinned Argentum revision. Source presence
+unblocks loading and end-to-end execution; exact-deck lifecycle and semantic
+qualification are still separate evidence and must fail closed on engine errors.
 
 ## Serial repeatability milestone (2026-09-20)
 
