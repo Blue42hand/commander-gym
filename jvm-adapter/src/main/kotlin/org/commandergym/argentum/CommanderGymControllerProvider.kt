@@ -9,6 +9,7 @@ import com.wingedsheep.engine.core.DecisionResponse
 import com.wingedsheep.engine.core.GameAction
 import com.wingedsheep.engine.core.PendingDecision
 import com.wingedsheep.engine.core.engineSerializersModule
+import com.wingedsheep.engine.provenance.SemanticFingerprint
 import com.wingedsheep.engine.view.ClientGameState
 import com.wingedsheep.engine.view.LegalActionInfo
 import com.wingedsheep.gameserver.ai.AiControllerContext
@@ -23,6 +24,8 @@ import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.time.Duration
+
+private const val POLICY_SCHEMA_SCOPE = "commander-gym-game-server-policy-v1"
 
 /** Commander Gym-owned implementation of vanilla Argentum's provider seam. */
 class CommanderGymControllerProvider(
@@ -87,11 +90,35 @@ class CommanderGymPlayerController(
         pendingDecision: PendingDecision?,
         recentGameLog: List<String>,
     ): ActionResponse {
+        val policyActions = JsonArray(legalActions.map { legal ->
+            val encoded = json.encodeToJsonElement(legal).jsonObject
+            buildJsonObject {
+                encoded.forEach { (key, value) -> put(key, value) }
+                put(
+                    "semanticId",
+                    SemanticFingerprint.forGameAction(
+                        legal.actionType,
+                        legal.action,
+                        POLICY_SCHEMA_SCOPE,
+                    ),
+                )
+            }
+        })
+        val policyDecision = pendingDecision?.let { pending ->
+            val encoded = json.encodeToJsonElement(pending).jsonObject
+            buildJsonObject {
+                encoded.forEach { (key, value) -> put(key, value) }
+                put(
+                    "semanticId",
+                    SemanticFingerprint.forPendingDecision(pending, POLICY_SCHEMA_SCOPE),
+                )
+            }
+        } ?: JsonNull
         val body = buildJsonObject {
             put("playerId", playerId.value)
             put("state", json.encodeToJsonElement(state))
-            put("legalActions", json.encodeToJsonElement(legalActions))
-            put("pendingDecision", pendingDecision?.let(json::encodeToJsonElement) ?: JsonNull)
+            put("legalActions", policyActions)
+            put("pendingDecision", policyDecision)
             put("recentGameLog", json.encodeToJsonElement(recentGameLog))
         }
         val response = post("choose-action", body)
