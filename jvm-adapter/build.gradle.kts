@@ -4,6 +4,12 @@ plugins {
 }
 
 dependencies {
+    // The included Argentum game-server build intentionally leaves a few persistence library
+    // versions to Spring Boot dependency management. Import the same host platform here so those
+    // transitive project dependencies remain resolvable when the adapter is compiled as a
+    // composite build rather than from inside Argentum's root build.
+    implementation(platform("org.springframework.boot:spring-boot-dependencies:4.1.0"))
+
     implementation("com.wingedsheep:argentum-ai")
     implementation("com.wingedsheep:argentum-game-server")
     implementation("com.wingedsheep:argentum-rules-engine")
