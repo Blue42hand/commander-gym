@@ -122,12 +122,27 @@ class GameServerSidecarHandler(BaseHTTPRequestHandler):
             self._write(422, {"error": str(exc)})
             return
         except Exception as exc:
-            self._write(503, {"error": "pilot_failure", "detail": type(exc).__name__})
+            self._write(
+                503,
+                {
+                    "error": "pilot_failure",
+                    "detail": self._pilot_failure_detail(exc),
+                },
+            )
             return
         self._write(200, response)
 
     def log_message(self, _format: str, *_args: Any) -> None:
         pass
+
+    @staticmethod
+    def _pilot_failure_detail(exc: Exception) -> str:
+        """Return bounded diagnostics without turning generic failures into exception dumps."""
+        kind = type(exc).__name__
+        if kind != "OpenAIResponsesPilotError":
+            return kind
+        message = " ".join(str(exc).split())
+        return f"{kind}: {message[:1000]}" if message else kind
 
     def _invoke(
         self,
