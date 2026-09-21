@@ -6,11 +6,16 @@ import com.wingedsheep.engine.core.DeclareAttackers
 import com.wingedsheep.engine.view.ClientGameState
 import com.wingedsheep.engine.view.LegalActionInfo
 import com.wingedsheep.engine.core.ActionParams
+import com.wingedsheep.engine.provenance.SemanticFingerprint
 import com.wingedsheep.sdk.core.Phase
 import com.wingedsheep.sdk.core.Step
 import com.wingedsheep.sdk.model.EntityId
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.jupiter.api.Test
 import java.net.InetSocketAddress
 import java.net.URI
@@ -32,8 +37,10 @@ class CommanderGymPlayerControllerParameterTest {
             validAttackTargets = listOf(defender),
         )
 
+        var requestBody: String? = null
         val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         server.createContext("/v1/choose-action") { exchange ->
+            requestBody = exchange.requestBody.bufferedReader().use { it.readText() }
             val response = """
                 {
                   "kind":"action",
@@ -73,6 +80,18 @@ class CommanderGymPlayerControllerParameterTest {
             val submitted = (response as ActionResponse.SubmitAction).action as DeclareAttackers
             assertEquals(mapOf(attacker to defender), seenParams!!.attackers)
             assertEquals(mapOf(attacker to defender), submitted.attackers)
+
+            val policyRequest = Json.parseToJsonElement(checkNotNull(requestBody)).jsonObject
+            val semanticId = policyRequest["legalActions"]!!.jsonArray[0]
+                .jsonObject["semanticId"]!!.jsonPrimitive.content
+            assertEquals(
+                SemanticFingerprint.forGameAction(
+                    "DeclareAttackers",
+                    template,
+                    "commander-gym-game-server-policy-v1",
+                ),
+                semanticId,
+            )
         } finally {
             server.stop(0)
         }
