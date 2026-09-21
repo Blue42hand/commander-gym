@@ -162,12 +162,13 @@ The replaceable transport is `commander_gym.game_server_sidecar`, a bearer-authe
 loopback-only service with one endpoint per native controller callback. `jvm-adapter/`
 implements vanilla `AiControllerProvider`/`AiPlayerController`, auto-registers when
 `game.ai.mode=commander-gym`, and selects the original native `GameAction` by the returned
-legal-action index. It never retains or invokes `AiControllerContext.snapshot`.
+legal-action index. It never sends `AiControllerContext.snapshot` or any other trusted state to Commander Gym policy.
+For non-empty native `ActionParams`, the JVM edge invokes Argentum's authoritative
+`ActionParameterizer` against the trusted live snapshot solely to complete the already-selected
+native action template before submission; Python never interprets or applies those rules.
 
-Unknown fields, cross-seat projections, stale choices, authentication failures, and pilot
-failures all fail closed without switching strategic controllers. Parameterized action-template
-completion remains outside this bounded slice rather than being reimplemented as a Python rules
-layer.
+Unknown fields, cross-seat projections, stale choices, authentication failures, invalid action
+params, and pilot failures all fail closed without switching strategic controllers.
 
 
 The normal live provider process is now `python -m commander_gym.game_server_openai_sidecar`.
