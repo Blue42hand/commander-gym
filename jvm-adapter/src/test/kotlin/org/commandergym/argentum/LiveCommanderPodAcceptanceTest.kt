@@ -72,6 +72,8 @@ class LiveCommanderPodAcceptanceTest {
     private lateinit var context: ConfigurableApplicationContext
     private var sidecarPort: Int = 0
     private var serverPort: Int = 0
+    @Volatile
+    private var activeClient: HumanClient? = null
 
     @BeforeAll
     fun startLiveStack() {
@@ -152,6 +154,7 @@ class LiveCommanderPodAcceptanceTest {
         }
 
         val client = HumanClient(URI.create("ws://127.0.0.1:" + serverPort + "/game"), json)
+        activeClient = client
         client.connect()
         client.send(ClientMessage.Connect("Commander Gym Live Human"))
         await(Duration.ofSeconds(15), "human connection") { client.connected() != null }
@@ -293,6 +296,7 @@ class LiveCommanderPodAcceptanceTest {
                 assertNoHiddenSnapshotLeak(records)
                 printSummary(client, aiIds, records, "accepted")
                 client.close()
+                activeClient = null
                 return
             }
 
@@ -300,6 +304,7 @@ class LiveCommanderPodAcceptanceTest {
                 assertNoHiddenSnapshotLeak(records)
                 printSummary(client, aiIds, records, "terminal-before-all-criteria")
                 client.close()
+                activeClient = null
                 throw AssertionError("game ended before every live acceptance criterion was observed")
             }
 
@@ -327,6 +332,7 @@ class LiveCommanderPodAcceptanceTest {
         assertNoHiddenSnapshotLeak(records)
         printSummary(client, aiIds, records, "timeout")
         client.close()
+        activeClient = null
         throw AssertionError(
             "live human + three Luna acceptance criteria were not all observed within ${timeout.seconds}s"
         )
@@ -415,6 +421,12 @@ class LiveCommanderPodAcceptanceTest {
     private fun await(timeout: Duration, description: String, predicate: () -> Boolean) {
         val deadline = System.nanoTime() + timeout.toNanos()
         while (System.nanoTime() < deadline) {
+            activeClient?.errors()?.lastOrNull()?.let { error ->
+                throw AssertionError(
+                    "Server rejected while waiting for $description: " +
+                        error.code.name + ": " + error.message
+                )
+            }
             if (predicate()) return
             Thread.sleep(50)
         }
@@ -493,6 +505,8 @@ class LiveCommanderPodAcceptanceTest {
             messages.filterIsInstance<ServerMessage.MulliganDecision>().lastOrNull()
         fun gameOver(): ServerMessage.GameOver? =
             messages.filterIsInstance<ServerMessage.GameOver>().lastOrNull()
+        fun errors(): List<ServerMessage.Error> =
+            messages.filterIsInstance<ServerMessage.Error>()
         fun stateMessageCount(): Int = messages.count {
             it is ServerMessage.StateUpdate || it is ServerMessage.StateDeltaUpdate
         }
