@@ -141,3 +141,18 @@ acting-seat projection for every decision, classifies failed runs out of the tra
 pool, preserves partial trajectories, and verifies disposal plus post-game health.
 Configuration and current engine/card blockers are documented in
 `docs/full-game-runner.md`.
+
+## Game-server seat policy boundary
+
+`commander_gym.game_server_seat.GameServerSeatAdapter` is the Commander Gym side of
+the human-play adapter. It feeds the existing `ArtificialPlayer` only the masked
+`AiPlayerController` callback values, returns an exact native legal action or native
+structured decision, and uses the same pilot for mulligan/bottom-card callbacks. It
+has no trusted-runtime-snapshot input and propagates invalid, stale, and provider
+failures without selecting a fallback strategy.
+
+The Kotlin edge remains deliberately mechanical: serialize the native masked callback,
+call this replaceable boundary, and deserialize the selected native response. It must
+not pass `AiControllerContext.snapshot` to policy. The bounded adapter currently rejects
+non-empty `ActionParams` instead of duplicating Argentum's native template completion;
+the native edge should own that translation when it is added.
