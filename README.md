@@ -168,3 +168,11 @@ Unknown fields, cross-seat projections, stale choices, authentication failures, 
 failures all fail closed without switching strategic controllers. Parameterized action-template
 completion remains outside this bounded slice rather than being reimplemented as a Python rules
 layer.
+
+
+The normal live provider process is now `python -m commander_gym.game_server_openai_sidecar`.
+It lazily binds each Argentum AI player id to an independent
+`RoutingPilot -> OpenAIResponsesPilot` policy, using `gpt-5.6-luna` by default while
+preserving the same loopback-only bearer boundary and fail-closed behavior. Runtime
+configuration, provenance handling, and the remaining live-game compatibility gates are
+documented in [`docs/game-server-luna-sidecar.md`](docs/game-server-luna-sidecar.md).
