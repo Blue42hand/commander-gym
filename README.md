@@ -158,8 +158,13 @@ structured decision, and uses the same pilot for mulligan/bottom-card callbacks.
 has no trusted-runtime-snapshot input and propagates invalid, stale, and provider
 failures without selecting a fallback strategy.
 
-The Kotlin edge remains deliberately mechanical: serialize the native masked callback,
-call this replaceable boundary, and deserialize the selected native response. It must
-not pass `AiControllerContext.snapshot` to policy. The bounded adapter currently rejects
-non-empty `ActionParams` instead of duplicating Argentum's native template completion;
-the native edge should own that translation when it is added.
+The replaceable transport is `commander_gym.game_server_sidecar`, a bearer-authenticated,
+loopback-only service with one endpoint per native controller callback. `jvm-adapter/`
+implements vanilla `AiControllerProvider`/`AiPlayerController`, auto-registers when
+`game.ai.mode=commander-gym`, and selects the original native `GameAction` by the returned
+legal-action index. It never retains or invokes `AiControllerContext.snapshot`.
+
+Unknown fields, cross-seat projections, stale choices, authentication failures, and pilot
+failures all fail closed without switching strategic controllers. Parameterized action-template
+completion remains outside this bounded slice rather than being reimplemented as a Python rules
+layer.
