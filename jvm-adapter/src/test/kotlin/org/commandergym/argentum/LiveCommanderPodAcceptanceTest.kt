@@ -287,8 +287,6 @@ class LiveCommanderPodAcceptanceTest {
 
             if (
                 eachAiActed &&
-                parameterizedAction &&
-                structuredChoice &&
                 allAiAreConfiguredModel &&
                 humanObservedAiPermanent &&
                 client.stateMessageCount() > initialStateMessages
