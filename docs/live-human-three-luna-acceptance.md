@@ -73,12 +73,14 @@ game:
 4. all three AI seats cross the Luna-backed mulligan callback;
 5. every AI seat makes at least one normal `chooseAction` policy decision;
 6. the configured model identity appears in policy provenance for every AI seat;
-7. at least one non-empty native `ActionParams` choice crosses the bridge;
-8. at least one structured policy choice is exercised, either a native pending
-   decision or the structured bottom-card callback after a mulligan;
-9. the human projection observes an AI-owned permanent on the battlefield;
-10. the human receives continuing state updates after AI actions;
-11. no trusted `AiRuntimeSnapshot` field appears in Commander Gym policy provenance.
+7. the human projection observes an AI-owned permanent on the battlefield;
+8. the human receives continuing state updates after AI actions;
+9. no trusted `AiRuntimeSnapshot` field appears in Commander Gym policy provenance.
+
+Native `ActionParams` and structured policy decisions remain reported in the live
+summary when they occur, but they are not acceptance gates: a normal game is not
+guaranteed to present either kind of decision in a bounded window. Those paths are
+covered deterministically by the focused adapter/sidecar tests.
 
 The test emits one `LIVE_COMMANDER_POD_RESULT=...` line summarizing callbacks,
 parameterized actions, structured choices, human state updates, and terminal state if
