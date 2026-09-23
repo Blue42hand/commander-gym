@@ -124,23 +124,6 @@ class CertifiedNativeDecisionHandler:
             if isinstance(defaults, Mapping):
                 return decision("DamageAssignmentResponse", assignments=dict(defaults))
 
-        if kind in ("CombatResolutionDecision", "COMBAT_RESOLUTION"):
-            edges = pending.get("edges")
-            if isinstance(edges, list) and all(isinstance(edge, Mapping) for edge in edges):
-                chosen = []
-                for edge in edges:
-                    edge_id = edge.get("id")
-                    amount = edge.get("amount")
-                    if not isinstance(edge_id, str) or type(amount) is not int:
-                        return None
-                    chosen.append({"edgeId": edge_id, "amount": amount})
-                return decision(
-                    "CombatResolutionResponse",
-                    edges=chosen,
-                    orderedBlockers={},
-                    orderedAttackers={},
-                )
-
         if kind in ("SelectManaSourcesDecision", "SELECT_MANA_SOURCES"):
             suggestion = pending.get("autoPaySuggestion")
             if isinstance(suggestion, list) and suggestion:
