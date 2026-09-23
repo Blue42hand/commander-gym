@@ -31,3 +31,12 @@ dependencies {
 
 kotlin { jvmToolchain(21) }
 tasks.test { useJUnitPlatform() }
+
+tasks.register<JavaExec>("runLocalGuiServer") {
+    group = "application"
+    description = "Run the normal Argentum game server with the Commander Gym provider loaded"
+    dependsOn(tasks.named("testClasses"))
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("org.commandergym.argentum.LocalGuiGameServerKt")
+    standardInput = System.`in`
+}
