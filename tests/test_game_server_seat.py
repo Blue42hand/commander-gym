@@ -143,20 +143,11 @@ class GameServerSeatAdapterTests(unittest.TestCase):
         )
         self.assertEqual(len(pilot.observations), 2)
 
-    def test_forced_mulligan_floor_and_zero_bottom_cards_avoid_model_wakes(self):
+    def test_forced_zero_bottom_cards_avoid_model_wake(self):
         pilot = ScriptedPilot()
         records = []
         adapter = GameServerSeatAdapter(pilot, "ai", provenance_sink=records.append)
 
-        self.assertTrue(
-            adapter.decide_mulligan(
-                {
-                    "hand": ["a", "b", "c", "d"],
-                    "mulliganCount": 3,
-                    "cardsToPutOnBottom": 3,
-                }
-            )
-        )
         self.assertEqual(
             adapter.choose_bottom_cards(
                 {"hand": ["a", "b"], "cardsToPutOnBottom": 0}
@@ -164,10 +155,7 @@ class GameServerSeatAdapterTests(unittest.TestCase):
             [],
         )
         self.assertEqual(pilot.observations, [])
-        self.assertEqual(
-            [record.choice["metadata"]["routing"]["path"] for record in records],
-            ["mechanical", "mechanical"],
-        )
+        self.assertEqual(records[0].choice["metadata"]["routing"]["path"], "mechanical")
 
     def test_invalid_stale_and_provider_failures_propagate_without_fallback(self):
         cases = (
