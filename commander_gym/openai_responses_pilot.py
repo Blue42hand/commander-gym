@@ -23,6 +23,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 import json
+from time import perf_counter
 from typing import Any, Mapping
 
 from .pilot import ArgentumActionChoice, ArgentumDecisionChoice, PilotChoice
@@ -504,6 +505,7 @@ class OpenAIResponsesPilot:
         }
 
         validation_error: OpenAIResponsesPilotError | None = None
+        choose_started = perf_counter()
         for attempt in range(self.max_attempts):
             if validation_error is not None:
                 request["input"] = (
@@ -520,11 +522,24 @@ class OpenAIResponsesPilot:
                 ) from exc
 
             try:
-                return self._choice_from_response(
+                choice = self._choice_from_response(
                     response,
                     observation,
                     retry_count=attempt,
                 )
+                elapsed_ms = round((perf_counter() - choose_started) * 1000.0, 3)
+                if isinstance(choice, ArgentumActionChoice):
+                    return ArgentumActionChoice(
+                        action_id=choice.action_id,
+                        params=choice.params,
+                        metadata={**dict(choice.metadata), "providerWallTimeMs": elapsed_ms},
+                    )
+                if isinstance(choice, ArgentumDecisionChoice):
+                    return ArgentumDecisionChoice(
+                        response=choice.response,
+                        metadata={**dict(choice.metadata), "providerWallTimeMs": elapsed_ms},
+                    )
+                raise OpenAIResponsesPilotError("provider returned unsupported pilot choice")
             except OpenAIResponsesPilotError as exc:
                 validation_error = exc
 
