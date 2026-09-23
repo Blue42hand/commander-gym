@@ -20,6 +20,7 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any, Mapping, Sequence
 
+from .identity import IdentityError, IdentityRef
 from .orchestration import ArgentumOrchestrator, OrchestrationInspection
 from .pilot import ArtificialPlayer, PilotContractError
 from .pilot_execution import PilotEnvironment, PilotExecutionTrace, execute_pilot_choice
@@ -57,6 +58,7 @@ class PilotSeat:
     primer_version: str | None = None
     pilot_source: str = "commander-gym"
     pilot_model: str | None = None
+    binding: IdentityRef | None = None
     pilot_config: Mapping[str, Any] = field(default_factory=dict)
 
     def provenance(self) -> PilotProvenance:
@@ -137,6 +139,17 @@ def _validate_seats(seats: Sequence[PilotSeat], max_choices: int) -> None:
         names.append(_required_string(seat.player_name, f"seat {index} player_name"))
         _required_string(seat.deck_id, f"seat {index} deck_id")
         _required_string(seat.deck_version, f"seat {index} deck_version")
+        if seat.binding is not None:
+            if not isinstance(seat.binding, IdentityRef):
+                raise PilotSessionError(f"seat {index} binding must be IdentityRef or null")
+            try:
+                seat.binding.validate()
+            except IdentityError as exc:
+                raise PilotSessionError(f"seat {index} binding is invalid: {exc}") from exc
+            if seat.binding.artifact_type != "binding":
+                raise PilotSessionError(
+                    f"seat {index} binding must reference artifact_type='binding'"
+                )
         if not isinstance(seat.pilot_config, Mapping):
             raise PilotSessionError(f"seat {index} pilot_config must be a mapping")
         seat.provenance()
@@ -194,6 +207,7 @@ def _record_trace(
         deck_id=seat.deck_id,
         deck_version=seat.deck_version,
         primer_version=seat.primer_version,
+        binding=seat.binding,
         pilot_source=seat.pilot_source,
     )
     if trace.channel == "action":
@@ -344,6 +358,7 @@ def run_four_seat_pilot_session(
             deck_id=seat.deck_id,
             deck_version=seat.deck_version,
             primer_version=seat.primer_version,
+            binding=seat.binding,
         )
         for index, seat in enumerate(seats)
     ]
