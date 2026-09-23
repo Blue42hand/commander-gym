@@ -261,3 +261,12 @@ Durable artifact identity must be independent of filesystem path or host. Comman
 A portable node may colocate Argentum, Commander Gym, local inference and archival storage. Remote access/tunnel choices remain replaceable deployment infrastructure.
 
 See #74 and `docs/pilot-learning-data-architecture.md`.
+
+
+## Active implementation milestone
+
+The active next goal is **#77 — pilot/data foundation before further game testing**.
+
+#77 collects the identity, Binding-first seat loading, durable evidence/data lineage, progressive local-pilot learning, portable storage/deployment, private-instance cleanup, and generic Argentum per-seat controller-profile work into one qualification gate.
+
+Ordinary gameplay/skill testing resumes with #72 only after #77 closes. Narrow implementation smoke tests are allowed where needed to prove the foundation itself.
