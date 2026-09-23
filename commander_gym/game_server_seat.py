@@ -168,22 +168,6 @@ class GameServerSeatAdapter:
         raise GameServerSeatError("pilot returned an unsupported game-server response")
 
     def decide_mulligan(self, mulligan: Mapping[str, Any]) -> bool:
-        mulligan_count = mulligan.get("mulliganCount")
-        if type(mulligan_count) is int and mulligan_count >= 3:
-            observation = self._observation(
-                {"mulligan": deepcopy(dict(mulligan))}, (), None, ()
-            )
-            metadata = {
-                "routing": {
-                    "path": "mechanical",
-                    "handler": "mulligan-floor",
-                    "handlerVersion": "1",
-                    "strategicWakeAvoided": True,
-                }
-            }
-            self._record("decideMulligan", observation, {"keep": True, "metadata": metadata})
-            return True
-
         actions = [
             {
                 "action": {"type": "KeepHand", "playerId": self._player_id},
