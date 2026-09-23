@@ -211,6 +211,36 @@ class RoutingPilotTests(unittest.TestCase):
         )
         self.assertEqual(choice.metadata["routing"]["path"], "mechanical")
 
+    def test_uniquely_forced_targets_avoid_strategic_wake(self):
+        pending = {
+            "decisionId": "targets-1",
+            "type": "ChooseTargetsDecision",
+            "kind": "ChooseTargetsDecision",
+            "requiresStructuredResponse": True,
+            "canCancel": False,
+            "targetRequirements": [
+                {"index": 0, "minTargets": 1, "maxTargets": 1},
+            ],
+            "legalTargets": {"0": ["only-target"]},
+        }
+        strategic = CountingPilot(error=AssertionError("strategic pilot should not wake"))
+
+        choice = choose_for_observation(
+            RoutingPilot(strategic),
+            observation(None, pending=pending),
+        )
+
+        self.assertEqual(strategic.calls, 0)
+        self.assertEqual(
+            choice.response,
+            {
+                "type": "TargetsResponse",
+                "decisionId": "targets-1",
+                "selectedTargets": {"0": ["only-target"]},
+            },
+        )
+        self.assertEqual(choice.metadata["routing"]["path"], "mechanical")
+
     def test_unique_structured_choice_avoids_strategic_wake(self):
         pending = {
             "decisionId": "number-1",
