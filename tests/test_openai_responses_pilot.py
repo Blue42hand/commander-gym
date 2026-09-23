@@ -214,6 +214,55 @@ class OpenAIResponsesPilotTests(unittest.TestCase):
             "argentum-decision-v1:choose-targets",
         )
 
+    def test_explicit_argentum_response_spec_overrides_downstream_kind_guessing(self):
+        observation = structured_observation()
+        observation["pendingDecision"] = {
+            "decisionId": "routing-live-explicit",
+            "kind": "MISLEADING_DOWNSTREAM_KIND",
+            "type": "AlsoMisleadingDecision",
+            "requiresStructuredResponse": True,
+            "responseSpec": {
+                "responseType": "YesNoResponse",
+                "requiredFields": {"choice": "BOOLEAN"},
+                "cancelAllowed": False,
+            },
+        }
+        client = FakeClient(
+            FakeResponse(
+                json.dumps(
+                    {
+                        "channel": "decision",
+                        "response": {
+                            "type": "YesNoResponse",
+                            "choice": True,
+                        },
+                    }
+                )
+            )
+        )
+        pilot = OpenAIResponsesPilot(client=client, model="gpt-test")
+
+        choice = choose_for_observation(pilot, observation)
+
+        self.assertEqual(
+            choice.response,
+            {
+                "type": "YesNoResponse",
+                "choice": True,
+                "decisionId": "routing-live-explicit",
+            },
+        )
+        model_input = json.loads(client.responses.calls[0]["input"].split("\n", 1)[1])
+        self.assertEqual(
+            model_input["pendingDecision"]["responseSpec"]["responseType"],
+            "YesNoResponse",
+        )
+        self.assertEqual(
+            client.responses.calls[0]["text"]["format"]["schema"]["properties"]["response"]
+            ["properties"]["type"]["const"],
+            "YesNoResponse",
+        )
+
     def test_yes_no_structured_decision_retries_wrong_native_response_shape(self):
         observation = structured_observation()
         observation["pendingDecision"] = {
