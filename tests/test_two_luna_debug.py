@@ -27,7 +27,11 @@ class TwoLunaDebugReportTests(unittest.TestCase):
                         },
                         "provider": "openai",
                         "retryCount": 0,
-                        "usage": {"input_tokens": 20, "output_tokens": 4},
+                        "usage": {
+                            "input_tokens": 20,
+                            "input_tokens_details": {"cached_tokens": 8},
+                            "output_tokens": 4,
+                        },
                     },
                 },
             },
@@ -73,6 +77,7 @@ class TwoLunaDebugReportTests(unittest.TestCase):
         self.assertEqual(summary["providerCalls"], 1)
         self.assertEqual(summary["strategicWakesAvoided"], 1)
         self.assertEqual(summary["inputTokens"], 20)
+        self.assertEqual(summary["cachedInputTokens"], 8)
         self.assertEqual(summary["outputTokens"], 4)
         self.assertEqual(summary["communicationErrors"], [])
         self.assertEqual(summary["avoidableStrategicWakes"], [])
