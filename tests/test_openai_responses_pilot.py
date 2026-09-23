@@ -208,6 +208,7 @@ class OpenAIResponsesPilotTests(unittest.TestCase):
         )
         model_input = json.loads(client.responses.calls[0]["input"].split("\n", 1)[1])
         self.assertNotIn("decisionId", model_input["pendingDecision"])
+        self.assertNotIn("id", model_input["pendingDecision"])
         self.assertEqual(
             model_input["pendingDecision"]["semanticId"],
             "argentum-decision-v1:choose-targets",
@@ -284,6 +285,38 @@ class OpenAIResponsesPilotTests(unittest.TestCase):
             "must use type YesNoResponse",
             client.responses.calls[1]["input"],
         )
+
+    def test_invalid_action_params_retry_before_native_submission(self):
+        client = FakeClient(
+            [
+                FakeResponse(
+                    json.dumps(
+                        {
+                            "channel": "action",
+                            "semanticId": "argentum-action-v1:attack",
+                            "params": {"attackerIds": ["creature-1"]},
+                        }
+                    )
+                ),
+                FakeResponse(
+                    json.dumps(
+                        {
+                            "channel": "action",
+                            "semanticId": "argentum-action-v1:attack",
+                            "params": {"attackers": {"creature-1": "player-2"}},
+                        }
+                    )
+                ),
+            ]
+        )
+        pilot = OpenAIResponsesPilot(client=client, model="gpt-test")
+
+        choice = choose_for_observation(pilot, action_observation())
+
+        self.assertEqual(choice.action_id, 7)
+        self.assertEqual(choice.params, {"attackers": {"creature-1": "player-2"}})
+        self.assertEqual(choice.metadata["retryCount"], 1)
+        self.assertIn("unsupported field", client.responses.calls[1]["input"])
 
     def test_unknown_semantic_id_fails_closed(self):
         client = FakeClient(
