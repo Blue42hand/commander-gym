@@ -121,13 +121,15 @@ Own the artificial player and the machinery that improves it:
 
 ### Private Commander Gym
 
-Keep private or deck-specific artifacts out of the public repo:
+Treat `commander-gym-private` as one **instance repository** for the owner's use of the public product:
 
-- private decklists and exact revisions;
-- primers and deck-specific policy;
-- specialist adapters/models/checkpoints;
-- private trajectories and training datasets;
-- private experiment outputs.
+- exact deck lineages/revisions;
+- deck knowledge/primers;
+- pilot manifests/configurations;
+- deck ↔ pilot bindings and rosters;
+- instance preferences and small private experiment definitions/references.
+
+Generic Commander Gym implementation belongs in the public repo. Bulk generated trajectories, annotations, datasets and model/checkpoint bytes belong in a configurable external data store rather than Git.
 
 ## Decision rule
 
@@ -209,3 +211,62 @@ Use **move, upstream, or retire — not duplicate**:
 7. retire obsolete Forge-era layers rather than preserving compatibility indefinitely.
 
 The migration is successful when public Commander Gym is a focused player/research project that can plug into ordinary upstream Argentum.
+
+
+## Pilot learning architecture
+
+A pilot is the complete decision-making system occupying a seat, not one model adapter.
+
+The intended long-term hierarchy is:
+
+1. certified deterministic/mechanical handlers;
+2. executable Python skills for solved recurring behavior;
+3. learned specialist policies/value models;
+4. a Magic-specialized local generalist model;
+5. frontier/cloud escalation for novel, uncertain or exceptional decisions.
+
+Commander Gym should progressively compile repeated reasoning into cheaper validated competence while preserving a generalist fallback. The local Magic model is the intended steady-state neural substrate; frontier models such as Luna are primarily teachers, evaluators and escalation resources.
+
+Candidate automation/policies must be versioned and pass replay, held-out evaluation and shadow-mode qualification before production promotion. Live models do not directly rewrite trusted automation.
+
+See #73 and `docs/pilot-learning-data-architecture.md`.
+
+## Canonical artifact identities
+
+Keep Deck, DeckKnowledge, Pilot and Binding separate.
+
+- **Deck** is the playable artifact and exact revision.
+- **DeckKnowledge** is the versioned primer/strategy/known-lines layer.
+- **Pilot** is the whole player-side decision system.
+- **Binding** is the immutable combination used at one seat.
+
+Changing a pilot must not change deck identity. Changing a primer must not change the deck. Runs and decisions reference the exact Binding used.
+
+The broader lineage is:
+
+```text
+Deck -> DeckKnowledge -> Pilot -> Binding -> Run -> Decision -> Annotation -> Dataset -> Model
+```
+
+Raw game evidence is immutable. Later evaluation is append-only annotation. Datasets are versioned selections/transforms over evidence rather than the authoritative history themselves.
+
+See #5 and #53.
+
+## Portable deployment and storage
+
+The current Linode is an operational development host, not an architectural dependency.
+
+Durable artifact identity must be independent of filesystem path or host. Commander Gym should obtain durable/ephemeral storage routes from configuration and support multi-terabyte local archives without requiring Git or cloud storage for bulk trajectories.
+
+A portable node may colocate Argentum, Commander Gym, local inference and archival storage. Remote access/tunnel choices remain replaceable deployment infrastructure.
+
+See #74 and `docs/pilot-learning-data-architecture.md`.
+
+
+## Active implementation milestone
+
+The active next goal is **#77 — pilot/data foundation before further game testing**.
+
+#77 collects the identity, Binding-first seat loading, durable evidence/data lineage, progressive local-pilot learning, portable storage/deployment, private-instance cleanup, and generic Argentum per-seat controller-profile work into one qualification gate.
+
+Ordinary gameplay/skill testing resumes with #72 only after #77 closes. Narrow implementation smoke tests are allowed where needed to prove the foundation itself.

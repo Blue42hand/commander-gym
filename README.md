@@ -12,6 +12,12 @@ The end product is not a benchmark score or a self-play system. It is an artific
 
 For now, **general Magic competence is the unified development objective**. Better sequencing, planning, threat assessment, resource management, deck understanding, and multiplayer judgment improve both competitive strength and casual play. Separate casual/competitive policy branches should wait until pilots become strong enough that those objectives meaningfully diverge.
 
+## Active foundation milestone
+
+**#77 — Pilot/data foundation before further game testing** is the current next goal.
+
+Ordinary two-Luna, human-vs-Luna, gameplay-skill, and mass self-play testing is deferred until #77's identity, Binding, evidence, learning, storage/deployment, private-instance, and per-seat Argentum profile gates are complete. Narrow smoke tests required to implement or qualify the foundation remain appropriate.
+
 ## Argentum relationship
 
 A useful shorthand is:
@@ -58,7 +64,8 @@ Commander Gym is intentionally split across three repositories:
 
 - **`Blue42hand/argentum-engine`** — a temporary staging fork of the authoritative game/environment. Rules and state, multiplayer lifecycle, Commander rules, card implementations, legal actions and decisions, observations, hidden-information projection, game-server player/controller seams, Gym APIs, replay/snapshot/fork support, batching, and other generally useful engine/environment capabilities belong in Argentum. Changes in this fork should be designed for upstream contribution by default.
 - **`Blue42hand/commander-gym`** — the artificial-player and learning framework. It owns pilots, deck builders, deck/pilot co-optimization, model/provider adapters, LLM/RL/other ML experiments, training loops, self-play, benchmarks, replay/data pipelines, experiment orchestration, evaluation, and the adapters that connect those systems to Argentum.
-- **`Blue42hand/commander-gym-private`** — private project assets and migration staging. Private decklists, primers, deck-specific policies/specialists, model artifacts/checkpoints, private trajectories/datasets, and private experiment outputs live there.
+- **`Blue42hand/commander-gym-private`** — one private instance of the public product. It contains human-maintained deck revisions, deck knowledge/primers, pilot manifests, deck↔pilot bindings, rosters, preferences, and small private experiment definitions/references. It should not contain generic Commander Gym implementation once migration is complete.
+- **Configured external data store** — bulk generated evidence and model artifacts. Runs/trajectories, annotations, datasets, checkpoints/models, and large experiment outputs live outside Git under location-independent artifact IDs.
 
 ## Placement rule
 
@@ -92,6 +99,9 @@ Commander Gym's card-coverage work should therefore produce upstream-quality Arg
 5. **Minimize fork ownership.** Prefer upstream Argentum improvements over permanent fork-specific infrastructure.
 6. **Measure what matters.** Automated strength and reliability benchmarks are development tools; human play quality is the eventual product metric.
 7. **Treat table interaction as player competence.** Human-facing pilots should eventually understand and participate in table talk, diplomacy, deals, threat signaling, and other social play without mixing persona generation into the core strategic reasoning loop.
+8. **Progressively compile experience.** Move recurring decisions from frontier-model reasoning into validated deterministic skills, learned specialists, and a Magic-specialized local generalist when evidence supports it. The mature pilot should be primarily local; cloud models are teachers/evaluators/escalation resources.
+9. **Make evidence durable before scale.** Keep Deck, DeckKnowledge, Pilot, Binding, Run, Decision, Annotation, Dataset, and Model lineage explicit and immutable enough to reproduce training/evaluation.
+10. **Keep deployment portable.** Durable artifact identity must not depend on a host/path. Storage roots, model services, and remote-access infrastructure are configuration, not architecture.
 
 ## Reference implementations
 
@@ -123,7 +133,7 @@ The current persistent development/test architecture uses a dedicated Linux host
 
 The direct `health → create → observe → step/decision → observe → dispose` path was proven live without the GitHub relay on 2026-09-20 and remained healthy after host reboot through `https://gym.commander-gym.com`. The obsolete GitHub Actions/control-branch relay has been removed from the normal repository path so direct authenticated orchestration is the single first-class control plane.
 
-See `docs/linode-development-host.md` for the reproducible host layout and service installation.
+See `docs/linode-development-host.md` for the current reproducible host layout. The Linode is not the long-term deployment contract; portable-node and configurable-storage work is tracked in #74.
 
 ## Four-seat pilot qualification
 
@@ -176,3 +186,16 @@ It lazily binds each Argentum AI player id to an independent
 preserving the same loopback-only bearer boundary and fail-closed behavior. Runtime
 configuration, provenance handling, and the remaining live-game compatibility gates are
 documented in [`docs/game-server-luna-sidecar.md`](docs/game-server-luna-sidecar.md).
+
+
+## Learning/data architecture
+
+The long-term pilot, artifact identity, persistent-learning, data-lineage, private/public repository, and portable-storage contracts are documented in [`docs/pilot-learning-data-architecture.md`](docs/pilot-learning-data-architecture.md).
+
+The key identity chain is:
+
+```text
+Deck -> DeckKnowledge -> Pilot -> Binding -> Run -> Decision -> Annotation -> Dataset -> Model
+```
+
+A pilot is the whole seat-level decision system, not merely an LLM. The intended steady state progressively routes solved work into deterministic skills/specialists and uses a fine-tuned local Magic generalist for most remaining reasoning, with frontier models reserved for teaching/evaluation/escalation.
