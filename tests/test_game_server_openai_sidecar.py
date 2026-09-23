@@ -215,6 +215,64 @@ class OpenAIGameServerSidecarTests(unittest.TestCase):
             ],
         )
 
+    def test_native_pending_decision_is_normalized_for_luna_structured_response(self):
+        client = FakeClient(
+            [
+                {
+                    "channel": "decision",
+                    "response": {
+                        "type": "CardsSelectedResponse",
+                        "selectedCards": [],
+                    },
+                }
+            ]
+        )
+        config = OpenAIGameServerSidecarConfig(
+            token="sidecar-secret",
+            api_key="sk-test-secret",
+            port=free_port(),
+        )
+        server = build_openai_game_server_sidecar(config, client=client)
+        try:
+            seat = server.resolve_seat("ai-decision")
+            result = seat.choose_action(
+                {"viewingPlayerId": "ai-decision"},
+                [],
+                {
+                    "type": "SelectCardsDecision",
+                    "id": "r2",
+                    "playerId": "ai-decision",
+                    "prompt": "Choose up to 1 card",
+                    "options": ["card-1"],
+                    "minSelections": 0,
+                    "maxSelections": 1,
+                },
+                (),
+            )
+        finally:
+            server.server_close()
+
+        self.assertEqual(result.player_id, "ai-decision")
+        self.assertEqual(result.response["type"], "CardsSelectedResponse")
+        self.assertEqual(result.response["decisionId"], "r2")
+        self.assertEqual(result.response["selectedCards"], [])
+
+        request = client.responses.calls[0]
+        model_input = json.loads(request["input"].split("\n", 1)[1])
+        pending = model_input["pendingDecision"]
+        # Live routing ids are deliberately stripped before model input. The adapter keeps
+        # decisionId only in the local observation so it can inject it into the native response.
+        self.assertNotIn("decisionId", pending)
+        self.assertEqual(pending["kind"], "SelectCardsDecision")
+        self.assertTrue(pending["requiresStructuredResponse"])
+        self.assertEqual(
+            pending["responseSpec"],
+            {
+                "type": "CardsSelectedResponse",
+                "requiredFields": {"selectedCards": "array"},
+            },
+        )
+
     def test_jsonl_provenance_is_tagged_with_the_argentum_player_id(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "policy.jsonl"

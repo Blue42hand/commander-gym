@@ -62,6 +62,18 @@ class GameServerSeatAdapterTests(unittest.TestCase):
         self.assertEqual(records[0].callback, "chooseAction")
         self.assertNotIn("snapshot", records[0].observation)
 
+    def test_argentum_deck_context_reaches_every_policy_observation(self):
+        pilot = ScriptedPilot(ArgentumActionChoice(0))
+        adapter = GameServerSeatAdapter(pilot, "ai")
+        adapter.set_deck_list({"Island": 20, "Opt": 4}, "tempo")
+
+        adapter.choose_action(self.state, [self.actions[0]], None)
+
+        self.assertEqual(
+            pilot.observations[0]["knownDeck"],
+            {"cards": {"Island": 20, "Opt": 4}, "archetype": "tempo"},
+        )
+
     def test_game_server_action_fields_are_aliased_to_pilot_vocabulary(self):
         pilot = ScriptedPilot(ArgentumActionChoice(0))
         adapter = GameServerSeatAdapter(pilot, "ai")
@@ -87,7 +99,7 @@ class GameServerSeatAdapterTests(unittest.TestCase):
             "prompt": "Pay one life?",
         }
         choice = ArgentumDecisionChoice(
-            {"type": "YesNoResponse", "decisionId": "decision-7", "yes": True}
+            {"type": "YesNoResponse", "decisionId": "decision-7", "choice": True}
         )
         adapter = GameServerSeatAdapter(ScriptedPilot(choice), "ai")
 
@@ -131,12 +143,26 @@ class GameServerSeatAdapterTests(unittest.TestCase):
         )
         self.assertEqual(len(pilot.observations), 2)
 
+    def test_forced_zero_bottom_cards_avoid_model_wake(self):
+        pilot = ScriptedPilot()
+        records = []
+        adapter = GameServerSeatAdapter(pilot, "ai", provenance_sink=records.append)
+
+        self.assertEqual(
+            adapter.choose_bottom_cards(
+                {"hand": ["a", "b"], "cardsToPutOnBottom": 0}
+            ),
+            [],
+        )
+        self.assertEqual(pilot.observations, [])
+        self.assertEqual(records[0].choice["metadata"]["routing"]["path"], "mechanical")
+
     def test_invalid_stale_and_provider_failures_propagate_without_fallback(self):
         cases = (
             ScriptedPilot(ArgentumActionChoice(99)),
             ScriptedPilot(
                 ArgentumDecisionChoice(
-                    {"type": "YesNoResponse", "decisionId": "stale", "yes": True}
+                    {"type": "YesNoResponse", "decisionId": "stale", "choice": True}
                 )
             ),
             ScriptedPilot(RuntimeError("provider unavailable")),

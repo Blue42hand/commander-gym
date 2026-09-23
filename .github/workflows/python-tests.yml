@@ -29,18 +29,18 @@ jobs:
       - uses: actions/checkout@v6
         with:
           path: commander-gym
-      # #62 consumes the generic rules-engine parameterizer staged in
-      # Blue42hand/argentum-engine#116. Keep every other branch pinned to vanilla upstream;
-      # once #116 lands upstream this special-case can be removed.
+      # The game-server adapter branch consumes generic external-controller contracts staged on
+      # Blue42hand/argentum-engine main until those changes land upstream. Keep unrelated branches
+      # on vanilla upstream so Commander Gym does not silently grow a permanent fork dependency.
       - name: Checkout staged Argentum dependency
-        if: github.event_name == 'pull_request' && github.head_ref == 'codex/game-server-action-params'
+        if: github.event_name == 'pull_request' && (github.head_ref == 'codex/game-server-action-params' || github.head_ref == 'codex/live-human-three-luna-proof')
         uses: actions/checkout@v6
         with:
           repository: Blue42hand/argentum-engine
-          ref: codex/promote-action-parameterizer
+          ref: main
           path: argentum-engine
       - name: Checkout vanilla Argentum
-        if: github.event_name != 'pull_request' || github.head_ref != 'codex/game-server-action-params'
+        if: github.event_name != 'pull_request' || (github.head_ref != 'codex/game-server-action-params' && github.head_ref != 'codex/live-human-three-luna-proof')
         uses: actions/checkout@v6
         with:
           repository: wingedsheep/argentum-engine

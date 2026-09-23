@@ -12,6 +12,7 @@ from commander_gym.game_server_sidecar import (
     GameServerSidecarConfigurationError,
     GameServerSidecarServer,
 )
+from commander_gym.openai_responses_pilot import OpenAIResponsesPilotError
 from commander_gym.pilot import ArgentumActionChoice, ArgentumDecisionChoice
 
 
@@ -82,6 +83,33 @@ class GameServerSidecarTests(unittest.TestCase):
         self.assertEqual(self.pilot.observations[0]["state"], body["state"])
         self.assertNotIn("snapshot", self.pilot.observations[0])
 
+    def test_set_deck_list_populates_later_policy_context_without_model_call(self):
+        status, response = self.post(
+            "/v1/set-deck-list",
+            {
+                "playerId": "ai",
+                "deckList": {"Island": 20, "Opt": 4},
+                "archetype": "tempo",
+            },
+        )
+        self.assertEqual((status, response), (200, {"ok": True}))
+        self.assertEqual(self.pilot.observations, [])
+
+        body = {
+            "playerId": "ai",
+            "state": {"viewingPlayerId": "ai"},
+            "legalActions": [
+                {"actionType": "PassPriority", "action": {"type": "PassPriority", "playerId": "ai"}}
+            ],
+            "pendingDecision": None,
+            "recentGameLog": [],
+        }
+        self.assertEqual(self.post("/v1/choose-action", body)[0], 200)
+        self.assertEqual(
+            self.pilot.observations[0]["knownDeck"],
+            {"cards": {"Island": 20, "Opt": 4}, "archetype": "tempo"},
+        )
+
     def test_parameterized_action_round_trip_defers_completion_to_native_edge(self):
         self.server.seats["ai"] = GameServerSeatAdapter(
             ScriptedPilot(
@@ -145,6 +173,26 @@ class GameServerSidecarTests(unittest.TestCase):
         )
         self.assertEqual(status, 503)
         self.assertEqual(response["error"], "pilot_failure")
+        self.assertEqual(response["detail"], "RuntimeError")
+
+        provider_failure = GameServerSeatAdapter(
+            ScriptedPilot(
+                OpenAIResponsesPilotError(
+                    "OpenAI Responses request failed (BadRequestError, status=400, "
+                    "code=invalid_request_error, message=unsupported parameter)"
+                )
+            ),
+            "provider-broken",
+        )
+        self.server.seats["provider-broken"] = provider_failure
+        status, response = self.post(
+            "/v1/decide-mulligan",
+            {"playerId": "provider-broken", "mulligan": {"hand": ["a"]}},
+        )
+        self.assertEqual(status, 503)
+        self.assertEqual(response["error"], "pilot_failure")
+        self.assertIn("status=400", response["detail"])
+        self.assertIn("unsupported parameter", response["detail"])
 
     def test_lazy_factory_binds_generated_player_id_once(self):
         self.server.shutdown()

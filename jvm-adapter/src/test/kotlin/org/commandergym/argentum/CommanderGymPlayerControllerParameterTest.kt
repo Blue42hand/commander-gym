@@ -3,6 +3,8 @@ package org.commandergym.argentum
 import com.sun.net.httpserver.HttpServer
 import com.wingedsheep.ai.ActionResponse
 import com.wingedsheep.engine.core.DeclareAttackers
+import com.wingedsheep.engine.core.YesNoDecision
+import com.wingedsheep.engine.core.DecisionContext
 import com.wingedsheep.engine.view.ClientGameState
 import com.wingedsheep.engine.view.LegalActionInfo
 import com.wingedsheep.engine.core.ActionParams
@@ -82,8 +84,8 @@ class CommanderGymPlayerControllerParameterTest {
             assertEquals(mapOf(attacker to defender), submitted.attackers)
 
             val policyRequest = Json.parseToJsonElement(checkNotNull(requestBody)).jsonObject
-            val semanticId = policyRequest["legalActions"]!!.jsonArray[0]
-                .jsonObject["semanticId"]!!.jsonPrimitive.content
+            val policyAction = policyRequest["legalActions"]!!.jsonArray[0].jsonObject
+            val semanticId = policyAction["semanticId"]!!.jsonPrimitive.content
             assertEquals(
                 SemanticFingerprint.forGameAction(
                     "DeclareAttackers",
@@ -91,6 +93,72 @@ class CommanderGymPlayerControllerParameterTest {
                     "commander-gym-game-server-policy-v1",
                 ),
                 semanticId,
+            )
+            assertEquals(
+                "ENTITY_ID_MAP",
+                policyAction["parameterSpec"]!!.jsonObject["allowedFields"]!!
+                    .jsonObject["attackers"]!!.jsonPrimitive.content,
+            )
+        } finally {
+            server.stop(0)
+        }
+    }
+
+    @Test
+    fun pendingDecisionCarriesArgentumOwnedNativeResponseContract() {
+        val playerId = EntityId.of("ai")
+        val pending = YesNoDecision(
+            id = "r1",
+            playerId = playerId,
+            prompt = "You may draw a card",
+            context = DecisionContext(),
+        )
+
+        var requestBody: String? = null
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        server.createContext("/v1/choose-action") { exchange ->
+            requestBody = exchange.requestBody.bufferedReader().use { it.readText() }
+            val response = """
+                {
+                  "kind":"decision",
+                  "playerId":"ai",
+                  "response":{"type":"YesNoResponse","decisionId":"r1","choice":true},
+                  "metadata":{"provider":"test"}
+                }
+            """.trimIndent().toByteArray(StandardCharsets.UTF_8)
+            exchange.sendResponseHeaders(200, response.size.toLong())
+            exchange.responseBody.use { it.write(response) }
+        }
+        server.start()
+
+        try {
+            val controller = CommanderGymPlayerController(
+                playerId = playerId,
+                endpoint = URI.create("http://127.0.0.1:${server.address.port}"),
+                token = "test-token",
+                timeout = Duration.ofSeconds(2),
+                parameterize = { action, _ -> action },
+            )
+
+            val response = controller.chooseAction(
+                state = minimalState(playerId),
+                legalActions = emptyList(),
+                pendingDecision = pending,
+                recentGameLog = emptyList(),
+            )
+            assertTrue(response is ActionResponse.SubmitDecision)
+
+            val policyRequest = Json.parseToJsonElement(checkNotNull(requestBody)).jsonObject
+            val responseSpec = policyRequest["pendingDecision"]!!
+                .jsonObject["responseSpec"]!!.jsonObject
+            assertEquals("YesNoResponse", responseSpec["responseType"]!!.jsonPrimitive.content)
+            assertEquals(
+                "BOOLEAN",
+                responseSpec["requiredFields"]!!.jsonObject["choice"]!!.jsonPrimitive.content,
+            )
+            assertEquals(
+                false,
+                responseSpec["cancelAllowed"]!!.jsonPrimitive.content.toBooleanStrict(),
             )
         } finally {
             server.stop(0)

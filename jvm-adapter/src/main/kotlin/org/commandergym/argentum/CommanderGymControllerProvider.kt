@@ -8,6 +8,7 @@ import com.wingedsheep.ai.llm.MulliganInfo
 import com.wingedsheep.engine.core.DecisionResponse
 import com.wingedsheep.engine.core.GameAction
 import com.wingedsheep.engine.core.PendingDecision
+import com.wingedsheep.engine.core.responseSpec
 import com.wingedsheep.engine.core.engineSerializersModule
 import com.wingedsheep.engine.provenance.SemanticFingerprint
 import com.wingedsheep.engine.view.ClientGameState
@@ -102,6 +103,7 @@ class CommanderGymPlayerController(
                         POLICY_SCHEMA_SCOPE,
                     ),
                 )
+                put("parameterSpec", json.encodeToJsonElement(ActionParameterizer.spec(legal.action)))
             }
         })
         val policyDecision = pendingDecision?.let { pending ->
@@ -112,6 +114,7 @@ class CommanderGymPlayerController(
                     "semanticId",
                     SemanticFingerprint.forPendingDecision(pending, POLICY_SCHEMA_SCOPE),
                 )
+                put("responseSpec", json.encodeToJsonElement(pending.responseSpec()))
             }
         } ?: JsonNull
         val body = buildJsonObject {
@@ -162,7 +165,15 @@ class CommanderGymPlayerController(
         return ids.map { EntityId.of(it.jsonPrimitive.content) }
     }
 
-    override fun setDeckList(deckList: Map<String, Int>, archetype: String?) = Unit
+    override fun setDeckList(deckList: Map<String, Int>, archetype: String?) {
+        post("set-deck-list", buildJsonObject {
+            put("playerId", playerId.value)
+            put("deckList", buildJsonObject {
+                deckList.forEach { (name, count) -> put(name, count) }
+            })
+            archetype?.let { put("archetype", it) }
+        })
+    }
     override fun chooseDraftPick(pack: List<CardSummary>, pickedSoFar: List<CardSummary>, packNumber: Int, pickNumber: Int, picksRequired: Int, passDirection: String): List<String> =
         error("Commander Gym game-server adapter does not support draft callbacks")
     override fun chooseWinstonAction(pileCards: List<CardSummary>, pileIndex: Int, pileSizes: List<Int>, pickedSoFar: List<CardSummary>): Boolean =
@@ -179,7 +190,19 @@ class CommanderGymPlayerController(
             .build()
         val response = http.send(request, HttpResponse.BodyHandlers.ofString())
         require(response.statusCode() == 200) {
-            "Commander Gym policy callback failed with HTTP ${response.statusCode()}"
+            val detail = runCatching {
+                json.parseToJsonElement(response.body()).jsonObject["detail"]
+                    ?.jsonPrimitive
+                    ?.contentOrNull
+            }.getOrNull()
+            buildString {
+                append("Commander Gym policy callback failed with HTTP ")
+                append(response.statusCode())
+                if (!detail.isNullOrBlank()) {
+                    append(": ")
+                    append(detail.take(1200))
+                }
+            }
         }
         return json.parseToJsonElement(response.body()).jsonObject
     }

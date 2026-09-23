@@ -139,9 +139,14 @@ class OpenAIResponsesPilotTests(unittest.TestCase):
             model_input["legalActions"][1]["semanticId"],
             "argentum-action-v1:attack",
         )
-        self.assertEqual(request["text"], {"format": {"type": "json_object"}})
+        self.assertEqual(request["text"]["format"]["type"], "json_schema")
+        self.assertEqual(
+            request["text"]["format"]["schema"]["properties"]["semanticId"]["enum"],
+            ["argentum-action-v1:pass", "argentum-action-v1:attack"],
+        )
         self.assertFalse(request["store"])
         self.assertEqual(choice.metadata["retryCount"], 0)
+        self.assertGreaterEqual(choice.metadata["providerWallTimeMs"], 0)
 
     def test_retries_one_invalid_unsubmitted_choice_and_records_retry(self):
         client = FakeClient(
@@ -182,8 +187,8 @@ class OpenAIResponsesPilotTests(unittest.TestCase):
                     {
                         "channel": "decision",
                         "response": {
-                            "type": "ChooseTargetsResponse",
-                            "targets": ["target-1"],
+                            "type": "TargetsResponse",
+                            "selectedTargets": {"0": ["target-1"]},
                         },
                     }
                 )
@@ -197,17 +202,233 @@ class OpenAIResponsesPilotTests(unittest.TestCase):
         self.assertEqual(
             choice.response,
             {
-                "type": "ChooseTargetsResponse",
-                "targets": ["target-1"],
+                "type": "TargetsResponse",
+                "selectedTargets": {"0": ["target-1"]},
                 "decisionId": "routing-live-9",
             },
         )
         model_input = json.loads(client.responses.calls[0]["input"].split("\n", 1)[1])
         self.assertNotIn("decisionId", model_input["pendingDecision"])
+        self.assertNotIn("id", model_input["pendingDecision"])
         self.assertEqual(
             model_input["pendingDecision"]["semanticId"],
             "argentum-decision-v1:choose-targets",
         )
+
+    def test_explicit_argentum_response_spec_overrides_downstream_kind_guessing(self):
+        observation = structured_observation()
+        observation["pendingDecision"] = {
+            "decisionId": "routing-live-explicit",
+            "kind": "MISLEADING_DOWNSTREAM_KIND",
+            "type": "AlsoMisleadingDecision",
+            "requiresStructuredResponse": True,
+            "responseSpec": {
+                "responseType": "YesNoResponse",
+                "requiredFields": {"choice": "BOOLEAN"},
+                "cancelAllowed": False,
+            },
+        }
+        client = FakeClient(
+            FakeResponse(
+                json.dumps(
+                    {
+                        "channel": "decision",
+                        "response": {
+                            "type": "YesNoResponse",
+                            "choice": True,
+                        },
+                    }
+                )
+            )
+        )
+        pilot = OpenAIResponsesPilot(client=client, model="gpt-test")
+
+        choice = choose_for_observation(pilot, observation)
+
+        self.assertEqual(
+            choice.response,
+            {
+                "type": "YesNoResponse",
+                "choice": True,
+                "decisionId": "routing-live-explicit",
+            },
+        )
+        model_input = json.loads(client.responses.calls[0]["input"].split("\n", 1)[1])
+        self.assertEqual(
+            model_input["pendingDecision"]["responseSpec"]["responseType"],
+            "YesNoResponse",
+        )
+        self.assertEqual(
+            client.responses.calls[0]["text"]["format"]["schema"]["properties"]["response"]
+            ["properties"]["type"]["const"],
+            "YesNoResponse",
+        )
+
+    def test_yes_no_structured_decision_retries_wrong_native_response_shape(self):
+        observation = structured_observation()
+        observation["pendingDecision"] = {
+            "decisionId": "routing-live-yes-no",
+            "semanticId": "argentum-decision-v1:yes-no",
+            "kind": "YesNoDecision",
+            "type": "YesNoDecision",
+            "playerId": "player-1",
+            "prompt": "You may draw a card",
+            "yesText": "Yes",
+            "noText": "No",
+            "requiresStructuredResponse": True,
+        }
+        client = FakeClient(
+            [
+                FakeResponse(
+                    json.dumps(
+                        {
+                            "channel": "decision",
+                            "response": {
+                                "type": "YesNoDecision",
+                                "choice": "YES",
+                            },
+                        }
+                    )
+                ),
+                FakeResponse(
+                    json.dumps(
+                        {
+                            "channel": "decision",
+                            "response": {
+                                "type": "YesNoResponse",
+                                "choice": True,
+                            },
+                        }
+                    )
+                ),
+            ]
+        )
+        pilot = OpenAIResponsesPilot(client=client, model="gpt-test")
+
+        choice = choose_for_observation(pilot, observation)
+
+        self.assertEqual(
+            choice.response,
+            {
+                "type": "YesNoResponse",
+                "choice": True,
+                "decisionId": "routing-live-yes-no",
+            },
+        )
+        self.assertEqual(choice.metadata["retryCount"], 1)
+        self.assertEqual(len(client.responses.calls), 2)
+        first_input = json.loads(client.responses.calls[0]["input"].split("\n", 1)[1])
+        self.assertEqual(
+            first_input["pendingDecision"]["responseSpec"],
+            {
+                "type": "YesNoResponse",
+                "requiredFields": {"choice": "boolean"},
+            },
+        )
+        decision_format = client.responses.calls[0]["text"]["format"]
+        self.assertEqual(decision_format["type"], "json_schema")
+        self.assertTrue(decision_format["strict"])
+        response_schema = decision_format["schema"]["properties"]["response"]
+        self.assertEqual(response_schema["properties"]["type"]["const"], "YesNoResponse")
+        self.assertEqual(response_schema["properties"]["choice"], {"type": "boolean"})
+        self.assertIn(
+            "must use type YesNoResponse",
+            client.responses.calls[1]["input"],
+        )
+
+    def test_invalid_action_params_retry_before_native_submission(self):
+        client = FakeClient(
+            [
+                FakeResponse(
+                    json.dumps(
+                        {
+                            "channel": "action",
+                            "semanticId": "argentum-action-v1:attack",
+                            "params": {"attackerIds": ["creature-1"]},
+                        }
+                    )
+                ),
+                FakeResponse(
+                    json.dumps(
+                        {
+                            "channel": "action",
+                            "semanticId": "argentum-action-v1:attack",
+                            "params": {"attackers": {"creature-1": "player-2"}},
+                        }
+                    )
+                ),
+            ]
+        )
+        pilot = OpenAIResponsesPilot(client=client, model="gpt-test")
+
+        choice = choose_for_observation(pilot, action_observation())
+
+        self.assertEqual(choice.action_id, 7)
+        self.assertEqual(choice.params, {"attackers": {"creature-1": "player-2"}})
+        self.assertEqual(choice.metadata["retryCount"], 1)
+        self.assertIn("unsupported field", client.responses.calls[1]["input"])
+
+    def test_structured_card_selection_is_constrained_to_current_options(self):
+        observation = structured_observation()
+        observation["pendingDecision"] = {
+            "decisionId": "routing-select-1",
+            "type": "SelectCardsDecision",
+            "kind": "SelectCardsDecision",
+            "requiresStructuredResponse": True,
+            "options": ["card-a"],
+            "minSelections": 0,
+            "maxSelections": 1,
+            "responseSpec": {
+                "responseType": "CardsSelectedResponse",
+                "requiredFields": {"selectedCards": "ENTITY_ID_ARRAY"},
+                "cancelAllowed": False,
+            },
+        }
+        client = FakeClient(
+            [
+                FakeResponse(
+                    json.dumps(
+                        {
+                            "channel": "decision",
+                            "response": {
+                                "type": "CardsSelectedResponse",
+                                "selectedCards": ["invented-card"],
+                            },
+                        }
+                    )
+                ),
+                FakeResponse(
+                    json.dumps(
+                        {
+                            "channel": "decision",
+                            "response": {
+                                "type": "CardsSelectedResponse",
+                                "selectedCards": ["card-a"],
+                            },
+                        }
+                    )
+                ),
+            ]
+        )
+        pilot = OpenAIResponsesPilot(client=client, model="gpt-test")
+
+        choice = choose_for_observation(pilot, observation)
+
+        self.assertEqual(
+            choice.response,
+            {
+                "type": "CardsSelectedResponse",
+                "selectedCards": ["card-a"],
+                "decisionId": "routing-select-1",
+            },
+        )
+        self.assertEqual(choice.metadata["retryCount"], 1)
+        first_format = client.responses.calls[0]["text"]["format"]
+        item_schema = first_format["schema"]["properties"]["response"]["properties"][
+            "selectedCards"
+        ]["items"]
+        self.assertEqual(item_schema["enum"], ["card-a"])
+        self.assertIn("outside current options", client.responses.calls[1]["input"])
 
     def test_unknown_semantic_id_fails_closed(self):
         client = FakeClient(

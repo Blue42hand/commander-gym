@@ -28,6 +28,7 @@ _CALLBACK_PATHS = {
     "/v1/choose-action": "chooseAction",
     "/v1/decide-mulligan": "decideMulligan",
     "/v1/choose-bottom-cards": "chooseBottomCards",
+    "/v1/set-deck-list": "setDeckList",
 }
 
 SeatFactory = Callable[[str], GameServerSeatAdapter]
@@ -122,12 +123,27 @@ class GameServerSidecarHandler(BaseHTTPRequestHandler):
             self._write(422, {"error": str(exc)})
             return
         except Exception as exc:
-            self._write(503, {"error": "pilot_failure", "detail": type(exc).__name__})
+            self._write(
+                503,
+                {
+                    "error": "pilot_failure",
+                    "detail": self._pilot_failure_detail(exc),
+                },
+            )
             return
         self._write(200, response)
 
     def log_message(self, _format: str, *_args: Any) -> None:
         pass
+
+    @staticmethod
+    def _pilot_failure_detail(exc: Exception) -> str:
+        """Return bounded diagnostics without turning generic failures into exception dumps."""
+        kind = type(exc).__name__
+        if kind != "OpenAIResponsesPilotError":
+            return kind
+        message = " ".join(str(exc).split())
+        return f"{kind}: {message[:1000]}" if message else kind
 
     def _invoke(
         self,
@@ -137,6 +153,12 @@ class GameServerSidecarHandler(BaseHTTPRequestHandler):
     ) -> Mapping[str, Any]:
         if "snapshot" in request:
             raise ValueError("trusted runtime snapshot is forbidden at the policy boundary")
+        if callback == "setDeckList":
+            self._require_keys(request, {"playerId", "deckList", "archetype"})
+            deck_list = request.get("deckList")
+            archetype = request.get("archetype")
+            adapter.set_deck_list(deck_list, archetype)
+            return {"ok": True}
         if callback == "chooseAction":
             self._require_keys(
                 request,

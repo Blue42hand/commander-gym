@@ -93,6 +93,191 @@ class ForcedParameterlessChoiceHandler:
         return ArgentumActionChoice(action_id=action["actionId"])
 
 
+@dataclass(frozen=True)
+class CertifiedNativeDecisionHandler:
+    """Resolve only native structured decisions whose answer is engine-certified or unique.
+
+    This carries the Forge wake-reduction rule forward: deterministic infrastructure choices may
+    bypass the strategic model, but any choice with meaningful alternatives still escalates.
+    """
+
+    name: str = "certified-native-decision"
+    version: str = "1"
+
+    def choose(self, observation: Mapping[str, Any]) -> PilotChoice | None:
+        pending = observation.get("pendingDecision")
+        if not isinstance(pending, Mapping) or pending.get("requiresStructuredResponse") is not True:
+            return None
+        decision_id = pending.get("decisionId")
+        if not isinstance(decision_id, str) or not decision_id:
+            return None
+        kind = pending.get("type") or pending.get("kind")
+
+        def decision(response_type: str, **fields: Any) -> ArgentumDecisionChoice:
+            return ArgentumDecisionChoice(
+                {"type": response_type, "decisionId": decision_id, **fields}
+            )
+
+        # Argentum's built-in LLM controller also treats these two as mechanical.
+        if kind in ("AssignDamageDecision", "ASSIGN_DAMAGE"):
+            defaults = pending.get("defaultAssignments")
+            if isinstance(defaults, Mapping):
+                return decision("DamageAssignmentResponse", assignments=dict(defaults))
+
+        if kind in ("SelectManaSourcesDecision", "SELECT_MANA_SOURCES"):
+            suggestion = pending.get("autoPaySuggestion")
+            if isinstance(suggestion, list) and suggestion:
+                return decision(
+                    "ManaSourcesSelectedResponse",
+                    selectedSources=[],
+                    autoPay=True,
+                    waterbendPermanents=[],
+                    declined=False,
+                )
+            if pending.get("canDecline") is True:
+                return decision(
+                    "ManaSourcesSelectedResponse",
+                    selectedSources=[],
+                    autoPay=False,
+                    waterbendPermanents=[],
+                    declined=True,
+                )
+            # Mirrors Argentum SelectManaSourcesHandler.bestEffortResponse for mandatory
+            # payments when the solver has no direct auto-pay suggestion.
+            sources = pending.get("availableSources")
+            if isinstance(sources, list) and all(isinstance(source, Mapping) for source in sources):
+                selected_sources: list[str] = []
+                for source in sources:
+                    entity_id = source.get("entityId")
+                    if source.get("requiresTappingAnotherPermanent") is True:
+                        continue
+                    if not isinstance(entity_id, str):
+                        return None
+                    selected_sources.append(entity_id)
+                return decision(
+                    "ManaSourcesSelectedResponse",
+                    selectedSources=selected_sources,
+                    autoPay=False,
+                    waterbendPermanents=[],
+                    declined=False,
+                )
+
+        if kind in ("ChooseTargetsDecision", "CHOOSE_TARGETS"):
+            if pending.get("canCancel") is not True:
+                requirements = pending.get("targetRequirements")
+                legal_targets = pending.get("legalTargets")
+                if isinstance(requirements, list) and isinstance(legal_targets, Mapping):
+                    selected_targets: dict[str, list[str]] = {}
+                    forced = bool(requirements)
+                    for requirement in requirements:
+                        if not isinstance(requirement, Mapping):
+                            forced = False
+                            break
+                        index = requirement.get("index")
+                        minimum = requirement.get("minTargets", 1)
+                        maximum = requirement.get("maxTargets", 1)
+                        if type(index) is not int or type(minimum) is not int or type(maximum) is not int:
+                            forced = False
+                            break
+                        options = legal_targets.get(str(index), legal_targets.get(index))
+                        if (
+                            not isinstance(options, list)
+                            or any(not isinstance(option, str) for option in options)
+                            or minimum != maximum
+                            or len(options) != minimum
+                        ):
+                            forced = False
+                            break
+                        selected_targets[str(index)] = list(options)
+                    if forced:
+                        return decision("TargetsResponse", selectedTargets=selected_targets)
+
+        # Unique-choice cases: there is literally no strategic branch to preserve.
+        if kind in ("ChooseNumberDecision", "CHOOSE_NUMBER"):
+            lo, hi = pending.get("minValue"), pending.get("maxValue")
+            if type(lo) is int and lo == hi:
+                return decision("NumberChosenResponse", number=lo)
+
+        if kind in ("ChooseColorDecision", "CHOOSE_COLOR"):
+            colors = pending.get("availableColors")
+            if isinstance(colors, list) and len(colors) == 1 and isinstance(colors[0], str):
+                return decision("ColorChosenResponse", color=colors[0])
+
+        if kind in ("ChooseModeDecision", "CHOOSE_MODE"):
+            modes = pending.get("modes")
+            if (
+                pending.get("minModes") == 1
+                and pending.get("maxModes") == 1
+                and isinstance(modes, list)
+            ):
+                available = [
+                    mode for mode in modes
+                    if isinstance(mode, Mapping) and mode.get("available", True) is True
+                ]
+                if len(available) == 1 and type(available[0].get("index")) is int:
+                    return decision("ModesChosenResponse", selectedModes=[available[0]["index"]])
+
+        if kind in ("ChooseOptionDecision", "CHOOSE_OPTION"):
+            options = pending.get("options")
+            if isinstance(options, list) and len(options) == 1:
+                return decision("OptionChosenResponse", optionIndex=0)
+
+        if kind in ("SelectCardsDecision", "SELECT_CARDS"):
+            options = pending.get("options")
+            lo, hi = pending.get("minSelections"), pending.get("maxSelections")
+            ordered = pending.get("ordered", False)
+            if isinstance(options, list) and type(lo) is int and type(hi) is int:
+                if lo == hi == 0:
+                    return decision("CardsSelectedResponse", selectedCards=[])
+                if lo == hi == len(options) and (not ordered or len(options) <= 1):
+                    return decision("CardsSelectedResponse", selectedCards=list(options))
+
+        if kind in ("OrderObjectsDecision", "ORDER_OBJECTS", "ReorderLibraryDecision", "REORDER_LIBRARY"):
+            objects = pending.get("objects")
+            if objects is None:
+                objects = pending.get("cards")
+            if isinstance(objects, list) and len(objects) <= 1:
+                return decision("OrderedResponse", orderedObjects=list(objects))
+
+        if kind in ("DistributeDecision", "DISTRIBUTE"):
+            targets = pending.get("targets")
+            total = pending.get("totalAmount")
+            if (
+                pending.get("allowPartial") is not True
+                and isinstance(targets, list)
+                and len(targets) == 1
+                and type(total) is int
+            ):
+                return decision("DistributionResponse", distribution={str(targets[0]): total})
+
+        return None
+
+
+@dataclass(frozen=True)
+class NoChoiceCombatHandler:
+    """Advance attack/block declarations when Argentum exposes no eligible creature."""
+
+    name: str = "no-choice-combat"
+    version: str = "1"
+
+    def choose(self, observation: Mapping[str, Any]) -> PilotChoice | None:
+        pending = observation.get("pendingDecision")
+        if isinstance(pending, Mapping) and pending.get("requiresStructuredResponse") is True:
+            return None
+        legal = observation.get("legalActions")
+        if not isinstance(legal, list):
+            return None
+        for action in legal:
+            if not isinstance(action, Mapping) or type(action.get("actionId")) is not int:
+                continue
+            kind = action.get("kind")
+            if kind == "DeclareAttackers" and not action.get("validAttackers"):
+                return ArgentumActionChoice(action_id=action["actionId"])
+            if kind == "DeclareBlockers" and not action.get("validBlockers"):
+                return ArgentumActionChoice(action_id=action["actionId"])
+        return None
+
+
 def _annotate(choice: PilotChoice, routing: Mapping[str, Any]) -> PilotChoice:
     """Attach routing evidence without changing Argentum execution semantics."""
 
@@ -120,7 +305,11 @@ class RoutingPilot:
     """
 
     strategic_pilot: ArtificialPlayer
-    handlers: Sequence[CertifiedMechanicalHandler] = (ForcedParameterlessChoiceHandler(),)
+    handlers: Sequence[CertifiedMechanicalHandler] = (
+        ForcedParameterlessChoiceHandler(),
+        CertifiedNativeDecisionHandler(),
+        NoChoiceCombatHandler(),
+    )
     name: str = "certified-routing"
     version: str = "1"
 
