@@ -11,6 +11,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Mapping, Optional, Union
 
+from .identity import IdentityError, IdentityRef
 from .records import PilotProvenance, RecordValidationError
 
 RUN_RECORD_SCHEMA_VERSION = 1
@@ -40,6 +41,37 @@ def _parse_aware_timestamp(name: str, value: str) -> datetime:
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise RecordValidationError(f"{name} must include a timezone offset")
     return parsed
+
+
+def _binding_ref_from_value(value: Any) -> Optional[IdentityRef]:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise RecordValidationError("participant.binding must be an object or null")
+    try:
+        binding = IdentityRef.from_dict(value)
+    except IdentityError as exc:
+        raise RecordValidationError(f"invalid participant.binding identity: {exc}") from exc
+    if binding.artifact_type != "binding":
+        raise RecordValidationError(
+            "participant.binding must reference artifact_type='binding'"
+        )
+    return binding
+
+
+def _validate_binding_ref(binding: Optional[IdentityRef]) -> None:
+    if binding is None:
+        return
+    if not isinstance(binding, IdentityRef):
+        raise RecordValidationError("participant.binding must be IdentityRef or null")
+    try:
+        binding.validate()
+    except IdentityError as exc:
+        raise RecordValidationError(f"invalid participant.binding identity: {exc}") from exc
+    if binding.artifact_type != "binding":
+        raise RecordValidationError(
+            "participant.binding must reference artifact_type='binding'"
+        )
 
 
 @dataclass(frozen=True)
@@ -84,6 +116,7 @@ class RunParticipant:
     deck_id: Optional[str] = None
     deck_version: Optional[str] = None
     primer_version: Optional[str] = None
+    binding: Optional[IdentityRef] = None
 
     def validate(self) -> None:
         if not isinstance(self.seat, int) or isinstance(self.seat, bool) or self.seat < 0:
@@ -98,6 +131,14 @@ class RunParticipant:
             raise RecordValidationError(
                 "participant.deck_id and participant.deck_version must be supplied together"
             )
+        _validate_binding_ref(self.binding)
+
+    def to_dict(self) -> Dict[str, Any]:
+        self.validate()
+        result = asdict(self)
+        if self.binding is None:
+            result.pop("binding", None)
+        return result
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "RunParticipant":
@@ -112,6 +153,7 @@ class RunParticipant:
             deck_id=value.get("deck_id"),
             deck_version=value.get("deck_version"),
             primer_version=value.get("primer_version"),
+            binding=_binding_ref_from_value(value.get("binding")),
         )
         participant.validate()
         return participant
@@ -232,7 +274,9 @@ class RunRecord:
 
     def to_dict(self) -> Dict[str, Any]:
         self.validate()
-        return asdict(self)
+        result = asdict(self)
+        result["participants"] = [participant.to_dict() for participant in self.participants]
+        return result
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "RunRecord":
