@@ -338,14 +338,14 @@ def check_node_preflight(
         check_checkout(
             "commander-gym",
             config.commander_gym,
-            required_files=(("scripts/run_argentum_gateway_service.sh", True),),
+            required_files=(("scripts/run_argentum_gateway_service.sh", False),),
             runner=git_runner,
         ),
         check_checkout(
             "argentum",
             config.argentum,
             required_files=(
-                ("scripts/run-gym-server-service.sh", True),
+                ("scripts/run-gym-server-service.sh", False),
                 ("gradlew", True),
             ),
             runner=git_runner,
