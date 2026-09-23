@@ -57,6 +57,7 @@ class TwoLunaDebugReportTests(unittest.TestCase):
                     "metadata": {
                         "routing": {
                             "path": "mechanical",
+                            "handler": "certified-native-decision",
                             "strategicWakeAvoided": True,
                         }
                     },
