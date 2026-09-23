@@ -1,12 +1,12 @@
 """Resolve canonical Bindings into one authoritative Argentum Gym launch plan.
 
-This module is the Gym-side execution seam for issue #76.  Callers provide only
+This module is the Gym-side execution seam for issue #76. Callers provide only
 Binding IDs plus game-level settings; the exact deck payload and ArtificialPlayer
 for every seat come from :class:`BindingResolver`.
 
-Argentum still owns format legality, rules, and authoritative state.  The small
+Argentum still owns format legality, rules, and authoritative state. The small
 Commander adapter below only translates the existing public exact-deck artifact
-shape into Argentum's explicit-player configuration.  Other formats may supply a
+shape into Argentum's explicit-player configuration. Other formats may supply a
 format-specific player-config factory without changing Binding or pilot identity.
 """
 
@@ -66,9 +66,9 @@ def default_argentum_player_config(
     """Translate one resolved exact deck payload into an Argentum player config.
 
     A deck artifact may publish a prebuilt ``argentum_player`` mapping when its
-    format needs a different adapter.  Otherwise the current public Commander deck
+    format needs a different adapter. Otherwise the current public Commander deck
     artifact shape (``cards`` plus ``commander``) is translated to Argentum's
-    ``Explicit`` deck representation.  No legality or rules validation happens here.
+    ``Explicit`` deck representation. No legality or rules validation happens here.
     """
 
     player_name = _nonempty_string(player_name, "player_name")
@@ -81,7 +81,7 @@ def default_argentum_player_config(
         if not isinstance(prebuilt, Mapping):
             raise BindingLaunchError("exact deck payload argentum_player must be a mapping")
         player = dict(prebuilt)
-        # Seat naming is runtime configuration, not deck identity.  Bindings remain
+        # Seat naming is runtime configuration, not deck identity. Bindings remain
         # the only source of deck/pilot selection.
         player["name"] = player_name
         if "deck" not in player:
@@ -150,7 +150,7 @@ def build_binding_launch_plan(
 ) -> BindingLaunchPlan:
     """Resolve four Binding IDs into both Argentum deck config and pilot seats.
 
-    ``game_settings`` contains only game-level configuration.  Supplying ``players``
+    ``game_settings`` contains only game-level configuration. Supplying ``players``
     is rejected so callers cannot silently pair a Binding-selected pilot with an
     independently selected deck.
     """
@@ -177,7 +177,10 @@ def build_binding_launch_plan(
 
     for index, binding_id in enumerate(binding_ids):
         binding_id = _nonempty_string(binding_id, f"binding_ids[{index}]")
-        seat_binding = resolver.resolve(binding_id)
+        try:
+            seat_binding = resolver.resolve(binding_id)
+        except BindingResolutionError as exc:
+            raise BindingLaunchError(str(exc)) from exc
         player_name = _seat_name(seat_binding)
         if player_name in names:
             raise BindingLaunchError(
