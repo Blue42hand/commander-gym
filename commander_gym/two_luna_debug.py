@@ -31,7 +31,8 @@ from .pilot_routing import (
 
 ERROR_RE = re.compile(
     r"policy callback failed|AI failed to process server message|pilot_failure|"
-    r"JsonDecodingException|OpenAIResponsesPilotError",
+    r"JsonDecodingException|OpenAIResponsesPilotError|"
+    r"External AI action failed|Error handling AI action",
     re.IGNORECASE,
 )
 
@@ -223,7 +224,28 @@ def _summarize(
 
     avoidable = _avoidable_strategic_wakes(records)
     skill_flags = _skill_review_flags(records)
-    technical_qualified = completed and not communication_errors and not avoidable
+    seat_ids = {
+        str(record.get("playerId"))
+        for record in records
+        if isinstance(record.get("playerId"), str) and record.get("playerId")
+    }
+    deck_context_seats = {
+        str(record.get("playerId"))
+        for record in records
+        if isinstance(record.get("playerId"), str)
+        and isinstance(record.get("observation"), Mapping)
+        and isinstance(record["observation"].get("knownDeck"), Mapping)
+    }
+    provenance_complete = len(seat_ids) >= 2 and seat_ids <= deck_context_seats
+    technical_qualified = (
+        completed
+        and provenance_complete
+        and provider_calls > 0
+        and retries == 0
+        and not communication_errors
+        and not avoidable
+        and not skill_flags
+    )
 
     return {
         "result": "qualified" if technical_qualified else "needs-debug",
@@ -232,6 +254,9 @@ def _summarize(
         "gameSessionIds": game_ids,
         "maxTurnObserved": max_turn,
         "policyCallbacks": len(records),
+        "policySeats": sorted(seat_ids),
+        "deckContextSeats": sorted(deck_context_seats),
+        "provenanceComplete": provenance_complete,
         "callbacks": dict(callbacks),
         "routing": dict(routes),
         "providerCalls": provider_calls,
