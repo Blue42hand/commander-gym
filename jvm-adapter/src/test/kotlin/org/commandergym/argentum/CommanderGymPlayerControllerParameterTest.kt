@@ -84,8 +84,8 @@ class CommanderGymPlayerControllerParameterTest {
             assertEquals(mapOf(attacker to defender), submitted.attackers)
 
             val policyRequest = Json.parseToJsonElement(checkNotNull(requestBody)).jsonObject
-            val semanticId = policyRequest["legalActions"]!!.jsonArray[0]
-                .jsonObject["semanticId"]!!.jsonPrimitive.content
+            val policyAction = policyRequest["legalActions"]!!.jsonArray[0].jsonObject
+            val semanticId = policyAction["semanticId"]!!.jsonPrimitive.content
             assertEquals(
                 SemanticFingerprint.forGameAction(
                     "DeclareAttackers",
@@ -93,6 +93,11 @@ class CommanderGymPlayerControllerParameterTest {
                     "commander-gym-game-server-policy-v1",
                 ),
                 semanticId,
+            )
+            assertEquals(
+                "ENTITY_ID_MAP",
+                policyAction["parameterSpec"]!!.jsonObject["allowedFields"]!!
+                    .jsonObject["attackers"]!!.jsonPrimitive.content,
             )
         } finally {
             server.stop(0)
