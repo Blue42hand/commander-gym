@@ -83,7 +83,13 @@ def _without_live_routing(observation: Mapping[str, Any]) -> dict[str, Any]:
         pending_copy = dict(pending)
         pending_copy.pop("decisionId", None)
         pending_copy.pop("id", None)
-        if pending_copy.get("requiresStructuredResponse") is True:
+        if (
+            pending_copy.get("requiresStructuredResponse") is True
+            and not isinstance(pending_copy.get("responseSpec"), Mapping)
+        ):
+            # Compatibility hint for older Gym/game-server observations. When Argentum supplies
+            # responseSpec natively, preserve it verbatim so engine-owned protocol semantics remain
+            # visible and downstream adapters do not rewrite the contract.
             spec = _structured_response_spec(pending_copy)
             if spec is not None:
                 response_type, required_fields = spec
