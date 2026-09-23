@@ -146,6 +146,7 @@ class OpenAIResponsesPilotTests(unittest.TestCase):
         )
         self.assertFalse(request["store"])
         self.assertEqual(choice.metadata["retryCount"], 0)
+        self.assertGreaterEqual(choice.metadata["providerWallTimeMs"], 0)
 
     def test_retries_one_invalid_unsubmitted_choice_and_records_retry(self):
         client = FakeClient(
