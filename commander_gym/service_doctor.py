@@ -10,12 +10,12 @@ import argparse
 from dataclasses import asdict, dataclass
 import json
 import os
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Callable, Sequence
 from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin
 from urllib.request import Request, urlopen
 
-from .argentum_client import ArgentumGymClient
+from .argentum_client import ArgentumClientError, ArgentumGymClient
 from .model_service import (
     ModelServiceConfigurationError,
     ModelServiceEndpoint,
@@ -111,6 +111,7 @@ def check_model_service(
     if endpoint is None:
         return ModelServiceHealth(configured=False, ok=True)
 
+    health_url: str | None = None
     try:
         health_url = _model_health_url(endpoint, health_path)
         headers = {"Accept": "application/json"}
@@ -140,15 +141,16 @@ def check_model_service(
             configured=True,
             ok=False,
             base_url=endpoint.base_url,
-            health_url=getattr(exc, "url", None),
+            health_url=health_url,
             http_status=exc.code,
             error=f"model health endpoint returned HTTP {exc.code}",
         )
-    except (URLError, OSError, ValueError, ModelServiceConfigurationError) as exc:
+    except (URLError, OSError, ValueError) as exc:
         return ModelServiceHealth(
             configured=True,
             ok=False,
             base_url=endpoint.base_url,
+            health_url=health_url,
             error=str(exc),
         )
 
@@ -222,7 +224,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             timeout=args.argentum_timeout,
         )
         model_endpoint = model_service_from_environment(os.environ)
-    except (ValueError, ModelServiceConfigurationError) as exc:
+    except (ArgentumClientError, ModelServiceConfigurationError) as exc:
         print(json.dumps({"ok": False, "error": str(exc)}, sort_keys=True))
         return 2
 
