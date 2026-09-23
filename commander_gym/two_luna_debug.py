@@ -186,6 +186,8 @@ def _summarize(
 ) -> dict[str, Any]:
     callbacks = Counter(str(record.get("callback", "unknown")) for record in records)
     routes = Counter()
+    strategic_by_kind = Counter()
+    mechanical_by_handler = Counter()
     provider_calls = 0
     retries = 0
     input_tokens = 0
@@ -198,7 +200,39 @@ def _summarize(
         metadata = _metadata(record)
         routing = metadata.get("routing")
         if isinstance(routing, Mapping):
-            routes[str(routing.get("path", "unknown"))] += 1
+            route_path = str(routing.get("path", "unknown"))
+            routes[route_path] += 1
+            if route_path == "mechanical":
+                mechanical_by_handler[str(routing.get("handler", "unknown"))] += 1
+            elif route_path == "strategic":
+                callback = str(record.get("callback", "unknown"))
+                observation = record.get("observation")
+                kind = callback
+                if isinstance(observation, Mapping):
+                    pending = observation.get("pendingDecision")
+                    if isinstance(pending, Mapping):
+                        kind = str(pending.get("type") or pending.get("kind") or callback)
+                    elif callback == "chooseAction":
+                        choice = record.get("choice")
+                        legal = observation.get("legalActions")
+                        if isinstance(choice, Mapping) and isinstance(legal, list):
+                            action_id = choice.get("actionId")
+                            selected = next(
+                                (
+                                    action
+                                    for action in legal
+                                    if isinstance(action, Mapping)
+                                    and action.get("actionId") == action_id
+                                ),
+                                None,
+                            )
+                            if isinstance(selected, Mapping):
+                                kind = str(
+                                    selected.get("kind")
+                                    or selected.get("actionType")
+                                    or "chooseAction"
+                                )
+                strategic_by_kind[kind] += 1
         if metadata.get("provider") == "openai":
             provider_calls += 1
             wall_time = metadata.get("providerWallTimeMs")
@@ -267,6 +301,8 @@ def _summarize(
         "provenanceComplete": provenance_complete,
         "callbacks": dict(callbacks),
         "routing": dict(routes),
+        "strategicByKind": dict(strategic_by_kind),
+        "mechanicalByHandler": dict(mechanical_by_handler),
         "providerCalls": provider_calls,
         "providerRequests": provider_calls + retries,
         "validationRetries": retries,
