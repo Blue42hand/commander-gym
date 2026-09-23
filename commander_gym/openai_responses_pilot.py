@@ -259,6 +259,120 @@ def _matches_wire_type(value: Any, wire_type: str) -> bool:
     return False
 
 
+def _json_schema_for_wire_type(field_name: str, wire_type: str) -> dict[str, Any]:
+    if wire_type == "boolean":
+        return {"type": "boolean"}
+    if wire_type == "integer":
+        return {"type": "integer"}
+    if wire_type == "string":
+        return {"type": "string"}
+    if wire_type == "array":
+        integer_arrays = {"selectedModes", "selectedModeIndices"}
+        nested_string_arrays = {"piles"}
+        if field_name in integer_arrays:
+            return {"type": "array", "items": {"type": "integer"}}
+        if field_name in nested_string_arrays:
+            return {
+                "type": "array",
+                "items": {"type": "array", "items": {"type": "string"}},
+            }
+        if field_name == "edges":
+            return {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "edgeId": {"type": "string"},
+                        "amount": {"type": "integer"},
+                    },
+                    "required": ["edgeId", "amount"],
+                    "additionalProperties": False,
+                },
+            }
+        return {"type": "array", "items": {"type": "string"}}
+    if wire_type == "object":
+        # Native response maps are keyed by live entity / requirement ids. Keep their values
+        # unconstrained here and let Commander Gym + Argentum validate the exact native payload.
+        return {"type": "object"}
+    return {}
+
+
+def _response_format_for_observation(observation: Mapping[str, Any]) -> dict[str, Any]:
+    """Build a request-local Structured Outputs schema from the current Argentum choices."""
+
+    pending = observation.get("pendingDecision")
+    if isinstance(pending, Mapping) and pending.get("requiresStructuredResponse") is True:
+        spec = _structured_response_spec(pending)
+        if spec is not None:
+            response_type, required_fields = spec
+            properties: dict[str, Any] = {
+                "type": {"type": "string", "const": response_type},
+            }
+            for field_name, wire_type in required_fields.items():
+                properties[field_name] = _json_schema_for_wire_type(field_name, wire_type)
+            response_schema = {
+                "type": "object",
+                "properties": properties,
+                "required": ["type", *required_fields.keys()],
+                "additionalProperties": False,
+            }
+            # Arbitrary-key native maps cannot be represented in strict Structured Outputs
+            # without enumerating live entity ids as property names. Use schema guidance but keep
+            # local/native validation authoritative for those response classes.
+            strict = all(wire_type != "object" for wire_type in required_fields.values())
+            return {
+                "type": "json_schema",
+                "name": "commander_gym_decision",
+                "strict": strict,
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "channel": {"type": "string", "const": "decision"},
+                        "response": response_schema,
+                    },
+                    "required": ["channel", "response"],
+                    "additionalProperties": False,
+                },
+            }
+
+    legal = observation.get("legalActions")
+    semantic_ids = [
+        action.get("semanticId")
+        for action in legal
+        if isinstance(action, Mapping)
+        and isinstance(action.get("semanticId"), str)
+        and action.get("semanticId")
+    ] if isinstance(legal, list) else []
+    semantic_schema: dict[str, Any] = {"type": "string"}
+    if semantic_ids:
+        semantic_schema["enum"] = semantic_ids
+
+    return {
+        "type": "json_schema",
+        "name": "commander_gym_action",
+        "strict": False,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "channel": {"type": "string", "const": "action"},
+                "semanticId": semantic_schema,
+                "params": {
+                    "type": "object",
+                    "properties": {
+                        "attackers": {"type": "object"},
+                        "blockers": {"type": "object"},
+                        "targets": {"type": "array", "items": {"type": "string"}},
+                        "xValue": {"type": "integer"},
+                    },
+                    "additionalProperties": False,
+                },
+            },
+            "required": ["channel", "semanticId", "params"],
+            "additionalProperties": False,
+        },
+    }
+
+
 @dataclass
 class OpenAIResponsesPilot:
     """Concrete strategic ``ArtificialPlayer`` backed by OpenAI Responses.
@@ -304,10 +418,8 @@ class OpenAIResponsesPilot:
             "model": self.model,
             "instructions": self.instructions
             + (f"\n\nRun-specific strategy:\n{self.strategy}" if self.strategy else ""),
-            # The Responses JSON-object mode requires the user input itself to name
-            # JSON; mentioning it only in instructions is not sufficient.
             "input": base_input,
-            "text": {"format": {"type": "json_object"}},
+            "text": {"format": _response_format_for_observation(observation)},
             "store": False,
         }
 
