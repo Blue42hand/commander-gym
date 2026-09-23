@@ -162,6 +162,36 @@ class CertifiedNativeDecisionHandler:
                     declined=False,
                 )
 
+        if kind in ("ChooseTargetsDecision", "CHOOSE_TARGETS"):
+            if pending.get("canCancel") is not True:
+                requirements = pending.get("targetRequirements")
+                legal_targets = pending.get("legalTargets")
+                if isinstance(requirements, list) and isinstance(legal_targets, Mapping):
+                    selected_targets: dict[str, list[str]] = {}
+                    forced = bool(requirements)
+                    for requirement in requirements:
+                        if not isinstance(requirement, Mapping):
+                            forced = False
+                            break
+                        index = requirement.get("index")
+                        minimum = requirement.get("minTargets", 1)
+                        maximum = requirement.get("maxTargets", 1)
+                        if type(index) is not int or type(minimum) is not int or type(maximum) is not int:
+                            forced = False
+                            break
+                        options = legal_targets.get(str(index), legal_targets.get(index))
+                        if (
+                            not isinstance(options, list)
+                            or any(not isinstance(option, str) for option in options)
+                            or minimum != maximum
+                            or len(options) != minimum
+                        ):
+                            forced = False
+                            break
+                        selected_targets[str(index)] = list(options)
+                    if forced:
+                        return decision("TargetsResponse", selectedTargets=selected_targets)
+
         # Unique-choice cases: there is literally no strategic branch to preserve.
         if kind in ("ChooseNumberDecision", "CHOOSE_NUMBER"):
             lo, hi = pending.get("minValue"), pending.get("maxValue")
