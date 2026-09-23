@@ -12,6 +12,12 @@ The end product is not a benchmark score or a self-play system. It is an artific
 
 For now, **general Magic competence is the unified development objective**. Better sequencing, planning, threat assessment, resource management, deck understanding, and multiplayer judgment improve both competitive strength and casual play. Separate casual/competitive policy branches should wait until pilots become strong enough that those objectives meaningfully diverge.
 
+## Active foundation milestone
+
+**#77 — Pilot/data foundation before further game testing** is the current next goal.
+
+Ordinary two-Luna, human-vs-Luna, gameplay-skill, and mass self-play testing is deferred until #77's identity, Binding, evidence, learning, storage/deployment, private-instance, and per-seat Argentum profile gates are complete. Narrow smoke tests required to implement or qualify the foundation remain appropriate.
+
 ## Argentum relationship
 
 A useful shorthand is:
