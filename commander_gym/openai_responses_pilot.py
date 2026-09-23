@@ -228,8 +228,24 @@ _STRUCTURED_RESPONSE_SPECS: dict[str, tuple[str, dict[str, str]]] = {
     "SEARCH_LIBRARY": ("CardsSelectedResponse", {"selectedCards": "array"}),
     "ReorderLibraryDecision": ("OrderedResponse", {"orderedObjects": "array"}),
     "REORDER_LIBRARY": ("OrderedResponse", {"orderedObjects": "array"}),
-    "SelectManaSourcesDecision": ("ManaSourcesSelectedResponse", {}),
-    "SELECT_MANA_SOURCES": ("ManaSourcesSelectedResponse", {}),
+    "SelectManaSourcesDecision": (
+        "ManaSourcesSelectedResponse",
+        {
+            "selectedSources": "array",
+            "autoPay": "boolean",
+            "waterbendPermanents": "array",
+            "declined": "boolean",
+        },
+    ),
+    "SELECT_MANA_SOURCES": (
+        "ManaSourcesSelectedResponse",
+        {
+            "selectedSources": "array",
+            "autoPay": "boolean",
+            "waterbendPermanents": "array",
+            "declined": "boolean",
+        },
+    ),
     "CombatResolutionDecision": ("CombatResolutionResponse", {"edges": "array"}),
     "COMBAT_RESOLUTION": ("CombatResolutionResponse", {"edges": "array"}),
 }
@@ -310,16 +326,36 @@ def _response_format_for_observation(observation: Mapping[str, Any]) -> dict[str
             }
             for field_name, wire_type in required_fields.items():
                 properties[field_name] = _json_schema_for_wire_type(field_name, wire_type)
-            response_schema = {
+            primary_response_schema: dict[str, Any] = {
                 "type": "object",
                 "properties": properties,
                 "required": ["type", *required_fields.keys()],
                 "additionalProperties": False,
             }
-            # Arbitrary-key native maps cannot be represented in strict Structured Outputs
+            response_schema: dict[str, Any] = primary_response_schema
+            can_cancel = pending.get("canCancel") is True
+            if can_cancel:
+                response_schema = {
+                    "oneOf": [
+                        primary_response_schema,
+                        {
+                            "type": "object",
+                            "properties": {
+                                "type": {"type": "string", "const": "CancelDecisionResponse"},
+                            },
+                            "required": ["type"],
+                            "additionalProperties": False,
+                        },
+                    ]
+                }
+            # Arbitrary-key native maps and response unions stay non-strict; Commander Gym and
+            # Argentum still validate them fail-closed after generation.
             # without enumerating live entity ids as property names. Use schema guidance but keep
             # local/native validation authoritative for those response classes.
-            strict = all(wire_type != "object" for wire_type in required_fields.values())
+            strict = (
+                not can_cancel
+                and all(wire_type != "object" for wire_type in required_fields.values())
+            )
             return {
                 "type": "json_schema",
                 "name": "commander_gym_decision",
@@ -556,6 +592,11 @@ class OpenAIResponsesPilot:
         spec = _structured_response_spec(pending)
         if spec is not None:
             expected_type, required_fields = spec
+            cancel_allowed = pending.get("canCancel") is True
+            if response_type == "CancelDecisionResponse" and cancel_allowed:
+                submitted = dict(response)
+                submitted["decisionId"] = decision_id
+                return ArgentumDecisionChoice(response=submitted, metadata=dict(metadata))
             if response_type != expected_type:
                 raise OpenAIResponsesPilotError(
                     f"structured response for {pending.get('kind') or pending.get('type')} "
