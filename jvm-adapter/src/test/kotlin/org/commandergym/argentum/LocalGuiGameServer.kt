@@ -33,6 +33,7 @@ fun main() {
             "--game.ai.enabled=true",
             "--game.ai.mode=commander-gym",
             "--game.ai.thinking-delay-ms=0",
+            "--game.dev-endpoints.enabled=true",
             "--commander-gym.sidecar.url=$sidecarUrl",
             "--commander-gym.sidecar.token=$token",
             "--commander-gym.sidecar.timeout-ms=$sidecarTimeoutMs",
