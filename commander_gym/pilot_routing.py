@@ -159,6 +159,25 @@ class CertifiedNativeDecisionHandler:
                     waterbendPermanents=[],
                     declined=True,
                 )
+            # Mirrors Argentum SelectManaSourcesHandler.bestEffortResponse for mandatory
+            # payments when the solver has no direct auto-pay suggestion.
+            sources = pending.get("availableSources")
+            if isinstance(sources, list) and all(isinstance(source, Mapping) for source in sources):
+                selected_sources: list[str] = []
+                for source in sources:
+                    entity_id = source.get("entityId")
+                    if source.get("requiresTappingAnotherPermanent") is True:
+                        continue
+                    if not isinstance(entity_id, str):
+                        return None
+                    selected_sources.append(entity_id)
+                return decision(
+                    "ManaSourcesSelectedResponse",
+                    selectedSources=selected_sources,
+                    autoPay=False,
+                    waterbendPermanents=[],
+                    declined=False,
+                )
 
         # Unique-choice cases: there is literally no strategic branch to preserve.
         if kind in ("ChooseNumberDecision", "CHOOSE_NUMBER"):
