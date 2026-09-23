@@ -82,6 +82,14 @@ def _without_live_routing(observation: Mapping[str, Any]) -> dict[str, Any]:
     if isinstance(pending, Mapping):
         pending_copy = dict(pending)
         pending_copy.pop("decisionId", None)
+        if pending_copy.get("requiresStructuredResponse") is True:
+            spec = _structured_response_spec(pending_copy)
+            if spec is not None:
+                response_type, required_fields = spec
+                pending_copy["responseSpec"] = {
+                    "type": response_type,
+                    "requiredFields": required_fields,
+                }
         copied["pendingDecision"] = pending_copy
 
     return copied
@@ -173,6 +181,82 @@ def _require_string(value: Any, label: str) -> str:
     if not isinstance(value, str) or not value:
         raise OpenAIResponsesPilotError(f"{label} must be a non-empty string")
     return value
+
+
+# Native Argentum PendingDecision -> DecisionResponse wire contract. These are schema hints and
+# validation only: Argentum remains authoritative for whether the selected values are legal.
+# Gym-style enum kinds are accepted alongside native game-server serializer names so the same
+# strategic pilot can serve both transports.
+_STRUCTURED_RESPONSE_SPECS: dict[str, tuple[str, dict[str, str]]] = {
+    "ChooseTargetsDecision": ("TargetsResponse", {"selectedTargets": "object"}),
+    "CHOOSE_TARGETS": ("TargetsResponse", {"selectedTargets": "object"}),
+    "SelectCardsDecision": ("CardsSelectedResponse", {"selectedCards": "array"}),
+    "SELECT_CARDS": ("CardsSelectedResponse", {"selectedCards": "array"}),
+    "YesNoDecision": ("YesNoResponse", {"choice": "boolean"}),
+    "YES_NO": ("YesNoResponse", {"choice": "boolean"}),
+    "BatchYesNoDecision": (
+        "BatchYesNoResponse",
+        {"choice": "boolean", "applyToAll": "boolean"},
+    ),
+    "ChooseModeDecision": ("ModesChosenResponse", {"selectedModes": "array"}),
+    "CHOOSE_MODE": ("ModesChosenResponse", {"selectedModes": "array"}),
+    "ChooseColorDecision": ("ColorChosenResponse", {"color": "string"}),
+    "CHOOSE_COLOR": ("ColorChosenResponse", {"color": "string"}),
+    "ChooseNumberDecision": ("NumberChosenResponse", {"number": "integer"}),
+    "CHOOSE_NUMBER": ("NumberChosenResponse", {"number": "integer"}),
+    "DistributeDecision": ("DistributionResponse", {"distribution": "object"}),
+    "DISTRIBUTE": ("DistributionResponse", {"distribution": "object"}),
+    "OrderObjectsDecision": ("OrderedResponse", {"orderedObjects": "array"}),
+    "ORDER_OBJECTS": ("OrderedResponse", {"orderedObjects": "array"}),
+    "SplitPilesDecision": ("PilesSplitResponse", {"piles": "array"}),
+    "SPLIT_PILES": ("PilesSplitResponse", {"piles": "array"}),
+    "ChooseOptionDecision": ("OptionChosenResponse", {"optionIndex": "integer"}),
+    "CHOOSE_OPTION": ("OptionChosenResponse", {"optionIndex": "integer"}),
+    "ChooseReplacementDecision": (
+        "ReplacementChosenResponse",
+        {"fromIndex": "integer", "toIndex": "integer"},
+    ),
+    "CHOOSE_REPLACEMENT": (
+        "ReplacementChosenResponse",
+        {"fromIndex": "integer", "toIndex": "integer"},
+    ),
+    "BudgetModalDecision": ("BudgetModalResponse", {"selectedModeIndices": "array"}),
+    "BUDGET_MODAL": ("BudgetModalResponse", {"selectedModeIndices": "array"}),
+    "AssignDamageDecision": ("DamageAssignmentResponse", {"assignments": "object"}),
+    "ASSIGN_DAMAGE": ("DamageAssignmentResponse", {"assignments": "object"}),
+    "SearchLibraryDecision": ("CardsSelectedResponse", {"selectedCards": "array"}),
+    "SEARCH_LIBRARY": ("CardsSelectedResponse", {"selectedCards": "array"}),
+    "ReorderLibraryDecision": ("OrderedResponse", {"orderedObjects": "array"}),
+    "REORDER_LIBRARY": ("OrderedResponse", {"orderedObjects": "array"}),
+    "SelectManaSourcesDecision": ("ManaSourcesSelectedResponse", {}),
+    "SELECT_MANA_SOURCES": ("ManaSourcesSelectedResponse", {}),
+    "CombatResolutionDecision": ("CombatResolutionResponse", {"edges": "array"}),
+    "COMBAT_RESOLUTION": ("CombatResolutionResponse", {"edges": "array"}),
+}
+
+
+def _structured_response_spec(
+    pending: Mapping[str, Any],
+) -> tuple[str, dict[str, str]] | None:
+    for key in ("type", "kind"):
+        value = pending.get(key)
+        if isinstance(value, str) and value in _STRUCTURED_RESPONSE_SPECS:
+            return _STRUCTURED_RESPONSE_SPECS[value]
+    return None
+
+
+def _matches_wire_type(value: Any, wire_type: str) -> bool:
+    if wire_type == "boolean":
+        return type(value) is bool
+    if wire_type == "integer":
+        return type(value) is int
+    if wire_type == "string":
+        return isinstance(value, str)
+    if wire_type == "array":
+        return isinstance(value, list)
+    if wire_type == "object":
+        return isinstance(value, Mapping)
+    return False
 
 
 @dataclass
@@ -356,7 +440,24 @@ class OpenAIResponsesPilot:
             raise OpenAIResponsesPilotError(
                 "model-facing structured response must not invent live decisionId routing"
             )
-        _require_string(response.get("type"), "structured response type")
+        response_type = _require_string(response.get("type"), "structured response type")
+        spec = _structured_response_spec(pending)
+        if spec is not None:
+            expected_type, required_fields = spec
+            if response_type != expected_type:
+                raise OpenAIResponsesPilotError(
+                    f"structured response for {pending.get('kind') or pending.get('type')} "
+                    f"must use type {expected_type}, got {response_type}"
+                )
+            for field_name, wire_type in required_fields.items():
+                if field_name not in response:
+                    raise OpenAIResponsesPilotError(
+                        f"{expected_type} is missing required field {field_name}"
+                    )
+                if not _matches_wire_type(response[field_name], wire_type):
+                    raise OpenAIResponsesPilotError(
+                        f"{expected_type}.{field_name} must be {wire_type}"
+                    )
 
         submitted = dict(response)
         submitted["decisionId"] = decision_id
