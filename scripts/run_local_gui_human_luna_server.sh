@@ -35,6 +35,10 @@ if [[ -n "${COMMANDER_GYM_SIDECAR_PROVENANCE:-}" ]]; then
 fi
 
 cleanup() {
+  if [[ -n "${SERVER_PID:-}" ]]; then
+    kill "$SERVER_PID" 2>/dev/null || true
+    wait "$SERVER_PID" 2>/dev/null || true
+  fi
   if [[ -n "${SIDECAR_PID:-}" ]]; then
     kill "$SIDECAR_PID" 2>/dev/null || true
     wait "$SIDECAR_PID" 2>/dev/null || true
@@ -75,4 +79,7 @@ echo
 
 "$ARGENTUM_ENGINE_DIR/gradlew" \
   -p "$ROOT/jvm-adapter" \
-  runLocalGuiServer
+  runLocalGuiServer &
+SERVER_PID=$!
+
+wait "$SERVER_PID"
