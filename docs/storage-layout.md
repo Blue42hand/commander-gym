@@ -120,18 +120,42 @@ The renderer requires full 40-character git SHAs rather than branch names so a s
 
 The checked-in `deploy/systemd/*.service.example` files remain development-host examples. Portable installations should render units from `commander_gym.node_package` rather than treating `/srv/...` paths as architecture.
 
+## Clean-host preflight
+
+`commander_gym.node_preflight` checks whether the concrete host is ready to start a rendered node package before systemd is touched. It fails closed when:
+
+- `git`, `python3`, `java`, or (by default) `systemctl` is missing;
+- the Commander Gym or Argentum checkout is absent, at a different revision, or has tracked modifications;
+- required service entrypoints are missing or non-executable;
+- the gateway token file is missing, unreadable, or blank;
+- optional local-inference command/work-directory/environment-file prerequisites are unavailable;
+- configured storage routes cannot be initialized/written or fall below the free-space threshold.
+
+Run it against the same manifest used to render the package:
+
+```bash
+python -m commander_gym.node_preflight \
+  --config /etc/commander-gym/package.json \
+  --initialize-storage \
+  --min-free-bytes 107374182400
+```
+
+The result is JSON and does not include token contents. A nonzero exit means the host is not ready to start the package. `--no-systemd` is available only for render/test hosts that intentionally will not run the rendered systemd units; it does not make such a host a qualified production node.
+
+The preflight checks exact source provenance rather than treating an installed branch name as sufficient. This mirrors the runtime service guards, so a checkout that moves or becomes dirty after qualification will still refuse to start.
+
 ## Responsibility split with #53
 
-Issue #74 owns storage placement, resolution, durability boundaries, capacity/health checks, service compatibility checks, and portable packaging.
+Issue #74 owns storage placement, resolution, durability boundaries, capacity/health checks, service compatibility checks, portable packaging, and clean-host deployment qualification.
 
 Issue #53 owns the meaning and schema of run evidence, annotations, datasets, lineage, and per-run evidence accounting. Those records may use the storage primitives here, but the storage layer must not invent a competing evidence ontology.
 
 ## Next #74 slices
 
-After the layout, health checks, and first reproducible service package land, the remaining work includes:
+After the layout, health checks, reproducible service package, and clean-host preflight land, the remaining work includes:
 
 - route application in current writers/runners as their #5/#53 schemas stabilize;
 - optional accelerator-specific availability checks where a local provider adapter exposes them cleanly;
 - per-run byte accounting hooks supplied to #53;
-- installation/clean-host qualification of the rendered package;
+- installation/start qualification of the rendered package on a clean host;
 - the moved-data-root end-to-end qualification.
