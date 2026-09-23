@@ -86,6 +86,33 @@ class GameServerSeatAdapter:
         self._pilot = pilot
         self._player_id = player_id
         self._provenance_sink = provenance_sink
+        self._known_deck: dict[str, int] | None = None
+        self._deck_archetype: str | None = None
+
+    def set_deck_list(
+        self,
+        deck_list: Mapping[str, Any],
+        archetype: str | None = None,
+    ) -> None:
+        """Retain the deck composition Argentum explicitly gives this AI seat.
+
+        The list is card-name -> count only; it contains no library order and therefore adds
+        strategic deck knowledge without exposing hidden runtime state.
+        """
+
+        if not isinstance(deck_list, Mapping):
+            raise GameServerSeatError("deck list must be an object")
+        normalized: dict[str, int] = {}
+        for name, count in deck_list.items():
+            if not isinstance(name, str) or not name:
+                raise GameServerSeatError("deck-list card names must be non-empty strings")
+            if type(count) is not int or count <= 0:
+                raise GameServerSeatError("deck-list counts must be positive integers")
+            normalized[name] = count
+        if archetype is not None and (not isinstance(archetype, str) or not archetype.strip()):
+            raise GameServerSeatError("deck archetype must be a non-empty string when supplied")
+        self._known_deck = normalized
+        self._deck_archetype = archetype.strip() if isinstance(archetype, str) else None
 
     def choose_action(
         self,
@@ -255,7 +282,7 @@ class GameServerSeatAdapter:
             # legal actions; AiPlayerController must answer it with a native DecisionResponse.
             pending["requiresStructuredResponse"] = True
 
-        return {
+        observation = {
             "type": "GameServerSeat",
             "state": deepcopy(dict(state)),
             "legalActions": actions,
@@ -265,6 +292,12 @@ class GameServerSeatAdapter:
             "agentToAct": self._player_id,
             "terminated": False,
         }
+        if self._known_deck is not None:
+            observation["knownDeck"] = {
+                "cards": deepcopy(self._known_deck),
+                **({"archetype": self._deck_archetype} if self._deck_archetype else {}),
+            }
+        return observation
 
     def _record(
         self,
