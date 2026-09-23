@@ -108,17 +108,18 @@ class RoutingPilotTests(unittest.TestCase):
         self.assertEqual(choice.metadata["routing"]["path"], "strategic")
         self.assertFalse(choice.metadata["routing"]["strategicWakeAvoided"])
 
-    def test_structured_decision_always_escalates(self):
+    def test_meaningful_structured_decision_escalates(self):
         pending = {
             "decisionId": "routing-1",
-            "semanticId": "argentum-decision-v1:targets",
-            "kind": "CHOOSE_TARGETS",
+            "semanticId": "argentum-decision-v1:yes-no",
+            "kind": "YesNoDecision",
+            "type": "YesNoDecision",
             "requiresStructuredResponse": True,
         }
         response = {
-            "type": "ChooseTargetsResponse",
+            "type": "YesNoResponse",
             "decisionId": "routing-1",
-            "targets": ["target-1"],
+            "choice": True,
         }
         strategic = CountingPilot(ArgentumDecisionChoice(response=response))
         router = RoutingPilot(strategic)
@@ -128,6 +129,92 @@ class RoutingPilotTests(unittest.TestCase):
         self.assertEqual(strategic.calls, 1)
         self.assertEqual(choice.response, response)
         self.assertEqual(choice.metadata["routing"]["path"], "strategic")
+
+    def test_engine_default_damage_and_auto_pay_avoid_strategic_wakes(self):
+        cases = [
+            (
+                {
+                    "decisionId": "damage-1",
+                    "type": "AssignDamageDecision",
+                    "kind": "AssignDamageDecision",
+                    "requiresStructuredResponse": True,
+                    "defaultAssignments": {"blocker-1": 3},
+                },
+                {
+                    "type": "DamageAssignmentResponse",
+                    "decisionId": "damage-1",
+                    "assignments": {"blocker-1": 3},
+                },
+            ),
+            (
+                {
+                    "decisionId": "mana-1",
+                    "type": "SelectManaSourcesDecision",
+                    "kind": "SelectManaSourcesDecision",
+                    "requiresStructuredResponse": True,
+                    "autoPaySuggestion": ["island-1"],
+                    "canDecline": False,
+                },
+                {
+                    "type": "ManaSourcesSelectedResponse",
+                    "decisionId": "mana-1",
+                    "selectedSources": [],
+                    "autoPay": True,
+                    "waterbendPermanents": [],
+                    "declined": False,
+                },
+            ),
+        ]
+        for pending, expected in cases:
+            with self.subTest(kind=pending["kind"]):
+                strategic = CountingPilot(error=AssertionError("strategic pilot should not wake"))
+                choice = choose_for_observation(
+                    RoutingPilot(strategic),
+                    observation(None, pending=pending),
+                )
+                self.assertEqual(strategic.calls, 0)
+                self.assertEqual(choice.response, expected)
+                self.assertEqual(choice.metadata["routing"]["path"], "mechanical")
+
+    def test_unique_structured_choice_avoids_strategic_wake(self):
+        pending = {
+            "decisionId": "number-1",
+            "type": "ChooseNumberDecision",
+            "kind": "ChooseNumberDecision",
+            "requiresStructuredResponse": True,
+            "minValue": 4,
+            "maxValue": 4,
+        }
+        strategic = CountingPilot(error=AssertionError("strategic pilot should not wake"))
+
+        choice = choose_for_observation(
+            RoutingPilot(strategic),
+            observation(None, pending=pending),
+        )
+
+        self.assertEqual(strategic.calls, 0)
+        self.assertEqual(
+            choice.response,
+            {"type": "NumberChosenResponse", "decisionId": "number-1", "number": 4},
+        )
+        self.assertEqual(choice.metadata["routing"]["path"], "mechanical")
+
+    def test_no_choice_combat_avoids_strategic_wake(self):
+        attack = {
+            "actionId": 4,
+            "semanticId": "argentum-action-v1:attack-none",
+            "kind": "DeclareAttackers",
+            "description": "Declare attackers",
+            "affordable": True,
+            "validAttackers": [],
+        }
+        strategic = CountingPilot(error=AssertionError("strategic pilot should not wake"))
+
+        choice = choose_for_observation(RoutingPilot(strategic), observation(attack))
+
+        self.assertEqual(strategic.calls, 0)
+        self.assertEqual(choice.action_id, 4)
+        self.assertEqual(choice.metadata["routing"]["handler"], "no-choice-combat")
 
     def test_folded_single_decision_option_can_be_certified_mechanical(self):
         folded = {
