@@ -1,16 +1,16 @@
 """Bridge Argentum-native pilot execution traces into durable research records.
 
 The live pilot/execution contract keeps exact Argentum observations and routing handles
-because they are required to execute safely.  Durable training/evaluation records need
+because they are required to execute safely. Durable training/evaluation records need
 a different boundary: semantic action identity must survive equivalent runs, while
 per-step ``actionId`` / ``decisionId`` routing nonces must not become model features or
 Commander Gym's canonical action ontology.
 
 This module converts successfully executed *enumerated action* traces into the existing
-:class:`DecisionRecord` schema.  It copies Argentum-owned ``semanticId`` values directly
+:class:`DecisionRecord` schema. It copies Argentum-owned ``semanticId`` values directly
 for candidate/chosen identities, strips only live routing handles from the recorded
 observation/candidate payloads, and keeps those handles plus the exact submitted payload
-in metadata for diagnostics.  Complex structured decisions remain fail-closed until the
+in metadata for diagnostics. Complex structured decisions remain fail-closed until the
 durable record schema can represent a non-enumerable native response space without
 fabricating legal actions.
 """
@@ -20,6 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping
 
+from .identity import IdentityRef
 from .pilot_execution import PilotExecutionTrace
 from .records import (
     ActionRecord,
@@ -44,6 +45,7 @@ class PilotRecordContext:
     deck_id: str
     deck_version: str
     primer_version: str | None = None
+    binding: IdentityRef | None = None
     pilot_source: str = "commander-gym"
 
 
@@ -56,9 +58,9 @@ def _require_string(value: Any, label: str) -> str:
 def _without_live_routing(observation: Mapping[str, Any]) -> dict[str, Any]:
     """Copy one seat-authorized observation without ephemeral execution handles.
 
-    The rest of the Argentum wire shape is preserved verbatim.  In particular this does
+    The rest of the Argentum wire shape is preserved verbatim. In particular this does
     not reconstruct state, reinterpret entities, or create a Commander Gym observation
-    schema.  The raw unsanitized observation remains available on ``PilotExecutionTrace``
+    schema. The raw unsanitized observation remains available on ``PilotExecutionTrace``
     for execution diagnostics.
     """
 
@@ -215,6 +217,7 @@ def structured_decision_record_from_execution_trace(
         deck_id=context.deck_id,
         deck_version=context.deck_version,
         primer_version=context.primer_version,
+        binding=context.binding,
         outcome={"result_observation": _without_live_routing(result)},
         metadata={
             "channel": trace.channel,
@@ -241,10 +244,10 @@ def decision_record_from_execution_trace(
 ) -> DecisionRecord:
     """Convert one successful enumerated Argentum action trace into ``DecisionRecord``.
 
-    ``DecisionRecord`` v1 assumes an enumerable legal candidate set.  Argentum complex
+    ``DecisionRecord`` v1 assumes an enumerable legal candidate set. Argentum complex
     structured decisions intentionally expose no ``legalActions`` and accept a typed
     response payload instead, so representing one as a synthetic single "action" would
-    create exactly the parallel ontology #6 forbids.  Those traces therefore fail closed
+    create exactly the parallel ontology #6 forbids. Those traces therefore fail closed
     here until the durable record schema grows a native structured-response channel.
     """
 
@@ -307,6 +310,7 @@ def decision_record_from_execution_trace(
         deck_id=context.deck_id,
         deck_version=context.deck_version,
         primer_version=context.primer_version,
+        binding=context.binding,
         outcome={"result_observation": _without_live_routing(result)},
         metadata=metadata,
     )

@@ -126,7 +126,7 @@ def _seat_name(resolved: ResolvedSeatBinding) -> str:
 
 
 def _pilot_config(resolved: ResolvedSeatBinding) -> dict[str, Any]:
-    """Keep exact canonical identity in existing run metadata until #53 envelopes it."""
+    """Keep exact component identity in diagnostic run metadata."""
 
     return {
         "source": "canonical-binding-v1",
@@ -210,6 +210,7 @@ def build_binding_launch_plan(
                     if seat_binding.deck_knowledge is not None
                     else None
                 ),
+                binding=seat_binding.binding,
                 pilot_config=_pilot_config(seat_binding),
             )
         )
