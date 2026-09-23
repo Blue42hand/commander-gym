@@ -236,11 +236,30 @@ class GameServerSeatAdapter:
         if any(not isinstance(entry, str) for entry in recent_game_log):
             raise GameServerSeatError("recent game log entries must be strings")
 
+        pending = None
+        if pending_decision is not None:
+            pending = deepcopy(dict(pending_decision))
+            # AiPlayerController receives Argentum's native PendingDecision JSON, while the
+            # core ArtificialPlayer contract follows the Gym observation vocabulary. Keep the
+            # native fields for model context, but add the stable aliases/routing metadata the
+            # strategic pilot validates before it will return a DecisionResponse.
+            if "decisionId" not in pending:
+                native_id = pending.get("id")
+                if isinstance(native_id, str) and native_id:
+                    pending["decisionId"] = native_id
+            if "kind" not in pending:
+                native_type = pending.get("type")
+                if isinstance(native_type, str) and native_type:
+                    pending["kind"] = native_type
+            # On the game-server seam a non-null PendingDecision is not folded into synthetic
+            # legal actions; AiPlayerController must answer it with a native DecisionResponse.
+            pending["requiresStructuredResponse"] = True
+
         return {
             "type": "GameServerSeat",
             "state": deepcopy(dict(state)),
             "legalActions": actions,
-            "pendingDecision": deepcopy(dict(pending_decision)) if pending_decision else None,
+            "pendingDecision": pending,
             "recentGameLog": list(recent_game_log),
             "perspectivePlayerId": self._player_id,
             "agentToAct": self._player_id,
