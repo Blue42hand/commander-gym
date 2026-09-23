@@ -337,7 +337,7 @@ def _response_format_for_observation(observation: Mapping[str, Any]) -> dict[str
             can_cancel = pending.get("canCancel") is True
             if can_cancel:
                 response_schema = {
-                    "oneOf": [
+                    "anyOf": [
                         primary_response_schema,
                         {
                             "type": "object",
