@@ -73,6 +73,6 @@ echo "  cd $ARGENTUM_ENGINE_DIR && just client"
 echo "Then open http://localhost:5173 and use the normal Play vs AI / lobby flow."
 echo
 
-exec "$ARGENTUM_ENGINE_DIR/gradlew" \
+"$ARGENTUM_ENGINE_DIR/gradlew" \
   -p "$ROOT/jvm-adapter" \
   runLocalGuiServer
