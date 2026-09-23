@@ -1,11 +1,11 @@
 """Deterministic dataset export from durable Commander Gym run evidence.
 
 The exporter consumes already-recorded Commander Gym evidence; it does not inspect or
-reconstruct authoritative game state.  Dataset rows explicitly separate model-facing
+reconstruct authoritative game state. Dataset rows explicitly separate model-facing
 inputs from targets and provenance so chosen actions, outcomes, diagnostic metadata,
 and private package identity are not silently mixed into the input feature surface.
 
-Actual run artifacts may contain private deck identities and seat observations.  This
+Actual run artifacts may contain private deck identities and seat observations. This
 module writes only to a caller-supplied local path and never publishes or uploads data.
 """
 
@@ -78,7 +78,7 @@ def _target_for_record(record: EvidenceRecord) -> dict[str, Any]:
 def _record_provenance(record: EvidenceRecord) -> dict[str, Any]:
     """Keep reproducibility/diagnostic fields outside the model-facing input."""
 
-    return {
+    provenance = {
         "game_id": record.game_id,
         "decision_id": record.decision_id,
         "record_schema_version": record.schema_version,
@@ -89,6 +89,9 @@ def _record_provenance(record: EvidenceRecord) -> dict[str, Any]:
         "outcome": record.outcome,
         "metadata": record.metadata,
     }
+    if record.binding is not None:
+        provenance["binding"] = record.binding.to_dict()
+    return provenance
 
 
 def build_run_dataset_rows(
@@ -100,14 +103,15 @@ def build_run_dataset_rows(
     """Build self-contained research rows from one validated run.
 
     The run's ``decision_ids`` list is treated as the authoritative ordered join to
-    the supplied durable decision records.  Export fails closed if a record is
-    missing, reordered, duplicated, belongs to another game, or overlaps a held-out
-    benchmark decision.
+    the supplied durable decision records. Export fails closed if a record is
+    missing, reordered, duplicated, belongs to another game, overlaps a held-out
+    benchmark decision, or disagrees with its run participant's canonical Binding.
     """
 
     if not isinstance(run, RunRecord):
         raise DatasetExportError("run must be a RunRecord")
     run.validate()
+    participants_by_seat = {participant.seat: participant for participant in run.participants}
 
     materialized = list(records)
     record_ids: list[str] = []
@@ -120,6 +124,25 @@ def build_run_dataset_rows(
                 f"decision {record.decision_id!r} belongs to game {record.game_id!r}, "
                 f"not run game {run.game_id!r}"
             )
+
+        participant = participants_by_seat.get(record.seat)
+        participant_binding = participant.binding if participant is not None else None
+        if record.binding is not None or participant_binding is not None:
+            if participant is None:
+                raise DatasetExportError(
+                    f"decision {record.decision_id!r} seat {record.seat} has Binding "
+                    "identity but no matching run participant"
+                )
+            if record.binding is None or participant_binding is None:
+                raise DatasetExportError(
+                    f"decision {record.decision_id!r} Binding presence does not match "
+                    f"run participant seat {record.seat}"
+                )
+            if record.binding != participant_binding:
+                raise DatasetExportError(
+                    f"decision {record.decision_id!r} Binding does not match "
+                    f"run participant seat {record.seat}"
+                )
 
     if len(record_ids) != len(set(record_ids)):
         raise DatasetExportError("dataset decision_ids must be unique")
@@ -171,7 +194,7 @@ def write_run_dataset_jsonl(
 ) -> None:
     """Atomically write one run as deterministic JSONL training/evaluation evidence.
 
-    ``benchmark_paths`` names held-out benchmark JSONL files.  Their decision IDs are
+    ``benchmark_paths`` names held-out benchmark JSONL files. Their decision IDs are
     checked before any destination file is replaced, so benchmark evidence cannot be
     silently re-ingested as training data through this export path.
     """
