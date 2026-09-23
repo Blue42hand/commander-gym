@@ -280,3 +280,43 @@ The intended deployment can colocate:
 Packaging should make moving that node between hosts an operational migration rather than an architecture change. Remote access/tunnels/VPNs are replaceable deployment infrastructure.
 
 See issues #5, #53, #73, and #74 for implementation tracking.
+
+
+## Loading a Binding into a game seat
+
+A Binding is not merely provenance recorded after a game. It is the **pre-game source of truth** for configuring an artificial seat.
+
+### Argentum Gym
+
+Commander Gym resolves each Binding before environment creation and derives both:
+
+- the exact Argentum player deck/commander configuration; and
+- the exact Commander Gym Pilot instance/configuration for that seat.
+
+A Gym pod should therefore be launchable from Binding IDs plus game-level settings such as seed/format. The runner must not accept an unrelated deck list and pilot configuration that happen to be assigned to the same seat.
+
+### Argentum game-server / GUI
+
+Argentum already treats AI deck choice as per-seat data. Its external AI controller selection is currently more global, so Commander Gym cannot yet carry one Binding cleanly into a GUI seat.
+
+The intended boundary is:
+
+```text
+Commander Gym Binding
+      |
+      +-- exact Deck ----------> Argentum per-seat deck configuration
+      |
+      +-- Pilot/Profile ID ----> Argentum per-seat external-controller profile
+      |
+      +-- DeckKnowledge -------> stays inside Commander Gym
+```
+
+Argentum should expose only a generic per-seat controller/profile seam. The profile identifier is opaque to Argentum; for the Commander Gym provider it is the Binding ID.
+
+When the host selects a Commander Gym Binding in the Argentum GUI, the user-facing operation should configure the bound deck and controller profile together. Argentum may retain deck and controller as separate generic internal axes, but a complete provider preset must not leave a startable half-updated seat.
+
+The Commander Gym provider/sidecar resolves the Binding, constructs the Pilot, supplies/validates the expected deck, and records the same Binding provenance used by Gym runs.
+
+Unknown/stale bindings or a deck mismatch fail closed rather than falling back to a generic pilot.
+
+Tracked by Commander Gym #76 and Argentum fork #196.
