@@ -108,3 +108,27 @@ provenance, or exposed to Luna.
 The next gate is an end-to-end normal multiplayer acceptance game with one human and
 three Luna-controlled seats, followed by packaging the same stack for the persistent
 server.
+
+
+## Automated qualification
+
+Manual browser play is no longer the primary way to discover basic policy-contract bugs.
+The current audit and qualification gate are documented in
+[`luna-game-server-contract-audit.md`](luna-game-server-contract-audit.md).
+
+For a bounded two-seat Luna debug run:
+
+```bash
+export OPENAI_API_KEY='...'
+bash scripts/run_two_luna_debug_game.sh
+```
+
+The script launches the normal game server/provider stack on free local ports, creates one
+fixed-deck AI-only game through Argentum's dev endpoint, and retains the server log plus
+private policy provenance. Its final `TWO_LUNA_DEBUG_RESULT` reports provider calls,
+validation retries, token/cache usage, certified mechanical wakes avoided, avoidable
+strategic wakes, communication failures, and conservative gameplay-review flags.
+
+The runner is only orchestration and reporting. Argentum remains responsible for game
+lifecycle, legal actions, decisions, state projection, action execution, and the terminal
+result.
