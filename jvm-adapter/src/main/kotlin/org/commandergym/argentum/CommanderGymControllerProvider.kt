@@ -103,6 +103,7 @@ class CommanderGymPlayerController(
                         POLICY_SCHEMA_SCOPE,
                     ),
                 )
+                put("parameterSpec", json.encodeToJsonElement(ActionParameterizer.spec(legal.action)))
             }
         })
         val policyDecision = pendingDecision?.let { pending ->
