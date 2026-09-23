@@ -16,6 +16,7 @@ class TwoLunaDebugReportTests(unittest.TestCase):
                     "perspectivePlayerId": "ai-a",
                     "terminated": False,
                     "pendingDecision": None,
+                    "knownDeck": {"cards": {"Island": 20}},
                     "legalActions": [],
                 },
                 "choice": {
@@ -48,6 +49,7 @@ class TwoLunaDebugReportTests(unittest.TestCase):
                         "requiresStructuredResponse": True,
                         "defaultAssignments": {"x": 2},
                     },
+                    "knownDeck": {"cards": {"Mountain": 20}},
                     "legalActions": [],
                 },
                 "choice": {
@@ -74,6 +76,8 @@ class TwoLunaDebugReportTests(unittest.TestCase):
             )
 
         self.assertTrue(summary["technicalQualified"])
+        self.assertTrue(summary["provenanceComplete"])
+        self.assertEqual(summary["policySeats"], ["ai-a", "ai-b"])
         self.assertEqual(summary["providerCalls"], 1)
         self.assertEqual(summary["strategicWakesAvoided"], 1)
         self.assertEqual(summary["inputTokens"], 20)
