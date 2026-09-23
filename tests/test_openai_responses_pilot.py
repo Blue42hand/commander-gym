@@ -139,7 +139,11 @@ class OpenAIResponsesPilotTests(unittest.TestCase):
             model_input["legalActions"][1]["semanticId"],
             "argentum-action-v1:attack",
         )
-        self.assertEqual(request["text"], {"format": {"type": "json_object"}})
+        self.assertEqual(request["text"]["format"]["type"], "json_schema")
+        self.assertEqual(
+            request["text"]["format"]["schema"]["properties"]["semanticId"]["enum"],
+            ["argentum-action-v1:pass", "argentum-action-v1:attack"],
+        )
         self.assertFalse(request["store"])
         self.assertEqual(choice.metadata["retryCount"], 0)
 
@@ -270,6 +274,12 @@ class OpenAIResponsesPilotTests(unittest.TestCase):
                 "requiredFields": {"choice": "boolean"},
             },
         )
+        decision_format = client.responses.calls[0]["text"]["format"]
+        self.assertEqual(decision_format["type"], "json_schema")
+        self.assertTrue(decision_format["strict"])
+        response_schema = decision_format["schema"]["properties"]["response"]
+        self.assertEqual(response_schema["properties"]["type"]["const"], "YesNoResponse")
+        self.assertEqual(response_schema["properties"]["choice"], {"type": "boolean"})
         self.assertIn(
             "must use type YesNoResponse",
             client.responses.calls[1]["input"],
