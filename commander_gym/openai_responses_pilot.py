@@ -82,6 +82,7 @@ def _without_live_routing(observation: Mapping[str, Any]) -> dict[str, Any]:
     if isinstance(pending, Mapping):
         pending_copy = dict(pending)
         pending_copy.pop("decisionId", None)
+        pending_copy.pop("id", None)
         if pending_copy.get("requiresStructuredResponse") is True:
             spec = _structured_response_spec(pending_copy)
             if spec is not None:
@@ -529,6 +530,93 @@ class OpenAIResponsesPilot:
             "OpenAI pilot output channel must be 'action' or 'decision'"
         )
 
+    @staticmethod
+    def _validate_action_params(
+        params: Mapping[str, Any],
+        selected: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        allowed = {"attackers", "blockers", "targets", "xValue"}
+        unexpected = set(params) - allowed
+        if unexpected:
+            raise OpenAIResponsesPilotError(
+                "OpenAI action params contain unsupported field(s): "
+                + ", ".join(sorted(unexpected))
+            )
+
+        normalized = dict(params)
+        attackers = normalized.get("attackers")
+        if attackers is not None and (
+            not isinstance(attackers, Mapping)
+            or any(not isinstance(k, str) or not isinstance(v, str) for k, v in attackers.items())
+        ):
+            raise OpenAIResponsesPilotError("ActionParams.attackers must map entity ids to entity ids")
+
+        blockers = normalized.get("blockers")
+        if blockers is not None:
+            if not isinstance(blockers, Mapping):
+                raise OpenAIResponsesPilotError(
+                    "ActionParams.blockers must map blocker ids to attacker-id arrays"
+                )
+            for key, value in blockers.items():
+                if (
+                    not isinstance(key, str)
+                    or not isinstance(value, list)
+                    or any(not isinstance(item, str) for item in value)
+                ):
+                    raise OpenAIResponsesPilotError(
+                        "ActionParams.blockers must map blocker ids to attacker-id arrays"
+                    )
+
+        targets = normalized.get("targets")
+        if targets is not None and (
+            not isinstance(targets, list)
+            or any(not isinstance(item, str) for item in targets)
+        ):
+            raise OpenAIResponsesPilotError("ActionParams.targets must be an entity-id array")
+
+        x_value = normalized.get("xValue")
+        if x_value is not None and type(x_value) is not int:
+            raise OpenAIResponsesPilotError("ActionParams.xValue must be an integer")
+
+        kind = selected.get("kind") or selected.get("actionType")
+        populated = {
+            key
+            for key, value in normalized.items()
+            if value not in (None, {}, [])
+        }
+        permitted_by_kind = {
+            "DeclareAttackers": {"attackers"},
+            "DeclareBlockers": {"blockers"},
+            "CastSpell": {"targets", "xValue"},
+            "ActivateAbility": {"targets", "xValue"},
+        }
+        permitted = permitted_by_kind.get(kind, set())
+        unusable = populated - permitted
+        if unusable:
+            raise OpenAIResponsesPilotError(
+                f"ActionParams {sorted(unusable)} are not applicable to {kind}"
+            )
+
+        if "attackers" in populated:
+            valid_attackers = selected.get("validAttackers")
+            valid_targets = selected.get("validAttackTargets")
+            if isinstance(valid_attackers, list) and any(k not in valid_attackers for k in attackers):
+                raise OpenAIResponsesPilotError("ActionParams.attackers contains an ineligible attacker")
+            if isinstance(valid_targets, list) and any(v not in valid_targets for v in attackers.values()):
+                raise OpenAIResponsesPilotError("ActionParams.attackers contains an invalid attack target")
+
+        if "blockers" in populated:
+            valid_blockers = selected.get("validBlockers")
+            if isinstance(valid_blockers, list) and any(k not in valid_blockers for k in blockers):
+                raise OpenAIResponsesPilotError("ActionParams.blockers contains an ineligible blocker")
+
+        if "xValue" in populated:
+            max_x = selected.get("maxAffordableX")
+            if x_value < 0 or (type(max_x) is int and x_value > max_x):
+                raise OpenAIResponsesPilotError("ActionParams.xValue is outside the affordable range")
+
+        return normalized
+
     def _action_choice(
         self,
         decision: Mapping[str, Any],
@@ -553,14 +641,16 @@ class OpenAIResponsesPilot:
                 f"selected semanticId {semantic_id!r} is not exactly one current "
                 "Argentum legal action"
             )
-        action_id = matches[0].get("actionId")
+        selected = matches[0]
+        action_id = selected.get("actionId")
         if type(action_id) is not int:
             raise OpenAIResponsesPilotError(
                 "selected Argentum legal action is missing integer actionId"
             )
+        normalized_params = self._validate_action_params(params, selected)
         return ArgentumActionChoice(
             action_id=action_id,
-            params=dict(params),
+            params=normalized_params,
             metadata=dict(metadata),
         )
 
