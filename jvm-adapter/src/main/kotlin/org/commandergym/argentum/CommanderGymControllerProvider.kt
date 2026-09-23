@@ -8,6 +8,7 @@ import com.wingedsheep.ai.llm.MulliganInfo
 import com.wingedsheep.engine.core.DecisionResponse
 import com.wingedsheep.engine.core.GameAction
 import com.wingedsheep.engine.core.PendingDecision
+import com.wingedsheep.engine.core.responseSpec
 import com.wingedsheep.engine.core.engineSerializersModule
 import com.wingedsheep.engine.provenance.SemanticFingerprint
 import com.wingedsheep.engine.view.ClientGameState
@@ -112,6 +113,7 @@ class CommanderGymPlayerController(
                     "semanticId",
                     SemanticFingerprint.forPendingDecision(pending, POLICY_SCHEMA_SCOPE),
                 )
+                put("responseSpec", json.encodeToJsonElement(pending.responseSpec()))
             }
         } ?: JsonNull
         val body = buildJsonObject {
