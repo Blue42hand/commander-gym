@@ -168,6 +168,22 @@ class GameServerSeatAdapter:
         raise GameServerSeatError("pilot returned an unsupported game-server response")
 
     def decide_mulligan(self, mulligan: Mapping[str, Any]) -> bool:
+        mulligan_count = mulligan.get("mulliganCount")
+        if type(mulligan_count) is int and mulligan_count >= 3:
+            observation = self._observation(
+                {"mulligan": deepcopy(dict(mulligan))}, (), None, ()
+            )
+            metadata = {
+                "routing": {
+                    "path": "mechanical",
+                    "handler": "mulligan-floor",
+                    "handlerVersion": "1",
+                    "strategicWakeAvoided": True,
+                }
+            }
+            self._record("decideMulligan", observation, {"keep": True, "metadata": metadata})
+            return True
+
         actions = [
             {
                 "action": {"type": "KeepHand", "playerId": self._player_id},
@@ -197,6 +213,31 @@ class GameServerSeatAdapter:
         return keep
 
     def choose_bottom_cards(self, bottom: Mapping[str, Any]) -> list[Any]:
+        required = bottom.get("cardsToPutOnBottom")
+        hand = bottom.get("hand")
+        if type(required) is int and isinstance(hand, list):
+            forced: list[Any] | None = None
+            if required == 0:
+                forced = []
+            elif required == len(hand):
+                forced = list(hand)
+            if forced is not None:
+                observation = self._observation({}, (), None, ())
+                metadata = {
+                    "routing": {
+                        "path": "mechanical",
+                        "handler": "forced-bottom-cards",
+                        "handlerVersion": "1",
+                        "strategicWakeAvoided": True,
+                    }
+                }
+                self._record(
+                    "chooseBottomCards",
+                    observation,
+                    {"selectedCards": forced, "metadata": metadata},
+                )
+                return forced
+
         decision_id = bottom.get("decisionId", f"bottom-cards:{self._player_id}")
         if not isinstance(decision_id, str) or not decision_id:
             raise GameServerSeatError("bottom-cards callback decisionId must be a string when supplied")
