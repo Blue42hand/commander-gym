@@ -368,6 +368,68 @@ class OpenAIResponsesPilotTests(unittest.TestCase):
         self.assertEqual(choice.metadata["retryCount"], 1)
         self.assertIn("unsupported field", client.responses.calls[1]["input"])
 
+    def test_structured_card_selection_is_constrained_to_current_options(self):
+        observation = structured_observation()
+        observation["pendingDecision"] = {
+            "decisionId": "routing-select-1",
+            "type": "SelectCardsDecision",
+            "kind": "SelectCardsDecision",
+            "requiresStructuredResponse": True,
+            "options": ["card-a"],
+            "minSelections": 0,
+            "maxSelections": 1,
+            "responseSpec": {
+                "responseType": "CardsSelectedResponse",
+                "requiredFields": {"selectedCards": "ENTITY_ID_ARRAY"},
+                "cancelAllowed": False,
+            },
+        }
+        client = FakeClient(
+            [
+                FakeResponse(
+                    json.dumps(
+                        {
+                            "channel": "decision",
+                            "response": {
+                                "type": "CardsSelectedResponse",
+                                "selectedCards": ["invented-card"],
+                            },
+                        }
+                    )
+                ),
+                FakeResponse(
+                    json.dumps(
+                        {
+                            "channel": "decision",
+                            "response": {
+                                "type": "CardsSelectedResponse",
+                                "selectedCards": ["card-a"],
+                            },
+                        }
+                    )
+                ),
+            ]
+        )
+        pilot = OpenAIResponsesPilot(client=client, model="gpt-test")
+
+        choice = choose_for_observation(pilot, observation)
+
+        self.assertEqual(
+            choice.response,
+            {
+                "type": "CardsSelectedResponse",
+                "selectedCards": ["card-a"],
+                "decisionId": "routing-select-1",
+            },
+        )
+        self.assertEqual(choice.metadata["retryCount"], 1)
+        first_format = client.responses.calls[0]["text"]["format"]
+        item_schema = first_format["schema"]["properties"]["response"]["properties"][
+            "selectedCards"
+        ]["items"]
+        self.assertEqual(item_schema["enum"], ["card-a"])
+        self.assertIn("outside current options", client.responses.calls[1]["input"])
+
     def test_unknown_semantic_id_fails_closed(self):
         client = FakeClient(
             FakeResponse(
