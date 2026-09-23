@@ -190,6 +190,8 @@ def _summarize(
     input_tokens = 0
     output_tokens = 0
     cached_input_tokens = 0
+    provider_wall_time_ms = 0.0
+    max_provider_wall_time_ms = 0.0
 
     for record in records:
         metadata = _metadata(record)
@@ -198,6 +200,10 @@ def _summarize(
             routes[str(routing.get("path", "unknown"))] += 1
         if metadata.get("provider") == "openai":
             provider_calls += 1
+            wall_time = metadata.get("providerWallTimeMs")
+            if isinstance(wall_time, (int, float)) and not isinstance(wall_time, bool):
+                provider_wall_time_ms += float(wall_time)
+                max_provider_wall_time_ms = max(max_provider_wall_time_ms, float(wall_time))
             retry = metadata.get("retryCount")
             if type(retry) is int:
                 retries += retry
@@ -260,7 +266,10 @@ def _summarize(
         "callbacks": dict(callbacks),
         "routing": dict(routes),
         "providerCalls": provider_calls,
+        "providerRequests": provider_calls + retries,
         "validationRetries": retries,
+        "providerWallTimeMs": round(provider_wall_time_ms, 3),
+        "maxProviderWallTimeMs": round(max_provider_wall_time_ms, 3),
         "inputTokens": input_tokens,
         "cachedInputTokens": cached_input_tokens,
         "outputTokens": output_tokens,
