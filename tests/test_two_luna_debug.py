@@ -81,6 +81,8 @@ class TwoLunaDebugReportTests(unittest.TestCase):
         self.assertEqual(summary["policySeats"], ["ai-a", "ai-b"])
         self.assertEqual(summary["providerCalls"], 1)
         self.assertEqual(summary["strategicWakesAvoided"], 1)
+        self.assertEqual(summary["strategicByKind"], {"chooseAction": 1})
+        self.assertEqual(summary["mechanicalByHandler"], {"certified-native-decision": 1})
         self.assertEqual(summary["inputTokens"], 20)
         self.assertEqual(summary["cachedInputTokens"], 8)
         self.assertEqual(summary["outputTokens"], 4)
