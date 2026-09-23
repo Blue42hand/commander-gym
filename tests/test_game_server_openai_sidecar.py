@@ -265,6 +265,13 @@ class OpenAIGameServerSidecarTests(unittest.TestCase):
         self.assertNotIn("decisionId", pending)
         self.assertEqual(pending["kind"], "SelectCardsDecision")
         self.assertTrue(pending["requiresStructuredResponse"])
+        self.assertEqual(
+            pending["responseSpec"],
+            {
+                "type": "CardsSelectedResponse",
+                "requiredFields": {"selectedCards": "array"},
+            },
+        )
 
     def test_jsonl_provenance_is_tagged_with_the_argentum_player_id(self):
         with tempfile.TemporaryDirectory() as directory:
