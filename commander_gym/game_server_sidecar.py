@@ -28,6 +28,7 @@ _CALLBACK_PATHS = {
     "/v1/choose-action": "chooseAction",
     "/v1/decide-mulligan": "decideMulligan",
     "/v1/choose-bottom-cards": "chooseBottomCards",
+    "/v1/set-deck-list": "setDeckList",
 }
 
 SeatFactory = Callable[[str], GameServerSeatAdapter]
@@ -152,6 +153,12 @@ class GameServerSidecarHandler(BaseHTTPRequestHandler):
     ) -> Mapping[str, Any]:
         if "snapshot" in request:
             raise ValueError("trusted runtime snapshot is forbidden at the policy boundary")
+        if callback == "setDeckList":
+            self._require_keys(request, {"playerId", "deckList", "archetype"})
+            deck_list = request.get("deckList")
+            archetype = request.get("archetype")
+            adapter.set_deck_list(deck_list, archetype)
+            return {"ok": True}
         if callback == "chooseAction":
             self._require_keys(
                 request,
