@@ -9,11 +9,40 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Mapping, Optional
 
+from .identity import IdentityError, IdentityRef
+
 SCHEMA_VERSION = 1
 
 
 class RecordValidationError(ValueError):
     """Raised when a training/evaluation record is structurally invalid."""
+
+
+def _binding_ref_from_value(value: Any) -> Optional[IdentityRef]:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise RecordValidationError("binding must be an object or null")
+    try:
+        binding = IdentityRef.from_dict(value)
+    except IdentityError as exc:
+        raise RecordValidationError(f"invalid binding identity: {exc}") from exc
+    if binding.artifact_type != "binding":
+        raise RecordValidationError("binding must reference artifact_type='binding'")
+    return binding
+
+
+def _validate_binding_ref(binding: Optional[IdentityRef]) -> None:
+    if binding is None:
+        return
+    if not isinstance(binding, IdentityRef):
+        raise RecordValidationError("binding must be IdentityRef or null")
+    try:
+        binding.validate()
+    except IdentityError as exc:
+        raise RecordValidationError(f"invalid binding identity: {exc}") from exc
+    if binding.artifact_type != "binding":
+        raise RecordValidationError("binding must reference artifact_type='binding'")
 
 
 @dataclass(frozen=True)
@@ -74,6 +103,7 @@ class DecisionRecord:
     deck_id: str
     deck_version: str
     primer_version: Optional[str] = None
+    binding: Optional[IdentityRef] = None
     outcome: Optional[Dict[str, Any]] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
     schema_version: int = SCHEMA_VERSION
@@ -105,6 +135,7 @@ class DecisionRecord:
             raise RecordValidationError("legal action ids must be unique")
         if self.chosen_action_id not in set(action_ids):
             raise RecordValidationError("chosen_action_id must reference a legal action")
+        _validate_binding_ref(self.binding)
         if self.outcome is not None and not isinstance(self.outcome, dict):
             raise RecordValidationError("outcome must be an object or null")
         if not isinstance(self.metadata, dict):
@@ -112,7 +143,10 @@ class DecisionRecord:
 
     def to_dict(self) -> Dict[str, Any]:
         self.validate()
-        return asdict(self)
+        result = asdict(self)
+        if self.binding is None:
+            result.pop("binding", None)
+        return result
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "DecisionRecord":
@@ -141,6 +175,7 @@ class DecisionRecord:
             deck_id=value.get("deck_id"),
             deck_version=value.get("deck_version"),
             primer_version=value.get("primer_version"),
+            binding=_binding_ref_from_value(value.get("binding")),
             outcome=value.get("outcome"),
             metadata=value.get("metadata", {}),
         )
@@ -164,6 +199,7 @@ class StructuredDecisionRecord:
     deck_id: str
     deck_version: str
     primer_version: Optional[str] = None
+    binding: Optional[IdentityRef] = None
     outcome: Optional[Dict[str, Any]] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
     schema_version: int = SCHEMA_VERSION
@@ -194,6 +230,7 @@ class StructuredDecisionRecord:
             raise RecordValidationError(
                 "durable structured response must not contain live decisionId routing"
             )
+        _validate_binding_ref(self.binding)
         if self.outcome is not None and not isinstance(self.outcome, dict):
             raise RecordValidationError("outcome must be an object or null")
         if not isinstance(self.metadata, dict):
@@ -201,7 +238,10 @@ class StructuredDecisionRecord:
 
     def to_dict(self) -> Dict[str, Any]:
         self.validate()
-        return asdict(self)
+        result = asdict(self)
+        if self.binding is None:
+            result.pop("binding", None)
+        return result
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "StructuredDecisionRecord":
@@ -227,6 +267,7 @@ class StructuredDecisionRecord:
             deck_id=value.get("deck_id"),
             deck_version=value.get("deck_version"),
             primer_version=value.get("primer_version"),
+            binding=_binding_ref_from_value(value.get("binding")),
             outcome=value.get("outcome"),
             metadata=value.get("metadata", {}),
         )
