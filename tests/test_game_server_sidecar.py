@@ -83,6 +83,33 @@ class GameServerSidecarTests(unittest.TestCase):
         self.assertEqual(self.pilot.observations[0]["state"], body["state"])
         self.assertNotIn("snapshot", self.pilot.observations[0])
 
+    def test_set_deck_list_populates_later_policy_context_without_model_call(self):
+        status, response = self.post(
+            "/v1/set-deck-list",
+            {
+                "playerId": "ai",
+                "deckList": {"Island": 20, "Opt": 4},
+                "archetype": "tempo",
+            },
+        )
+        self.assertEqual((status, response), (200, {"ok": True}))
+        self.assertEqual(self.pilot.observations, [])
+
+        body = {
+            "playerId": "ai",
+            "state": {"viewingPlayerId": "ai"},
+            "legalActions": [
+                {"actionType": "PassPriority", "action": {"type": "PassPriority", "playerId": "ai"}}
+            ],
+            "pendingDecision": None,
+            "recentGameLog": [],
+        }
+        self.assertEqual(self.post("/v1/choose-action", body)[0], 200)
+        self.assertEqual(
+            self.pilot.observations[0]["knownDeck"],
+            {"cards": {"Island": 20, "Opt": 4}, "archetype": "tempo"},
+        )
+
     def test_parameterized_action_round_trip_defers_completion_to_native_edge(self):
         self.server.seats["ai"] = GameServerSeatAdapter(
             ScriptedPilot(
