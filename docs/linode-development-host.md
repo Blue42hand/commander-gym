@@ -254,3 +254,12 @@ The dedicated `argentum-relay-control` branch and the old `ARGENTUM_GATEWAY_URL`
 6. `systemctl daemon-reload`.
 7. Start the service and verify health/status/schema.
 8. Keep development changes in worktrees, not the runtime checkout.
+
+
+## Portability status
+
+This document describes the current Linode development host, not a permanent hosting requirement.
+
+Commander Gym's durable identities, pilot/data contracts and storage layout must not depend on Linode-specific paths, systemd unit names, Cloudflare, Tailscale, or this host. The portable-node work in #74 will make storage roots and service deployment configurable so the current host can later be replaced by a local network-accessible server without changing game/model provenance.
+
+When the portable deployment is qualified, retain this document only as historical/current-host operations material; do not let it define application architecture.
