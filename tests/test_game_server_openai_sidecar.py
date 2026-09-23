@@ -260,7 +260,9 @@ class OpenAIGameServerSidecarTests(unittest.TestCase):
         request = client.responses.calls[0]
         model_input = json.loads(request["input"].split("\n", 1)[1])
         pending = model_input["pendingDecision"]
-        self.assertEqual(pending["decisionId"], "r2")
+        # Live routing ids are deliberately stripped before model input. The adapter keeps
+        # decisionId only in the local observation so it can inject it into the native response.
+        self.assertNotIn("decisionId", pending)
         self.assertEqual(pending["kind"], "SelectCardsDecision")
         self.assertTrue(pending["requiresStructuredResponse"])
 
