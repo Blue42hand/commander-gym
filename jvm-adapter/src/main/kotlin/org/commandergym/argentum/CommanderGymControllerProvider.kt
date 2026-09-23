@@ -162,7 +162,15 @@ class CommanderGymPlayerController(
         return ids.map { EntityId.of(it.jsonPrimitive.content) }
     }
 
-    override fun setDeckList(deckList: Map<String, Int>, archetype: String?) = Unit
+    override fun setDeckList(deckList: Map<String, Int>, archetype: String?) {
+        post("set-deck-list", buildJsonObject {
+            put("playerId", playerId.value)
+            put("deckList", buildJsonObject {
+                deckList.forEach { (name, count) -> put(name, count) }
+            })
+            archetype?.let { put("archetype", it) }
+        })
+    }
     override fun chooseDraftPick(pack: List<CardSummary>, pickedSoFar: List<CardSummary>, packNumber: Int, pickNumber: Int, picksRequired: Int, passDirection: String): List<String> =
         error("Commander Gym game-server adapter does not support draft callbacks")
     override fun chooseWinstonAction(pileCards: List<CardSummary>, pileIndex: Int, pileSizes: List<Int>, pickedSoFar: List<CardSummary>): Boolean =
