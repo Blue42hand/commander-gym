@@ -73,6 +73,7 @@ class TwoLunaDebugReportTests(unittest.TestCase):
                 game_ids=["game-1"],
                 max_turn=8,
                 log_path=log,
+                wall_time_seconds=12.5,
             )
 
         self.assertTrue(summary["technicalQualified"])
@@ -83,6 +84,7 @@ class TwoLunaDebugReportTests(unittest.TestCase):
         self.assertEqual(summary["inputTokens"], 20)
         self.assertEqual(summary["cachedInputTokens"], 8)
         self.assertEqual(summary["outputTokens"], 4)
+        self.assertEqual(summary["wallTimeSeconds"], 12.5)
         self.assertEqual(summary["communicationErrors"], [])
         self.assertEqual(summary["avoidableStrategicWakes"], [])
 
