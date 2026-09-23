@@ -252,14 +252,51 @@ _STRUCTURED_RESPONSE_SPECS: dict[str, tuple[str, dict[str, str]]] = {
 }
 
 
+_ENGINE_FIELD_KIND_TO_WIRE_TYPE = {
+    "BOOLEAN": "boolean",
+    "INTEGER": "integer",
+    "STRING": "string",
+    "ENTITY_ID_ARRAY": "array",
+    "INTEGER_ARRAY": "array",
+    "ENTITY_ID_ARRAY_ARRAY": "array",
+    "MAP": "object",
+    "DAMAGE_EDGE_AMOUNT_ARRAY": "array",
+}
+
+
 def _structured_response_spec(
     pending: Mapping[str, Any],
 ) -> tuple[str, dict[str, str]] | None:
+    explicit = pending.get("responseSpec")
+    if isinstance(explicit, Mapping):
+        response_type = explicit.get("responseType")
+        fields = explicit.get("requiredFields")
+        if isinstance(response_type, str) and response_type and isinstance(fields, Mapping):
+            converted: dict[str, str] = {}
+            for field_name, field_kind in fields.items():
+                if not isinstance(field_name, str) or not isinstance(field_kind, str):
+                    return None
+                wire_type = _ENGINE_FIELD_KIND_TO_WIRE_TYPE.get(field_kind)
+                if wire_type is None:
+                    return None
+                converted[field_name] = wire_type
+            return response_type, converted
+
+    # Compatibility fallback for Gym observations and older Argentum game-server builds that
+    # predate PendingDecision.responseSpec(). The normal game-server path should supply the
+    # Argentum-owned responseSpec once that generic contract is available.
     for key in ("type", "kind"):
         value = pending.get(key)
         if isinstance(value, str) and value in _STRUCTURED_RESPONSE_SPECS:
             return _STRUCTURED_RESPONSE_SPECS[value]
     return None
+
+
+def _decision_cancel_allowed(pending: Mapping[str, Any]) -> bool:
+    explicit = pending.get("responseSpec")
+    if isinstance(explicit, Mapping) and explicit.get("cancelAllowed") is True:
+        return True
+    return pending.get("canCancel") is True
 
 
 def _matches_wire_type(value: Any, wire_type: str) -> bool:
@@ -334,7 +371,7 @@ def _response_format_for_observation(observation: Mapping[str, Any]) -> dict[str
                 "additionalProperties": False,
             }
             response_schema: dict[str, Any] = primary_response_schema
-            can_cancel = pending.get("canCancel") is True
+            can_cancel = _decision_cancel_allowed(pending)
             if can_cancel:
                 response_schema = {
                     "anyOf": [
@@ -682,7 +719,7 @@ class OpenAIResponsesPilot:
         spec = _structured_response_spec(pending)
         if spec is not None:
             expected_type, required_fields = spec
-            cancel_allowed = pending.get("canCancel") is True
+            cancel_allowed = _decision_cancel_allowed(pending)
             if response_type == "CancelDecisionResponse" and cancel_allowed:
                 submitted = dict(response)
                 submitted["decisionId"] = decision_id
