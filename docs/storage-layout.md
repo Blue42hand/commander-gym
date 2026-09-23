@@ -93,6 +93,33 @@ The model probe deliberately does **not** inspect model identities, choose a pro
 
 The storage and service doctors are separate so a node can initialize/check disk placement without requiring live network services, and service compatibility can be checked without mutating storage.
 
+## Reproducible node package
+
+`commander_gym.node_package` renders the service scaffolding for one concrete host from a small JSON deployment manifest. The manifest pins the exact Commander Gym and Argentum git revisions, selects the service account, points at the gateway credential, supplies the portable storage layout, and may optionally describe a local inference process.
+
+Start from `deploy/node/package.example.json`, replace the example revisions and paths, then render a package directory:
+
+```bash
+python -m commander_gym.node_package \
+  --config /etc/commander-gym/package.json \
+  --output /etc/commander-gym/rendered
+```
+
+The rendered directory contains:
+
+- `node-package.json` — normalized deployment metadata with exact source revisions;
+- `storage-layout.json` — the physical storage placement supplied to Commander Gym services;
+- `run-argentum-gym.sh` — a pinned Argentum service runner;
+- `run-commander-gym-gateway.sh` — a pinned Commander Gym gateway runner;
+- `systemd/argentum-gym.service` and `systemd/commander-gym-gateway.service`;
+- when `local_inference` is configured, a provider-neutral local inference runner and systemd unit.
+
+Rendering is deterministic for the same config and output location. Checkout roots, data roots, mount points, service accounts, ports, and optional local inference commands are deployment choices rather than Commander Gym artifact identity. A node moved to a new host/path may render new service scaffolding without rewriting Deck/Binding/run/dataset/model identities or content-addressed artifact IDs.
+
+The renderer requires full 40-character git SHAs rather than branch names so a service package cannot silently drift when a checkout moves. Existing source-side service runners still fail closed if the checked-out revision does not match the rendered package.
+
+The checked-in `deploy/systemd/*.service.example` files remain development-host examples. Portable installations should render units from `commander_gym.node_package` rather than treating `/srv/...` paths as architecture.
+
 ## Responsibility split with #53
 
 Issue #74 owns storage placement, resolution, durability boundaries, capacity/health checks, service compatibility checks, and portable packaging.
@@ -101,10 +128,10 @@ Issue #53 owns the meaning and schema of run evidence, annotations, datasets, li
 
 ## Next #74 slices
 
-After the layout, storage-health, and service-compatibility primitives land, the remaining work includes:
+After the layout, health checks, and first reproducible service package land, the remaining work includes:
 
 - route application in current writers/runners as their #5/#53 schemas stabilize;
-- optional local-inference/accelerator-specific availability checks where a provider adapter exposes them cleanly;
+- optional accelerator-specific availability checks where a local provider adapter exposes them cleanly;
 - per-run byte accounting hooks supplied to #53;
-- reproducible node packaging/service scaffolding for Argentum + Commander Gym with optional local inference;
-- a clean-host and moved-data-root end-to-end qualification.
+- installation/clean-host qualification of the rendered package;
+- the moved-data-root end-to-end qualification.

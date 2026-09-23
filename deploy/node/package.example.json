@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "service_user": "commander",
+  "service_group": "commander",
+  "commander_gym": {
+    "root": "/opt/commander-gym",
+    "revision": "1111111111111111111111111111111111111111"
+  },
+  "argentum": {
+    "root": "/opt/argentum-engine",
+    "revision": "2222222222222222222222222222222222222222"
+  },
+  "gateway_token_file": "/etc/commander-gym/gateway.token",
+  "gateway": {
+    "bind": "127.0.0.1",
+    "port": 8082,
+    "upstream": "http://127.0.0.1:8081"
+  },
+  "storage": {
+    "root": "/var/lib/commander-gym",
+    "routes": {
+      "models": "/mnt/commander-gym-models",
+      "cache": "/var/cache/commander-gym"
+    }
+  }
+}
