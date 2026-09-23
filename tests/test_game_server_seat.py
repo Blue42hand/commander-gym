@@ -99,7 +99,7 @@ class GameServerSeatAdapterTests(unittest.TestCase):
             "prompt": "Pay one life?",
         }
         choice = ArgentumDecisionChoice(
-            {"type": "YesNoResponse", "decisionId": "decision-7", "yes": True}
+            {"type": "YesNoResponse", "decisionId": "decision-7", "choice": True}
         )
         adapter = GameServerSeatAdapter(ScriptedPilot(choice), "ai")
 
@@ -174,7 +174,7 @@ class GameServerSeatAdapterTests(unittest.TestCase):
             ScriptedPilot(ArgentumActionChoice(99)),
             ScriptedPilot(
                 ArgentumDecisionChoice(
-                    {"type": "YesNoResponse", "decisionId": "stale", "yes": True}
+                    {"type": "YesNoResponse", "decisionId": "stale", "choice": True}
                 )
             ),
             ScriptedPilot(RuntimeError("provider unavailable")),
