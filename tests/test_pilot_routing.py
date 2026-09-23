@@ -176,6 +176,41 @@ class RoutingPilotTests(unittest.TestCase):
                 self.assertEqual(choice.response, expected)
                 self.assertEqual(choice.metadata["routing"]["path"], "mechanical")
 
+    def test_mandatory_mana_payment_without_solver_suggestion_stays_mechanical(self):
+        pending = {
+            "decisionId": "mana-mandatory",
+            "type": "SelectManaSourcesDecision",
+            "kind": "SelectManaSourcesDecision",
+            "requiresStructuredResponse": True,
+            "autoPaySuggestion": [],
+            "canDecline": False,
+            "availableSources": [
+                {"entityId": "island-1", "requiresTappingAnotherPermanent": False},
+                {"entityId": "convoke-source", "requiresTappingAnotherPermanent": True},
+                {"entityId": "island-2", "requiresTappingAnotherPermanent": False},
+            ],
+        }
+        strategic = CountingPilot(error=AssertionError("strategic pilot should not wake"))
+
+        choice = choose_for_observation(
+            RoutingPilot(strategic),
+            observation(None, pending=pending),
+        )
+
+        self.assertEqual(strategic.calls, 0)
+        self.assertEqual(
+            choice.response,
+            {
+                "type": "ManaSourcesSelectedResponse",
+                "decisionId": "mana-mandatory",
+                "selectedSources": ["island-1", "island-2"],
+                "autoPay": False,
+                "waterbendPermanents": [],
+                "declined": False,
+            },
+        )
+        self.assertEqual(choice.metadata["routing"]["path"], "mechanical")
+
     def test_unique_structured_choice_avoids_strategic_wake(self):
         pending = {
             "decisionId": "number-1",
