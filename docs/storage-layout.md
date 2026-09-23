@@ -51,6 +51,32 @@ The initial backend is a local filesystem because it works for a single server, 
 
 A future object-store backend should preserve the same location-independent IDs and route semantics.
 
+## Storage doctor
+
+`commander_gym.storage_doctor` checks the physical storage contract without interpreting any game or learning records. It verifies that every configured route exists, performs an actual temporary write/delete probe, records filesystem capacity, and can enforce a minimum free-space threshold.
+
+Initialize and check a new default layout:
+
+```bash
+python -m commander_gym.storage_doctor \
+  --root /srv/commander-gym/data \
+  --create
+```
+
+Check a node with route overrides and require at least 100 GiB free on every configured route:
+
+```bash
+python -m commander_gym.storage_doctor \
+  --root /srv/commander-gym/data \
+  --route models=/mnt/models \
+  --route cache=/var/cache/commander-gym \
+  --min-free-bytes 107374182400
+```
+
+The command emits JSON and exits nonzero if a route is missing, cannot be written, cannot be inspected for capacity, or falls below the configured threshold. `--create` only creates configured directories; the write probe leaves no durable artifact behind.
+
+Service/provider checks belong in later #74 doctor slices. Keeping those separate avoids turning storage health into an implicit model-provider or evidence-schema contract.
+
 ## Responsibility split with #53
 
 Issue #74 owns storage placement, resolution, durability boundaries, capacity/health checks, and portable packaging.
@@ -59,10 +85,10 @@ Issue #53 owns the meaning and schema of run evidence, annotations, datasets, li
 
 ## Next #74 slices
 
-After this layout primitive lands, the remaining work includes:
+After the layout and storage-health primitives land, the remaining work includes:
 
 - route application in current writers/runners as their #5/#53 schemas stabilize;
-- storage `doctor` checks for writability, free space, and configured services;
+- service/provider `doctor` checks for Argentum/schema compatibility and configured model endpoints;
 - per-run byte accounting hooks supplied to #53;
 - reproducible node packaging/service scaffolding for Argentum + Commander Gym with optional local inference;
 - a clean-host and moved-data-root end-to-end qualification.
