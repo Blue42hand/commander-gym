@@ -90,6 +90,7 @@ class BindingSessionTests(unittest.TestCase):
             self.assertEqual(seat.deck_id, f"deck-{index}")
             self.assertEqual(seat.deck_version, "r1")
             self.assertEqual(seat.pilot.name, "dummy")
+            self.assertEqual(seat.binding, resolved.binding)
             self.assertEqual(
                 seat.pilot_config["binding"],
                 resolved.binding.to_dict(),
