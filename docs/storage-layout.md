@@ -75,20 +75,36 @@ python -m commander_gym.storage_doctor \
 
 The command emits JSON and exits nonzero if a route is missing, cannot be written, cannot be inspected for capacity, or falls below the configured threshold. `--create` only creates configured directories; the write probe leaves no durable artifact behind.
 
-Service/provider checks belong in later #74 doctor slices. Keeping those separate avoids turning storage health into an implicit model-provider or evidence-schema contract.
+## Service doctor
+
+`commander_gym.service_doctor` validates the runtime dependencies of a portable node without making gameplay or model-policy decisions.
+
+It checks the configured Argentum endpoint through the existing orchestration compatibility contract: `/health`, `/status`, and `/schema-hash` must agree, the service must identify as `argentum-gym-server`, and optional expected schema/build revisions must match exactly.
+
+```bash
+export COMMANDER_GYM_ARGENTUM_URL=http://127.0.0.1:8082
+python -m commander_gym.service_doctor \
+  --expected-schema-hash '<expected-schema-hash>'
+```
+
+If `COMMANDER_GYM_MODEL_URL` is configured, the same command also performs a transport-only HTTP probe against `models` beneath that base URL by default. For example, an OpenAI-compatible local endpoint configured as `http://127.0.0.1:11434/v1` is probed at `/v1/models`. `COMMANDER_GYM_MODEL_TOKEN` is sent as a bearer credential when configured but is never included in the JSON result. Use `COMMANDER_GYM_MODEL_HEALTH_PATH` or `--model-health-path` when a provider exposes a different safe read-only probe path.
+
+The model probe deliberately does **not** inspect model identities, choose a provider, or decide whether a particular model is suitable for a pilot. Those remain pilot/provider concerns. A model service that is not configured is reported as disabled rather than guessed.
+
+The storage and service doctors are separate so a node can initialize/check disk placement without requiring live network services, and service compatibility can be checked without mutating storage.
 
 ## Responsibility split with #53
 
-Issue #74 owns storage placement, resolution, durability boundaries, capacity/health checks, and portable packaging.
+Issue #74 owns storage placement, resolution, durability boundaries, capacity/health checks, service compatibility checks, and portable packaging.
 
 Issue #53 owns the meaning and schema of run evidence, annotations, datasets, lineage, and per-run evidence accounting. Those records may use the storage primitives here, but the storage layer must not invent a competing evidence ontology.
 
 ## Next #74 slices
 
-After the layout and storage-health primitives land, the remaining work includes:
+After the layout, storage-health, and service-compatibility primitives land, the remaining work includes:
 
 - route application in current writers/runners as their #5/#53 schemas stabilize;
-- service/provider `doctor` checks for Argentum/schema compatibility and configured model endpoints;
+- optional local-inference/accelerator-specific availability checks where a provider adapter exposes them cleanly;
 - per-run byte accounting hooks supplied to #53;
 - reproducible node packaging/service scaffolding for Argentum + Commander Gym with optional local inference;
 - a clean-host and moved-data-root end-to-end qualification.
