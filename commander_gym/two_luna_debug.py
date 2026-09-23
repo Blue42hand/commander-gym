@@ -182,6 +182,7 @@ def _summarize(
     game_ids: list[str],
     max_turn: int,
     log_path: Path | None,
+    wall_time_seconds: float,
 ) -> dict[str, Any]:
     callbacks = Counter(str(record.get("callback", "unknown")) for record in records)
     routes = Counter()
@@ -259,6 +260,7 @@ def _summarize(
         "lobbyId": lobby_id,
         "gameSessionIds": game_ids,
         "maxTurnObserved": max_turn,
+        "wallTimeSeconds": round(wall_time_seconds, 3),
         "policyCallbacks": len(records),
         "policySeats": sorted(seat_ids),
         "deckContextSeats": sorted(deck_context_seats),
@@ -282,6 +284,7 @@ def _summarize(
 
 
 def run(args: argparse.Namespace) -> int:
+    run_started = time.monotonic()
     deck_a = _load_deck(Path(args.deck_a))
     deck_b = _load_deck(Path(args.deck_b))
     base = args.server_url.rstrip("/")
@@ -341,6 +344,7 @@ def run(args: argparse.Namespace) -> int:
         game_ids=game_ids,
         max_turn=max_turn,
         log_path=Path(args.server_log) if args.server_log else None,
+        wall_time_seconds=time.monotonic() - run_started,
     )
     print("TWO_LUNA_DEBUG_RESULT=" + json.dumps(result, sort_keys=True), flush=True)
     return 0 if result["technicalQualified"] else 1
