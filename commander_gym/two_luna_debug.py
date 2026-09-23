@@ -188,6 +188,7 @@ def _summarize(
     retries = 0
     input_tokens = 0
     output_tokens = 0
+    cached_input_tokens = 0
 
     for record in records:
         metadata = _metadata(record)
@@ -208,6 +209,11 @@ def _summarize(
                             input_tokens += value
                         else:
                             output_tokens += value
+                details = usage.get("input_tokens_details")
+                if isinstance(details, Mapping):
+                    cached = details.get("cached_tokens")
+                    if type(cached) is int:
+                        cached_input_tokens += cached
 
     communication_errors: list[str] = []
     if log_path is not None and log_path.exists():
@@ -231,6 +237,7 @@ def _summarize(
         "providerCalls": provider_calls,
         "validationRetries": retries,
         "inputTokens": input_tokens,
+        "cachedInputTokens": cached_input_tokens,
         "outputTokens": output_tokens,
         "strategicWakesAvoided": routes.get("mechanical", 0),
         "avoidableStrategicWakes": avoidable,
