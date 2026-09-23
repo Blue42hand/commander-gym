@@ -320,37 +320,131 @@ def _matches_wire_type(value: Any, wire_type: str) -> bool:
     return False
 
 
-def _json_schema_for_wire_type(field_name: str, wire_type: str) -> dict[str, Any]:
+def _json_schema_for_wire_type(
+    field_name: str,
+    wire_type: str,
+    pending: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    pending = pending or {}
     if wire_type == "boolean":
         return {"type": "boolean"}
     if wire_type == "integer":
-        return {"type": "integer"}
+        schema: dict[str, Any] = {"type": "integer"}
+        if field_name == "number":
+            lo, hi = pending.get("minValue"), pending.get("maxValue")
+            if type(lo) is int:
+                schema["minimum"] = lo
+            if type(hi) is int:
+                schema["maximum"] = hi
+        elif field_name == "optionIndex":
+            options = pending.get("options")
+            if isinstance(options, list) and options:
+                schema["enum"] = list(range(len(options)))
+        return schema
     if wire_type == "string":
-        return {"type": "string"}
+        schema = {"type": "string"}
+        if field_name == "color":
+            colors = pending.get("availableColors")
+            if isinstance(colors, list) and colors and all(isinstance(item, str) for item in colors):
+                schema["enum"] = list(colors)
+        return schema
     if wire_type == "array":
         integer_arrays = {"selectedModes", "selectedModeIndices"}
         nested_string_arrays = {"piles"}
         if field_name in integer_arrays:
-            return {"type": "array", "items": {"type": "integer"}}
+            item_schema: dict[str, Any] = {"type": "integer"}
+            modes = pending.get("modes")
+            if isinstance(modes, list) and modes:
+                indices = []
+                for index, mode in enumerate(modes):
+                    if isinstance(mode, Mapping):
+                        if mode.get("available", True) is not True:
+                            continue
+                        candidate = mode.get("index", index)
+                    else:
+                        candidate = index
+                    if type(candidate) is int:
+                        indices.append(candidate)
+                if indices:
+                    item_schema["enum"] = indices
+            schema = {"type": "array", "items": item_schema}
+            if field_name == "selectedModes":
+                lo, hi = pending.get("minModes"), pending.get("maxModes")
+                if type(lo) is int:
+                    schema["minItems"] = lo
+                if type(hi) is int:
+                    schema["maxItems"] = hi
+            return schema
         if field_name in nested_string_arrays:
+            item_schema: dict[str, Any] = {"type": "string"}
+            cards = pending.get("cards")
+            if isinstance(cards, list) and cards and all(isinstance(item, str) for item in cards):
+                item_schema["enum"] = list(cards)
             return {
                 "type": "array",
-                "items": {"type": "array", "items": {"type": "string"}},
+                "items": {"type": "array", "items": item_schema},
             }
         if field_name == "edges":
+            edge_ids = [
+                edge.get("id")
+                for edge in pending.get("edges", [])
+                if isinstance(edge, Mapping) and isinstance(edge.get("id"), str)
+            ]
+            edge_id_schema: dict[str, Any] = {"type": "string"}
+            if edge_ids:
+                edge_id_schema["enum"] = edge_ids
             return {
                 "type": "array",
                 "items": {
                     "type": "object",
                     "properties": {
-                        "edgeId": {"type": "string"},
-                        "amount": {"type": "integer"},
+                        "edgeId": edge_id_schema,
+                        "amount": {"type": "integer", "minimum": 0},
                     },
                     "required": ["edgeId", "amount"],
                     "additionalProperties": False,
                 },
             }
-        return {"type": "array", "items": {"type": "string"}}
+
+        item_schema: dict[str, Any] = {"type": "string"}
+        choices: list[str] = []
+        if field_name == "selectedCards":
+            raw = pending.get("options")
+            if isinstance(raw, list) and all(isinstance(item, str) for item in raw):
+                choices = list(raw)
+        elif field_name == "orderedObjects":
+            raw = pending.get("objects")
+            if raw is None:
+                raw = pending.get("cards")
+            if isinstance(raw, list) and all(isinstance(item, str) for item in raw):
+                choices = list(raw)
+        elif field_name == "selectedSources":
+            raw = pending.get("availableSources")
+            if isinstance(raw, list):
+                choices = [
+                    source["entityId"]
+                    for source in raw
+                    if isinstance(source, Mapping) and isinstance(source.get("entityId"), str)
+                ]
+        elif field_name == "waterbendPermanents":
+            raw = pending.get("waterbendPermanents")
+            if isinstance(raw, list):
+                choices = [
+                    item["entityId"]
+                    for item in raw
+                    if isinstance(item, Mapping) and isinstance(item.get("entityId"), str)
+                ]
+        if choices:
+            item_schema["enum"] = choices
+        schema = {"type": "array", "items": item_schema}
+        if field_name == "selectedCards":
+            lo, hi = pending.get("minSelections"), pending.get("maxSelections")
+            if pending.get("type") != "SearchLibraryDecision":
+                if type(lo) is int:
+                    schema["minItems"] = lo
+            if type(hi) is int:
+                schema["maxItems"] = hi
+        return schema
     if wire_type == "object":
         # Native response maps are keyed by live entity / requirement ids. Keep their values
         # unconstrained here and let Commander Gym + Argentum validate the exact native payload.
@@ -370,7 +464,7 @@ def _response_format_for_observation(observation: Mapping[str, Any]) -> dict[str
                 "type": {"type": "string", "const": response_type},
             }
             for field_name, wire_type in required_fields.items():
-                properties[field_name] = _json_schema_for_wire_type(field_name, wire_type)
+                properties[field_name] = _json_schema_for_wire_type(field_name, wire_type, pending)
             primary_response_schema: dict[str, Any] = {
                 "type": "object",
                 "properties": properties,
@@ -712,6 +806,148 @@ class OpenAIResponsesPilot:
             metadata=dict(metadata),
         )
 
+    @staticmethod
+    def _validate_structured_response_values(
+        response: Mapping[str, Any],
+        pending: Mapping[str, Any],
+    ) -> None:
+        response_type = response.get("type")
+
+        if response_type == "CardsSelectedResponse":
+            selected = response.get("selectedCards")
+            options = pending.get("options")
+            if isinstance(selected, list) and isinstance(options, list):
+                if len(selected) != len(set(map(str, selected))):
+                    raise OpenAIResponsesPilotError("selectedCards must not contain duplicates")
+                if any(card not in options for card in selected):
+                    raise OpenAIResponsesPilotError("selectedCards contains a card outside current options")
+                maximum = pending.get("maxSelections")
+                if type(maximum) is int and len(selected) > maximum:
+                    raise OpenAIResponsesPilotError("selectedCards exceeds maxSelections")
+                minimum = pending.get("minSelections")
+                if (
+                    pending.get("type") != "SearchLibraryDecision"
+                    and type(minimum) is int
+                    and len(selected) < minimum
+                ):
+                    raise OpenAIResponsesPilotError("selectedCards is below minSelections")
+
+        elif response_type == "ColorChosenResponse":
+            color = response.get("color")
+            colors = pending.get("availableColors")
+            if isinstance(colors, list) and color not in colors:
+                raise OpenAIResponsesPilotError("selected color is not currently available")
+
+        elif response_type == "NumberChosenResponse":
+            number = response.get("number")
+            lo, hi = pending.get("minValue"), pending.get("maxValue")
+            if type(number) is int:
+                if type(lo) is int and number < lo:
+                    raise OpenAIResponsesPilotError("selected number is below minValue")
+                if type(hi) is int and number > hi:
+                    raise OpenAIResponsesPilotError("selected number is above maxValue")
+
+        elif response_type == "ModesChosenResponse":
+            selected = response.get("selectedModes")
+            modes = pending.get("modes")
+            if isinstance(selected, list) and isinstance(modes, list):
+                available = set()
+                for index, mode in enumerate(modes):
+                    if isinstance(mode, Mapping):
+                        if mode.get("available", True) is not True:
+                            continue
+                        candidate = mode.get("index", index)
+                    else:
+                        candidate = index
+                    if type(candidate) is int:
+                        available.add(candidate)
+                if any(mode not in available for mode in selected):
+                    raise OpenAIResponsesPilotError("selectedModes contains an unavailable mode")
+                lo, hi = pending.get("minModes"), pending.get("maxModes")
+                if type(lo) is int and len(selected) < lo:
+                    raise OpenAIResponsesPilotError("selectedModes is below minModes")
+                if type(hi) is int and len(selected) > hi:
+                    raise OpenAIResponsesPilotError("selectedModes exceeds maxModes")
+
+        elif response_type == "OptionChosenResponse":
+            index = response.get("optionIndex")
+            options = pending.get("options")
+            if type(index) is int and isinstance(options, list) and not (0 <= index < len(options)):
+                raise OpenAIResponsesPilotError("optionIndex is outside current options")
+
+        elif response_type == "OrderedResponse":
+            ordered = response.get("orderedObjects")
+            objects = pending.get("objects")
+            if objects is None:
+                objects = pending.get("cards")
+            if isinstance(ordered, list) and isinstance(objects, list):
+                if sorted(map(str, ordered)) != sorted(map(str, objects)):
+                    raise OpenAIResponsesPilotError(
+                        "orderedObjects must contain exactly the current objects once each"
+                    )
+
+        elif response_type == "TargetsResponse":
+            selected = response.get("selectedTargets")
+            requirements = pending.get("targetRequirements")
+            legal_targets = pending.get("legalTargets")
+            if (
+                isinstance(selected, Mapping)
+                and isinstance(requirements, list)
+                and isinstance(legal_targets, Mapping)
+            ):
+                for requirement in requirements:
+                    if not isinstance(requirement, Mapping):
+                        continue
+                    index = requirement.get("index")
+                    if type(index) is not int:
+                        continue
+                    key = str(index)
+                    chosen = selected.get(key, selected.get(index))
+                    if not isinstance(chosen, list):
+                        raise OpenAIResponsesPilotError(
+                            f"selectedTargets is missing requirement {index}"
+                        )
+                    allowed = legal_targets.get(key, legal_targets.get(index))
+                    if isinstance(allowed, list) and any(target not in allowed for target in chosen):
+                        raise OpenAIResponsesPilotError(
+                            f"selectedTargets for requirement {index} contains an illegal target"
+                        )
+                    minimum = requirement.get("minTargets", 1)
+                    maximum = requirement.get("maxTargets", 1)
+                    if type(minimum) is int and len(chosen) < minimum:
+                        raise OpenAIResponsesPilotError(
+                            f"selectedTargets for requirement {index} is below minTargets"
+                        )
+                    if type(maximum) is int and len(chosen) > maximum:
+                        raise OpenAIResponsesPilotError(
+                            f"selectedTargets for requirement {index} exceeds maxTargets"
+                        )
+
+        elif response_type == "CombatResolutionResponse":
+            edges = response.get("edges")
+            native_edges = pending.get("edges")
+            if isinstance(edges, list) and isinstance(native_edges, list):
+                by_id = {
+                    edge.get("id"): edge
+                    for edge in native_edges
+                    if isinstance(edge, Mapping) and isinstance(edge.get("id"), str)
+                }
+                for chosen in edges:
+                    if not isinstance(chosen, Mapping):
+                        continue
+                    edge_id = chosen.get("edgeId")
+                    amount = chosen.get("amount")
+                    native = by_id.get(edge_id)
+                    if native is None:
+                        raise OpenAIResponsesPilotError("combat response contains an unknown edge")
+                    maximum = native.get("maximum")
+                    if type(amount) is int and (
+                        amount < 0 or (type(maximum) is int and amount > maximum)
+                    ):
+                        raise OpenAIResponsesPilotError(
+                            "combat response amount is outside the native edge range"
+                        )
+
     def _decision_choice(
         self,
         decision: Mapping[str, Any],
@@ -759,6 +995,7 @@ class OpenAIResponsesPilot:
                     raise OpenAIResponsesPilotError(
                         f"{expected_type}.{field_name} must be {wire_type}"
                     )
+            self._validate_structured_response_values(response, pending)
 
         submitted = dict(response)
         submitted["decisionId"] = decision_id
