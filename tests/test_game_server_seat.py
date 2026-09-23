@@ -56,10 +56,28 @@ class GameServerSeatAdapterTests(unittest.TestCase):
 
         self.assertIsInstance(result, NativeActionResponse)
         self.assertEqual(result.action, self.actions[1]["action"])
+        self.assertEqual(result.params, {})
         self.assertEqual(pilot.observations[0]["state"], self.state)
         self.assertNotIn("snapshot", pilot.observations[0])
         self.assertEqual(records[0].callback, "chooseAction")
         self.assertNotIn("snapshot", records[0].observation)
+
+    def test_game_server_action_fields_are_aliased_to_pilot_vocabulary(self):
+        pilot = ScriptedPilot(ArgentumActionChoice(0))
+        adapter = GameServerSeatAdapter(pilot, "ai")
+        action = {
+            "actionType": "PassPriority",
+            "isAffordable": True,
+            "semanticId": "argentum-action-v1:test",
+            "action": {"type": "PassPriority", "playerId": "ai"},
+        }
+
+        adapter.choose_action(self.state, [action], None)
+
+        observed = pilot.observations[0]["legalActions"][0]
+        self.assertEqual(observed["kind"], "PassPriority")
+        self.assertTrue(observed["affordable"])
+        self.assertEqual(observed["semanticId"], "argentum-action-v1:test")
 
     def test_native_structured_decision_round_trip(self):
         pending = {
@@ -93,6 +111,14 @@ class GameServerSeatAdapterTests(unittest.TestCase):
         adapter = GameServerSeatAdapter(pilot, "ai")
 
         self.assertFalse(adapter.decide_mulligan({"hand": ["card-a", "card-b"]}))
+        mulligan_actions = pilot.observations[0]["legalActions"]
+        self.assertEqual(
+            [action["semanticId"] for action in mulligan_actions],
+            [
+                "commander-gym-callback-v1:mulligan:keep",
+                "commander-gym-callback-v1:mulligan:take",
+            ],
+        )
         self.assertEqual(
             adapter.choose_bottom_cards(
                 {
@@ -129,16 +155,25 @@ class GameServerSeatAdapterTests(unittest.TestCase):
                     else:
                         adapter.choose_action(self.state, [], pending)
 
-    def test_rejects_wrong_perspective_and_action_parameter_reimplementation(self):
+    def test_rejects_wrong_perspective_but_passes_native_params_without_applying_them(self):
         with self.assertRaisesRegex(GameServerSeatError, "perspective"):
             GameServerSeatAdapter(ScriptedPilot(ArgentumActionChoice(0)), "ai").choose_action(
                 {"viewingPlayerId": "human"}, self.actions, None
             )
 
-        with self.assertRaisesRegex(GameServerSeatError, "does not silently parameterize"):
-            GameServerSeatAdapter(
-                ScriptedPilot(ArgentumActionChoice(0, params={"targets": ["hidden"]})), "ai"
-            ).choose_action(self.state, self.actions, None)
+        adapter = GameServerSeatAdapter(
+            ScriptedPilot(
+                ArgentumActionChoice(
+                    0,
+                    params={"targets": ["target-1"], "xValue": 2},
+                )
+            ),
+            "ai",
+        )
+        result = adapter.choose_action(self.state, self.actions, None)
+        self.assertIsInstance(result, NativeActionResponse)
+        self.assertEqual(result.action, self.actions[0]["action"])
+        self.assertEqual(result.params, {"targets": ["target-1"], "xValue": 2})
 
 
 if __name__ == "__main__":

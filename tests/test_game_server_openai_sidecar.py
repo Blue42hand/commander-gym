@@ -28,23 +28,28 @@ class FakeResponse:
 
 
 class FakeResponses:
-    def __init__(self):
+    def __init__(self, payloads=None):
         self.calls = []
+        self.payloads = list(
+            payloads
+            or [
+                {
+                    "channel": "action",
+                    "semanticId": "argentum-action-v1:play-land",
+                    "params": {},
+                }
+            ]
+        )
 
     def create(self, **kwargs):
         self.calls.append(kwargs)
-        return FakeResponse(
-            {
-                "channel": "action",
-                "semanticId": "argentum-action-v1:play-land",
-                "params": {},
-            }
-        )
+        payload = self.payloads.pop(0) if len(self.payloads) > 1 else self.payloads[0]
+        return FakeResponse(payload)
 
 
 class FakeClient:
-    def __init__(self):
-        self.responses = FakeResponses()
+    def __init__(self, payloads=None):
+        self.responses = FakeResponses(payloads)
 
 
 def free_port():
@@ -167,6 +172,48 @@ class OpenAIGameServerSidecarTests(unittest.TestCase):
             self.assertNotIn("snapshot", provenance[0][1].observation)
         finally:
             server.server_close()
+
+    def test_luna_can_choose_keep_or_mulligan_by_stable_callback_semantic_id(self):
+        client = FakeClient(
+            [
+                {
+                    "channel": "action",
+                    "semanticId": "commander-gym-callback-v1:mulligan:keep",
+                    "params": {},
+                }
+            ]
+        )
+        config = OpenAIGameServerSidecarConfig(
+            token="sidecar-secret",
+            api_key="sk-test-secret",
+            port=free_port(),
+        )
+        server = build_openai_game_server_sidecar(config, client=client)
+        try:
+            seat = server.resolve_seat("ai-mulligan")
+            self.assertTrue(
+                seat.decide_mulligan(
+                    {
+                        "hand": ["card-a", "card-b"],
+                        "mulliganCount": 0,
+                        "cardsToPutOnBottom": 0,
+                        "isOnThePlay": True,
+                        "cards": {},
+                    }
+                )
+            )
+        finally:
+            server.server_close()
+
+        request = client.responses.calls[0]
+        model_input = json.loads(request["input"].split("\n", 1)[1])
+        self.assertEqual(
+            [action["semanticId"] for action in model_input["legalActions"]],
+            [
+                "commander-gym-callback-v1:mulligan:keep",
+                "commander-gym-callback-v1:mulligan:take",
+            ],
+        )
 
     def test_jsonl_provenance_is_tagged_with_the_argentum_player_id(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -2,7 +2,9 @@
 
 This Commander Gym-owned JVM artifact implements vanilla Argentum's
 `AiControllerProvider`/`AiPlayerController` seam. It forwards only callback arguments to the
-loopback policy sidecar and never retains or calls `AiControllerContext.snapshot`.
+loopback policy sidecar. Trusted `AiControllerContext.snapshot` state is never sent to policy;
+it is consulted only when non-empty `ActionParams` must be applied by Argentum's native
+`ActionParameterizer`.
 
 Build it against an Argentum checkout:
 
