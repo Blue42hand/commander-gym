@@ -183,7 +183,10 @@ class GameServerBindingFoundationAcceptanceTest {
 
             client.send(
                 ClientMessage.SubmitQuickGameLobbyDeck(
-                    deckList = mapOf("Plains" to 99),
+                    deckList = mapOf(
+                        "Zetalpa, Primal Dawn" to 1,
+                        "Plains" to 99,
+                    ),
                     commander = "Zetalpa, Primal Dawn",
                 )
             )
