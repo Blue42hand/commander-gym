@@ -19,16 +19,23 @@ def _git(root: Path, *args: str) -> str:
     return completed.stdout.strip()
 
 
-def _checkout(root: Path, files: dict[str, str]) -> str:
+def _checkout(
+    root: Path,
+    files: dict[str, str],
+    *,
+    executable: tuple[str, ...] = (),
+) -> str:
     root.mkdir(parents=True)
     _git(root, "init", "-q")
     _git(root, "config", "user.email", "test@example.invalid")
     _git(root, "config", "user.name", "Commander Gym Tests")
+    executable_paths = set(executable)
     for relative, content in files.items():
         path = root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
-        path.chmod(path.stat().st_mode | 0o111)
+        if relative in executable_paths:
+            path.chmod(path.stat().st_mode | 0o111)
     _git(root, "add", ".")
     _git(root, "commit", "-qm", "fixture")
     return _git(root, "rev-parse", "HEAD")
@@ -47,6 +54,7 @@ def _config(tmp: Path, *, with_model: bool = False) -> NodePackageConfig:
             "scripts/run-gym-server-service.sh": "#!/bin/bash\nexit 0\n",
             "gradlew": "#!/bin/bash\nexit 0\n",
         },
+        executable=("gradlew",),
     )
     token = tmp / "secrets" / "gateway.token"
     token.parent.mkdir(parents=True)
@@ -83,6 +91,18 @@ class NodePreflightTests(unittest.TestCase):
     def test_healthy_clean_host_prerequisites_pass(self):
         with tempfile.TemporaryDirectory() as directory:
             config = _config(Path(directory), with_model=True)
+            self.assertFalse(
+                os.access(
+                    config.commander_gym.root / "scripts/run_argentum_gateway_service.sh",
+                    os.X_OK,
+                )
+            )
+            self.assertFalse(
+                os.access(
+                    config.argentum.root / "scripts/run-gym-server-service.sh",
+                    os.X_OK,
+                )
+            )
             report = check_node_preflight(
                 config,
                 initialize_storage=True,
