@@ -48,6 +48,8 @@ class PilotDecision:
     input_tokens: Optional[int] = None
     output_tokens: Optional[int] = None
     cost_usd: Optional[float] = None
+    escalated: bool = False
+    escalation_reason: Optional[str] = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
 
@@ -123,6 +125,14 @@ def _normalize_decision(value: PilotResult) -> PilotDecision:
         or decision.cost_usd < 0
     ):
         raise ValueError("pilot cost_usd must be a non-negative number or null")
+    if type(decision.escalated) is not bool:
+        raise ValueError("pilot escalated must be a boolean")
+    if decision.escalation_reason is not None and (
+        not isinstance(decision.escalation_reason, str) or not decision.escalation_reason
+    ):
+        raise ValueError("pilot escalation_reason must be a non-empty string or null")
+    if decision.escalation_reason is not None and not decision.escalated:
+        raise ValueError("pilot escalation_reason requires escalated=true")
     if not isinstance(decision.metadata, Mapping):
         raise ValueError("pilot metadata must be a mapping")
     return decision
@@ -137,6 +147,7 @@ def _summarize(group: list[Dict[str, Any]]) -> Dict[str, Any]:
             "invalid_output_rate": None,
             "preferred_rate": None,
             "error_rate": None,
+            "escalation_rate": None,
         }
     return {
         "cases": total,
@@ -144,6 +155,7 @@ def _summarize(group: list[Dict[str, Any]]) -> Dict[str, Any]:
         "invalid_output_rate": sum(bool(row["invalid_output"]) for row in group) / total,
         "preferred_rate": sum(bool(row["preferred"]) for row in group) / total,
         "error_rate": sum(row["error"] is not None for row in group) / total,
+        "escalation_rate": sum(bool(row["escalated"]) for row in group) / total,
     }
 
 
@@ -211,6 +223,8 @@ def run_benchmark(cases: Iterable[BenchmarkCase], pilot: BenchmarkPilot) -> Dict
             "input_tokens": decision.input_tokens,
             "output_tokens": decision.output_tokens,
             "cost_usd": decision.cost_usd,
+            "escalated": decision.escalated,
+            "escalation_reason": decision.escalation_reason,
             "pilot_metadata": dict(decision.metadata),
         }
         rows.append(row)

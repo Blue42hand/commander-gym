@@ -62,6 +62,8 @@ class BenchmarkRunnerTests(unittest.TestCase):
                 input_tokens=10,
                 output_tokens=2,
                 cost_usd=0.01,
+                escalated=True,
+                escalation_reason="synthetic-teacher",
                 metadata={"provider": "synthetic"},
             )
 
@@ -74,11 +76,14 @@ class BenchmarkRunnerTests(unittest.TestCase):
         self.assertEqual(report["summary"]["preferred_rate"], 1.0)
         self.assertEqual(report["summary"]["invalid_output_rate"], 0.0)
         self.assertEqual(report["summary"]["error_rate"], 0.0)
+        self.assertEqual(report["summary"]["escalation_rate"], 1.0)
         self.assertEqual(report["summary"]["input_tokens"], 20)
         self.assertEqual(report["summary"]["output_tokens"], 4)
         self.assertAlmostEqual(report["summary"]["cost_usd"], 0.02)
         self.assertEqual(set(report["categories"]), {"interaction", "sequencing"})
         self.assertEqual(report["cases"][0]["pilot_metadata"], {"provider": "synthetic"})
+        self.assertTrue(report["cases"][0]["escalated"])
+        self.assertEqual(report["cases"][0]["escalation_reason"], "synthetic-teacher")
 
     def test_pilot_failure_is_recorded_without_policy_substitution(self):
         case = synthetic_case("case-failure", "resilience")
@@ -147,6 +152,25 @@ class BenchmarkRunnerTests(unittest.TestCase):
 
         self.assertNotEqual(case.decision.observation["public"]["turn"], 999)
         self.assertEqual(case.decision.legal_actions[0].payload["kind"], "pass")
+
+    def test_escalation_reason_requires_escalation(self):
+        case = synthetic_case("case-escalation", "resilience")
+        pilot = CallablePilot(
+            "bad-escalation-pilot",
+            "1",
+            lambda _: PilotDecision(
+                action_id="cast",
+                escalated=False,
+                escalation_reason="should-fail",
+            ),
+        )
+
+        report = run_benchmark([case], pilot)
+        row = report["cases"][0]
+
+        self.assertFalse(row["legal"])
+        self.assertTrue(row["invalid_output"])
+        self.assertIn("requires escalated=true", row["error"])
 
     def test_malformed_pilot_result_fails_closed(self):
         case = synthetic_case("case-malformed", "resilience")
