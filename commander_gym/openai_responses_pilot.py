@@ -31,7 +31,22 @@ MODEL_IO_SCHEMA_VERSION = 1
 
 
 class OpenAIResponsesPilotError(RuntimeError):
-    """Raised when the provider cannot yield one valid native Argentum choice."""
+    """Raised when the provider cannot yield one valid native Argentum choice.
+
+    ``model_io`` is populated only when at least one provider attempt actually began.
+    It intentionally uses the same attempt snapshots as successful choices but leaves
+    ``selectedAttempt`` null so callers can preserve failed diagnostics without
+    inventing a gameplay choice or successful model output.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        model_io: Mapping[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.model_io = deepcopy(dict(model_io)) if model_io is not None else None
 
 
 _DEFAULT_INSTRUCTIONS = """You are the strategic policy for a Magic-playing agent.
@@ -234,6 +249,17 @@ def _provider_failure_summary(exc: Exception) -> str:
     return ", ".join(parts)
 
 
+def _failed_model_io(attempts: list[dict[str, Any]]) -> dict[str, Any]:
+    """Return a failure trace with no fabricated selected/successful model attempt."""
+
+    return {
+        "schemaVersion": MODEL_IO_SCHEMA_VERSION,
+        "provider": "openai",
+        "selectedAttempt": None,
+        "attempts": deepcopy(attempts),
+    }
+
+
 def _require_string(value: Any, label: str) -> str:
     if not isinstance(value, str) or not value:
         raise OpenAIResponsesPilotError(f"{label} must be a non-empty string")
@@ -323,8 +349,17 @@ class OpenAIResponsesPilot:
             try:
                 response = self.client.responses.create(**request)
             except Exception as exc:  # Provider SDK owns transport-level retries.
+                failure_summary = _provider_failure_summary(exc)
+                attempts.append(
+                    {
+                        "attempt": attempt,
+                        "request": request_snapshot,
+                        "response": {"transportError": failure_summary},
+                    }
+                )
                 raise OpenAIResponsesPilotError(
-                    f"OpenAI Responses request failed ({_provider_failure_summary(exc)})"
+                    f"OpenAI Responses request failed ({failure_summary})",
+                    model_io=_failed_model_io(attempts),
                 ) from exc
 
             response_snapshot = _provider_response_snapshot(response)
@@ -366,7 +401,8 @@ class OpenAIResponsesPilot:
         assert validation_error is not None
         raise OpenAIResponsesPilotError(
             f"OpenAI pilot exhausted {self.max_attempts} validation attempts: "
-            f"{validation_error}"
+            f"{validation_error}",
+            model_io=_failed_model_io(attempts),
         ) from validation_error
 
     def _choice_from_response(
