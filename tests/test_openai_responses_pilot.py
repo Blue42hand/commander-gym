@@ -2,6 +2,7 @@ import json
 import unittest
 
 from commander_gym.openai_responses_pilot import (
+    MODEL_IO_SCHEMA_VERSION,
     OpenAIResponsesPilot,
     OpenAIResponsesPilotError,
 )
@@ -103,17 +104,14 @@ def structured_observation():
 
 class OpenAIResponsesPilotTests(unittest.TestCase):
     def test_selects_by_semantic_id_and_hides_live_action_ids_from_model(self):
-        client = FakeClient(
-            FakeResponse(
-                json.dumps(
-                    {
-                        "channel": "action",
-                        "semanticId": "argentum-action-v1:attack",
-                        "params": {"attackers": {"creature-1": "player-2"}},
-                    }
-                )
-            )
+        raw_output = json.dumps(
+            {
+                "channel": "action",
+                "semanticId": "argentum-action-v1:attack",
+                "params": {"attackers": {"creature-1": "player-2"}},
+            }
         )
+        client = FakeClient(FakeResponse(raw_output))
         pilot = OpenAIResponsesPilot(client=client, model="gpt-test")
 
         choice = choose_for_observation(pilot, action_observation())
@@ -143,27 +141,36 @@ class OpenAIResponsesPilotTests(unittest.TestCase):
         self.assertFalse(request["store"])
         self.assertEqual(choice.metadata["retryCount"], 0)
 
+        model_io = choice.metadata["modelIo"]
+        self.assertEqual(model_io["schemaVersion"], MODEL_IO_SCHEMA_VERSION)
+        self.assertEqual(model_io["provider"], "openai")
+        self.assertEqual(model_io["selectedAttempt"], 0)
+        self.assertEqual(model_io["attempts"][0]["request"], request)
+        self.assertEqual(model_io["attempts"][0]["response"]["outputText"], raw_output)
+        self.assertEqual(
+            model_io["attempts"][0]["response"]["usage"],
+            {"input_tokens": 100, "output_tokens": 20},
+        )
+
     def test_retries_one_invalid_unsubmitted_choice_and_records_retry(self):
+        invalid_output = json.dumps(
+            {
+                "channel": "action",
+                "semanticId": "invented-action",
+                "params": {},
+            }
+        )
+        valid_output = json.dumps(
+            {
+                "channel": "action",
+                "semanticId": "argentum-action-v1:pass",
+                "params": {},
+            }
+        )
         client = FakeClient(
             [
-                FakeResponse(
-                    json.dumps(
-                        {
-                            "channel": "action",
-                            "semanticId": "invented-action",
-                            "params": {},
-                        }
-                    )
-                ),
-                FakeResponse(
-                    json.dumps(
-                        {
-                            "channel": "action",
-                            "semanticId": "argentum-action-v1:pass",
-                            "params": {},
-                        }
-                    )
-                ),
+                FakeResponse(invalid_output, response_id="resp-invalid"),
+                FakeResponse(valid_output, response_id="resp-valid"),
             ]
         )
         pilot = OpenAIResponsesPilot(client=client, model="gpt-test")
@@ -174,6 +181,20 @@ class OpenAIResponsesPilotTests(unittest.TestCase):
         self.assertEqual(choice.metadata["retryCount"], 1)
         self.assertEqual(len(client.responses.calls), 2)
         self.assertIn("previous response was invalid", client.responses.calls[1]["input"])
+
+        model_io = choice.metadata["modelIo"]
+        self.assertEqual(model_io["selectedAttempt"], 1)
+        self.assertEqual(len(model_io["attempts"]), 2)
+        self.assertEqual(model_io["attempts"][0]["request"], client.responses.calls[0])
+        self.assertEqual(model_io["attempts"][1]["request"], client.responses.calls[1])
+        self.assertEqual(
+            model_io["attempts"][0]["response"]["outputText"], invalid_output
+        )
+        self.assertIn("validationError", model_io["attempts"][0]["response"])
+        self.assertEqual(
+            model_io["attempts"][1]["response"]["outputText"], valid_output
+        )
+        self.assertNotIn("validationError", model_io["attempts"][1]["response"])
 
     def test_structured_decision_injects_live_routing_id_locally(self):
         client = FakeClient(
@@ -208,6 +229,7 @@ class OpenAIResponsesPilotTests(unittest.TestCase):
             model_input["pendingDecision"]["semanticId"],
             "argentum-decision-v1:choose-targets",
         )
+        self.assertEqual(choice.metadata["modelIo"]["selectedAttempt"], 0)
 
     def test_unknown_semantic_id_fails_closed(self):
         client = FakeClient(

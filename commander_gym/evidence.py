@@ -33,6 +33,7 @@ from .storage import LocalArtifactStore, StorageLayout, StoredBlob
 RAW_EVIDENCE_SCHEMA_VERSION = 1
 RAW_EVIDENCE_CATALOG_SCHEMA_VERSION = 1
 RAW_EVIDENCE_KIND = "commander-gym.raw-run-evidence"
+MODEL_IO_SCHEMA_VERSION = 1
 IDENTITY_EPOCH_BINDING_V1 = "binding-v1"
 IDENTITY_EPOCH_PRE_BINDING_V1 = "pre-binding-v1"
 
@@ -68,6 +69,161 @@ def _record_kind(record: EvidenceRecord) -> str:
     )
 
 
+def _pilot_metadata(record: EvidenceRecord) -> Mapping[str, Any]:
+    pilot_metadata = record.metadata.get("pilot_metadata")
+    if not isinstance(pilot_metadata, Mapping):
+        raise EvidenceError(
+            f"decision {record.decision_id!r} must record pilot_metadata for raw evidence"
+        )
+    return pilot_metadata
+
+
+def _model_io(record: EvidenceRecord) -> dict[str, Any] | None:
+    """Validate the optional provider-attempt trace carried by pilot metadata.
+
+    This is an additive nested schema inside raw-evidence v1. Legacy evidence therefore
+    remains readable without pretending it contained model I/O that was never captured.
+    """
+
+    value = _pilot_metadata(record).get("modelIo")
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise EvidenceError(f"decision {record.decision_id!r} modelIo must be an object")
+    if value.get("schemaVersion") != MODEL_IO_SCHEMA_VERSION:
+        raise EvidenceError(
+            f"decision {record.decision_id!r} modelIo schemaVersion is unsupported"
+        )
+    provider = _require_string(
+        value.get("provider"), f"decision {record.decision_id!r} modelIo.provider"
+    )
+    selected_attempt = value.get("selectedAttempt")
+    if type(selected_attempt) is not int or selected_attempt < 0:
+        raise EvidenceError(
+            f"decision {record.decision_id!r} modelIo.selectedAttempt must be non-negative"
+        )
+    attempts = value.get("attempts")
+    if not isinstance(attempts, list) or not attempts:
+        raise EvidenceError(
+            f"decision {record.decision_id!r} modelIo.attempts must be non-empty"
+        )
+
+    normalized_attempts: list[dict[str, Any]] = []
+    for index, attempt in enumerate(attempts):
+        if not isinstance(attempt, Mapping):
+            raise EvidenceError(
+                f"decision {record.decision_id!r} modelIo attempt {index} must be an object"
+            )
+        if attempt.get("attempt") != index:
+            raise EvidenceError(
+                f"decision {record.decision_id!r} modelIo attempts must be contiguous"
+            )
+        request = attempt.get("request")
+        response = attempt.get("response")
+        if not isinstance(request, Mapping) or not isinstance(response, Mapping):
+            raise EvidenceError(
+                f"decision {record.decision_id!r} modelIo attempt {index} requires "
+                "request and response objects"
+            )
+        output_text = response.get("outputText")
+        refusal = response.get("refusal")
+        if output_text is not None and not isinstance(output_text, str):
+            raise EvidenceError(
+                f"decision {record.decision_id!r} modelIo response outputText must be a string"
+            )
+        if refusal is not None and not isinstance(refusal, str):
+            raise EvidenceError(
+                f"decision {record.decision_id!r} modelIo response refusal must be a string"
+            )
+        validation_error = response.get("validationError")
+        if validation_error is not None and not isinstance(validation_error, str):
+            raise EvidenceError(
+                f"decision {record.decision_id!r} modelIo validationError must be a string"
+            )
+        normalized_attempts.append(
+            {
+                "attempt": index,
+                "request": dict(request),
+                "response": dict(response),
+            }
+        )
+
+    if selected_attempt != len(normalized_attempts) - 1:
+        raise EvidenceError(
+            f"decision {record.decision_id!r} selected model attempt must be the final attempt"
+        )
+    selected_response = normalized_attempts[selected_attempt]["response"]
+    if not isinstance(selected_response.get("outputText"), str) or not selected_response.get(
+        "outputText"
+    ):
+        raise EvidenceError(
+            f"decision {record.decision_id!r} selected model attempt must preserve outputText"
+        )
+    if "validationError" in selected_response:
+        raise EvidenceError(
+            f"decision {record.decision_id!r} selected model attempt cannot be invalid"
+        )
+
+    return {
+        "schemaVersion": MODEL_IO_SCHEMA_VERSION,
+        "provider": provider,
+        "selectedAttempt": selected_attempt,
+        "attempts": normalized_attempts,
+    }
+
+
+def _model_io_sections(record: EvidenceRecord) -> dict[str, dict[str, Any]] | None:
+    model_io = _model_io(record)
+    if model_io is None:
+        return None
+
+    input_attempts: list[dict[str, Any]] = []
+    target_attempts: list[dict[str, Any]] = []
+    provenance_attempts: list[dict[str, Any]] = []
+    for attempt in model_io["attempts"]:
+        index = attempt["attempt"]
+        response = attempt["response"]
+        input_attempts.append({"attempt": index, "request": attempt["request"]})
+
+        target_attempt: dict[str, Any] = {"attempt": index}
+        if "outputText" in response:
+            target_attempt["output_text"] = response["outputText"]
+        if "refusal" in response:
+            target_attempt["refusal"] = response["refusal"]
+        target_attempts.append(target_attempt)
+
+        provenance_attempt = {"attempt": index}
+        provenance_attempt.update(
+            {
+                key: value
+                for key, value in response.items()
+                if key not in {"outputText", "refusal"}
+            }
+        )
+        provenance_attempts.append(provenance_attempt)
+
+    selected_attempt = model_io["selectedAttempt"]
+    provider = model_io["provider"]
+    return {
+        "input": {
+            "schema_version": MODEL_IO_SCHEMA_VERSION,
+            "provider": provider,
+            "attempts": input_attempts,
+        },
+        "target": {
+            "schema_version": MODEL_IO_SCHEMA_VERSION,
+            "selected_attempt": selected_attempt,
+            "attempts": target_attempts,
+        },
+        "provenance": {
+            "schema_version": MODEL_IO_SCHEMA_VERSION,
+            "provider": provider,
+            "selected_attempt": selected_attempt,
+            "attempts": provenance_attempts,
+        },
+    }
+
+
 def _input_for_record(record: EvidenceRecord) -> dict[str, Any]:
     common = {
         "decision_type": record.decision_type,
@@ -75,6 +231,9 @@ def _input_for_record(record: EvidenceRecord) -> dict[str, Any]:
         "observation_schema": record.observation_schema,
         "observation": record.observation,
     }
+    sections = _model_io_sections(record)
+    if sections is not None:
+        common["model_io"] = sections["input"]
     if isinstance(record, DecisionRecord):
         return {
             **common,
@@ -90,19 +249,19 @@ def _input_for_record(record: EvidenceRecord) -> dict[str, Any]:
 
 def _target_for_record(record: EvidenceRecord) -> dict[str, Any]:
     if isinstance(record, DecisionRecord):
-        return {"chosen_action_id": record.chosen_action_id}
-    if isinstance(record, StructuredDecisionRecord):
-        return {"response": record.response}
-    raise EvidenceError("unsupported raw evidence record type")
+        target: dict[str, Any] = {"chosen_action_id": record.chosen_action_id}
+    elif isinstance(record, StructuredDecisionRecord):
+        target = {"response": record.response}
+    else:
+        raise EvidenceError("unsupported raw evidence record type")
+    sections = _model_io_sections(record)
+    if sections is not None:
+        target["model_io"] = sections["target"]
+    return target
 
 
 def _decision_routing(record: EvidenceRecord) -> dict[str, Any]:
-    pilot_metadata = record.metadata.get("pilot_metadata")
-    if not isinstance(pilot_metadata, Mapping):
-        raise EvidenceError(
-            f"decision {record.decision_id!r} must record pilot_metadata for raw evidence"
-        )
-    routing = pilot_metadata.get("routing")
+    routing = _pilot_metadata(record).get("routing")
     if not isinstance(routing, Mapping):
         raise EvidenceError(
             f"decision {record.decision_id!r} must record the actual routing subsystem"
@@ -126,6 +285,12 @@ def _decision_state_digests(record: EvidenceRecord) -> tuple[str, str]:
 def _provenance_for_record(record: EvidenceRecord) -> dict[str, Any]:
     input_digest, result_digest = _decision_state_digests(record)
     routing = _decision_routing(record)
+    metadata = dict(record.metadata)
+    pilot_metadata = metadata.get("pilot_metadata")
+    if isinstance(pilot_metadata, Mapping) and "modelIo" in pilot_metadata:
+        sanitized_pilot_metadata = dict(pilot_metadata)
+        sanitized_pilot_metadata.pop("modelIo", None)
+        metadata["pilot_metadata"] = sanitized_pilot_metadata
     provenance = {
         "game_id": record.game_id,
         "decision_id": record.decision_id,
@@ -138,8 +303,11 @@ def _provenance_for_record(record: EvidenceRecord) -> dict[str, Any]:
         "input_state_digest": input_digest,
         "result_state_digest": result_digest,
         "outcome": record.outcome,
-        "metadata": record.metadata,
+        "metadata": metadata,
     }
+    sections = _model_io_sections(record)
+    if sections is not None:
+        provenance["model_io"] = sections["provenance"]
     if record.binding is not None:
         provenance["binding"] = record.binding.to_dict()
     return provenance
@@ -207,6 +375,7 @@ def _validate_run_decision_join(
         binding_presence.append(record.binding is not None)
         _decision_state_digests(record)
         _decision_routing(record)
+        _model_io(record)
 
     if binding_presence and any(binding_presence) and not all(binding_presence):
         raise EvidenceError(
@@ -274,6 +443,73 @@ def build_raw_evidence_envelope(
     return envelope
 
 
+def _validate_envelope_model_io(
+    input_value: Mapping[str, Any],
+    target: Mapping[str, Any],
+    provenance: Mapping[str, Any],
+) -> None:
+    present = ["model_io" in section for section in (input_value, target, provenance)]
+    if not any(present):
+        return
+    if not all(present):
+        raise EvidenceError("raw evidence model_io must appear in input, target, and provenance")
+
+    input_io = input_value["model_io"]
+    target_io = target["model_io"]
+    provenance_io = provenance["model_io"]
+    if not all(isinstance(value, Mapping) for value in (input_io, target_io, provenance_io)):
+        raise EvidenceError("raw evidence model_io sections must be objects")
+    if any(
+        value.get("schema_version") != MODEL_IO_SCHEMA_VERSION
+        for value in (input_io, target_io, provenance_io)
+    ):
+        raise EvidenceError("raw evidence model_io schema_version is unsupported")
+    provider = _require_string(input_io.get("provider"), "raw evidence model_io.provider")
+    if provenance_io.get("provider") != provider:
+        raise EvidenceError("raw evidence model_io provider mismatch")
+    selected_attempt = target_io.get("selected_attempt")
+    if type(selected_attempt) is not int or selected_attempt < 0:
+        raise EvidenceError("raw evidence model_io selected_attempt must be non-negative")
+    if provenance_io.get("selected_attempt") != selected_attempt:
+        raise EvidenceError("raw evidence model_io selected_attempt mismatch")
+
+    input_attempts = input_io.get("attempts")
+    target_attempts = target_io.get("attempts")
+    provenance_attempts = provenance_io.get("attempts")
+    if not all(isinstance(value, list) for value in (input_attempts, target_attempts, provenance_attempts)):
+        raise EvidenceError("raw evidence model_io attempts must be arrays")
+    if not input_attempts or len(input_attempts) != len(target_attempts) or len(input_attempts) != len(provenance_attempts):
+        raise EvidenceError("raw evidence model_io attempt counts must match")
+    if selected_attempt != len(input_attempts) - 1:
+        raise EvidenceError("raw evidence selected model attempt must be final")
+
+    for index, (input_attempt, target_attempt, provenance_attempt) in enumerate(
+        zip(input_attempts, target_attempts, provenance_attempts)
+    ):
+        if not all(
+            isinstance(value, Mapping)
+            for value in (input_attempt, target_attempt, provenance_attempt)
+        ):
+            raise EvidenceError("raw evidence model_io attempt entries must be objects")
+        if any(
+            value.get("attempt") != index
+            for value in (input_attempt, target_attempt, provenance_attempt)
+        ):
+            raise EvidenceError("raw evidence model_io attempt indexes must be contiguous")
+        if not isinstance(input_attempt.get("request"), Mapping):
+            raise EvidenceError("raw evidence model_io request must be an object")
+        output_text = target_attempt.get("output_text")
+        refusal = target_attempt.get("refusal")
+        if output_text is not None and not isinstance(output_text, str):
+            raise EvidenceError("raw evidence model output_text must be a string")
+        if refusal is not None and not isinstance(refusal, str):
+            raise EvidenceError("raw evidence model refusal must be a string")
+    if not isinstance(target_attempts[selected_attempt].get("output_text"), str) or not target_attempts[
+        selected_attempt
+    ].get("output_text"):
+        raise EvidenceError("selected raw evidence model attempt must preserve output_text")
+
+
 def validate_raw_evidence_envelope(value: Mapping[str, Any]) -> None:
     """Validate the immutable envelope boundary without reconstructing game state."""
 
@@ -327,6 +563,7 @@ def validate_raw_evidence_envelope(value: Mapping[str, Any]) -> None:
             raise EvidenceError("raw evidence decision input/target must be objects")
         if not isinstance(provenance, Mapping):
             raise EvidenceError("raw evidence decision provenance must be an object")
+        _validate_envelope_model_io(input_value, target, provenance)
         decision_id = _require_string(
             provenance.get("decision_id"), "raw evidence provenance.decision_id"
         )
@@ -358,6 +595,41 @@ def validate_raw_evidence_envelope(value: Mapping[str, Any]) -> None:
         raise EvidenceError(
             "raw evidence decision chronology does not match run.decision_ids"
         )
+
+
+def _model_io_accounting(decisions: list[Mapping[str, Any]]) -> tuple[int | None, int | None]:
+    measured = False
+    model_input_bytes = 0
+    model_output_bytes = 0
+    for decision in decisions:
+        input_value = decision.get("input")
+        target = decision.get("target")
+        if not isinstance(input_value, Mapping) or not isinstance(target, Mapping):
+            continue
+        input_io = input_value.get("model_io")
+        target_io = target.get("model_io")
+        if not isinstance(input_io, Mapping) or not isinstance(target_io, Mapping):
+            continue
+        measured = True
+        attempts = input_io.get("attempts", [])
+        if isinstance(attempts, list):
+            for attempt in attempts:
+                if isinstance(attempt, Mapping) and isinstance(attempt.get("request"), Mapping):
+                    model_input_bytes += len(_canonical_json_bytes(attempt["request"]))
+        target_attempts = target_io.get("attempts", [])
+        if isinstance(target_attempts, list):
+            for attempt in target_attempts:
+                if not isinstance(attempt, Mapping):
+                    continue
+                output_text = attempt.get("output_text")
+                if isinstance(output_text, str):
+                    model_output_bytes += len(output_text.encode("utf-8"))
+                refusal = attempt.get("refusal")
+                if isinstance(refusal, str):
+                    model_output_bytes += len(refusal.encode("utf-8"))
+    if not measured:
+        return None, None
+    return model_input_bytes, model_output_bytes
 
 
 @dataclass(frozen=True)
@@ -461,6 +733,7 @@ class RawEvidenceStore:
         payload = _canonical_json_bytes(envelope)
         artifact = self.artifacts.put_bytes(payload)
         decisions = envelope["decisions"]
+        model_input_bytes, model_output_bytes = _model_io_accounting(decisions)
         accounting = EvidenceAccounting(
             raw_bytes=len(payload),
             stored_bytes=artifact.size_bytes,
@@ -475,8 +748,8 @@ class RawEvidenceStore:
             evidence_target_bytes=sum(
                 len(_canonical_json_bytes(decision["target"])) for decision in decisions
             ),
-            model_input_bytes=None,
-            model_output_bytes=None,
+            model_input_bytes=model_input_bytes,
+            model_output_bytes=model_output_bytes,
             logs_debug_bytes=None,
             decision_count=len(decisions),
         )

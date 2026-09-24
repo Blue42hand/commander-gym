@@ -27,6 +27,8 @@ from typing import Any, Mapping
 
 from .pilot import ArgentumActionChoice, ArgentumDecisionChoice, PilotChoice
 
+MODEL_IO_SCHEMA_VERSION = 1
+
 
 class OpenAIResponsesPilotError(RuntimeError):
     """Raised when the provider cannot yield one valid native Argentum choice."""
@@ -135,6 +137,69 @@ def _response_text(response: Any) -> str:
     raise OpenAIResponsesPilotError("OpenAI response did not contain output text")
 
 
+def _response_content_snapshot(response: Any) -> dict[str, Any]:
+    """Capture exact model-produced content without serializing opaque SDK objects."""
+
+    direct = _field(response, "output_text")
+    if isinstance(direct, str) and direct:
+        return {"outputText": direct}
+
+    output = _field(response, "output")
+    if not isinstance(output, list):
+        return {}
+
+    pieces: list[str] = []
+    refusals: list[str] = []
+    for item in output:
+        content = _field(item, "content")
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            part_type = _field(part, "type")
+            if part_type == "output_text":
+                text = _field(part, "text")
+                if isinstance(text, str):
+                    pieces.append(text)
+            elif part_type == "refusal":
+                refusal = _field(part, "refusal")
+                if isinstance(refusal, str):
+                    refusals.append(refusal)
+    snapshot: dict[str, Any] = {}
+    if pieces:
+        snapshot["outputText"] = "".join(pieces)
+    if refusals:
+        snapshot["refusal"] = "".join(refusals)
+    return snapshot
+
+
+def _provider_response_snapshot(response: Any) -> dict[str, Any]:
+    """Capture stable response fields needed to reconstruct one provider attempt."""
+
+    snapshot = _response_content_snapshot(response)
+    response_id = _field(response, "id")
+    if isinstance(response_id, str) and response_id:
+        snapshot["responseId"] = response_id
+    response_model = _field(response, "model")
+    if isinstance(response_model, str) and response_model:
+        snapshot["responseModel"] = response_model
+    status = _field(response, "status")
+    if isinstance(status, str) and status:
+        snapshot["status"] = status
+    usage = _as_mapping(_field(response, "usage"))
+    if usage is not None:
+        snapshot["usage"] = dict(usage)
+    incomplete_details = _as_mapping(_field(response, "incomplete_details"))
+    if incomplete_details is not None:
+        snapshot["incompleteDetails"] = dict(incomplete_details)
+    provider_error = _field(response, "error")
+    provider_error_mapping = _as_mapping(provider_error)
+    if provider_error_mapping is not None:
+        snapshot["providerError"] = dict(provider_error_mapping)
+    elif isinstance(provider_error, str) and provider_error:
+        snapshot["providerError"] = provider_error
+    return snapshot
+
+
 def _provider_metadata(response: Any, model: str) -> dict[str, Any]:
     metadata: dict[str, Any] = {"provider": "openai", "model": model}
     response_id = _field(response, "id")
@@ -173,6 +238,23 @@ def _require_string(value: Any, label: str) -> str:
     if not isinstance(value, str) or not value:
         raise OpenAIResponsesPilotError(f"{label} must be a non-empty string")
     return value
+
+
+def _with_model_io(choice: PilotChoice, model_io: Mapping[str, Any]) -> PilotChoice:
+    """Attach exact provider attempts without changing the chosen Argentum payload."""
+
+    if isinstance(choice, ArgentumActionChoice):
+        return ArgentumActionChoice(
+            action_id=choice.action_id,
+            params=choice.params,
+            metadata={**dict(choice.metadata), "modelIo": dict(model_io)},
+        )
+    if isinstance(choice, ArgentumDecisionChoice):
+        return ArgentumDecisionChoice(
+            response=choice.response,
+            metadata={**dict(choice.metadata), "modelIo": dict(model_io)},
+        )
+    raise OpenAIResponsesPilotError("provider returned unsupported pilot choice type")
 
 
 @dataclass
@@ -228,6 +310,7 @@ class OpenAIResponsesPilot:
         }
 
         validation_error: OpenAIResponsesPilotError | None = None
+        attempts: list[dict[str, Any]] = []
         for attempt in range(self.max_attempts):
             if validation_error is not None:
                 request["input"] = (
@@ -236,6 +319,7 @@ class OpenAIResponsesPilot:
                     + str(validation_error)
                     + "\nReturn a corrected JSON object using only the current observation."
                 )
+            request_snapshot = deepcopy(request)
             try:
                 response = self.client.responses.create(**request)
             except Exception as exc:  # Provider SDK owns transport-level retries.
@@ -243,14 +327,41 @@ class OpenAIResponsesPilot:
                     f"OpenAI Responses request failed ({_provider_failure_summary(exc)})"
                 ) from exc
 
+            response_snapshot = _provider_response_snapshot(response)
             try:
-                return self._choice_from_response(
+                choice = self._choice_from_response(
                     response,
                     observation,
                     retry_count=attempt,
                 )
             except OpenAIResponsesPilotError as exc:
+                response_snapshot["validationError"] = str(exc)
+                attempts.append(
+                    {
+                        "attempt": attempt,
+                        "request": request_snapshot,
+                        "response": response_snapshot,
+                    }
+                )
                 validation_error = exc
+                continue
+
+            attempts.append(
+                {
+                    "attempt": attempt,
+                    "request": request_snapshot,
+                    "response": response_snapshot,
+                }
+            )
+            return _with_model_io(
+                choice,
+                {
+                    "schemaVersion": MODEL_IO_SCHEMA_VERSION,
+                    "provider": "openai",
+                    "selectedAttempt": attempt,
+                    "attempts": attempts,
+                },
+            )
 
         assert validation_error is not None
         raise OpenAIResponsesPilotError(
