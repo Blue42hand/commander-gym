@@ -17,6 +17,7 @@ from typing import Any, Mapping
 
 from .dataset_manifest import DatasetManifest, DatasetManifestError, DatasetManifestStore
 from .evidence import EvidenceError
+from .external_provenance import ExternalProvenanceError, ExternalProvenanceStore
 from .storage import LocalArtifactStore, StorageError, StorageLayout, StoredBlob, parse_artifact_id
 
 MODEL_LINEAGE_SCHEMA_VERSION = 1
@@ -91,6 +92,48 @@ class DatasetLineageRef:
 
 
 @dataclass(frozen=True)
+class ExternalModelLineageRef:
+    """Exact immutable imported model manifest used as a parent/initialization."""
+
+    manifest_artifact_id: str
+    model_id: str
+    version: str
+    model_digest: str
+    checkpoint_artifact_id: str
+
+    def validate(self) -> None:
+        _artifact_id(self.manifest_artifact_id, "external model manifest artifact ID")
+        _require_string(self.model_id, "external model_id")
+        _require_string(self.version, "external model version")
+        _artifact_id(self.model_digest, "external model_digest")
+        _artifact_id(self.checkpoint_artifact_id, "external checkpoint artifact ID")
+
+    def to_dict(self) -> dict[str, Any]:
+        self.validate()
+        return {
+            "manifest_artifact_id": self.manifest_artifact_id,
+            "model_id": self.model_id,
+            "version": self.version,
+            "model_digest": self.model_digest,
+            "checkpoint_artifact_id": self.checkpoint_artifact_id,
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "ExternalModelLineageRef":
+        if not isinstance(value, Mapping):
+            raise ModelLineageError("external model lineage reference must be an object")
+        result = cls(
+            manifest_artifact_id=value.get("manifest_artifact_id"),
+            model_id=value.get("model_id"),
+            version=value.get("version"),
+            model_digest=value.get("model_digest"),
+            checkpoint_artifact_id=value.get("checkpoint_artifact_id"),
+        )
+        result.validate()
+        return result
+
+
+@dataclass(frozen=True)
 class ModelArtifactRef:
     """One content-addressed artifact produced by a model/checkpoint build."""
 
@@ -124,6 +167,7 @@ class ModelLineageRecord:
     producer_revision: str
     datasets: tuple[DatasetLineageRef, ...]
     artifacts: tuple[ModelArtifactRef, ...]
+    external_parent_models: tuple[ExternalModelLineageRef, ...] = ()
     schema_version: int = MODEL_LINEAGE_SCHEMA_VERSION
     kind: str = MODEL_LINEAGE_KIND
 
@@ -140,8 +184,14 @@ class ModelLineageRecord:
         _require_string(self.created_at, "model created_at")
         _require_string(self.producer_revision, "producer_revision")
 
-        if not isinstance(self.datasets, tuple) or not self.datasets:
-            raise ModelLineageError("model lineage requires at least one dataset reference")
+        if not isinstance(self.datasets, tuple):
+            raise ModelLineageError("model lineage datasets must be a tuple")
+        if not isinstance(self.external_parent_models, tuple):
+            raise ModelLineageError("external_parent_models must be a tuple")
+        if not self.datasets and not self.external_parent_models:
+            raise ModelLineageError(
+                "model lineage requires a dataset or an external parent model"
+            )
         dataset_artifacts: set[str] = set()
         dataset_identities: set[tuple[str, str]] = set()
         for item in self.datasets:
@@ -155,6 +205,26 @@ class ModelLineageRecord:
                 raise ModelLineageError("dataset id/version references must be unique")
             dataset_artifacts.add(item.manifest_artifact_id)
             dataset_identities.add(identity)
+
+        external_parent_artifacts: set[str] = set()
+        external_parent_identities: set[tuple[str, str]] = set()
+        for item in self.external_parent_models:
+            if not isinstance(item, ExternalModelLineageRef):
+                raise ModelLineageError(
+                    "external_parent_models must contain ExternalModelLineageRef values"
+                )
+            item.validate()
+            if item.manifest_artifact_id in external_parent_artifacts:
+                raise ModelLineageError(
+                    "external parent model manifest references must be unique"
+                )
+            identity = (item.model_id, item.version)
+            if identity in external_parent_identities:
+                raise ModelLineageError(
+                    "external parent model id/version references must be unique"
+                )
+            external_parent_artifacts.add(item.manifest_artifact_id)
+            external_parent_identities.add(identity)
 
         if not isinstance(self.artifacts, tuple) or not self.artifacts:
             raise ModelLineageError("model lineage requires at least one produced artifact")
@@ -170,7 +240,7 @@ class ModelLineageRecord:
 
     def _digest_payload(self) -> dict[str, Any]:
         self.validate()
-        return {
+        result: dict[str, Any] = {
             "model_lineage_schema_version": self.schema_version,
             "kind": self.kind,
             "model_id": self.model_id,
@@ -196,6 +266,19 @@ class ModelLineageRecord:
                 )
             ],
         }
+        if self.external_parent_models:
+            result["external_parent_models"] = [
+                item.to_dict()
+                for item in sorted(
+                    self.external_parent_models,
+                    key=lambda item: (
+                        item.model_id,
+                        item.version,
+                        item.manifest_artifact_id,
+                    ),
+                )
+            ]
+        return result
 
     @property
     def lineage_digest(self) -> str:
@@ -210,12 +293,15 @@ class ModelLineageRecord:
     def from_dict(cls, value: Mapping[str, Any]) -> "ModelLineageRecord":
         if not isinstance(value, Mapping):
             raise ModelLineageError("model lineage record must be an object")
-        raw_datasets = value.get("datasets")
+        raw_datasets = value.get("datasets", [])
         raw_artifacts = value.get("artifacts")
+        raw_external_parents = value.get("external_parent_models", [])
         if not isinstance(raw_datasets, list):
             raise ModelLineageError("model lineage datasets must be an array")
         if not isinstance(raw_artifacts, list):
             raise ModelLineageError("model lineage artifacts must be an array")
+        if not isinstance(raw_external_parents, list):
+            raise ModelLineageError("external_parent_models must be an array")
         record = cls(
             model_id=value.get("model_id"),
             version=value.get("version"),
@@ -223,6 +309,9 @@ class ModelLineageRecord:
             producer_revision=value.get("producer_revision"),
             datasets=tuple(DatasetLineageRef.from_dict(item) for item in raw_datasets),
             artifacts=tuple(ModelArtifactRef.from_dict(item) for item in raw_artifacts),
+            external_parent_models=tuple(
+                ExternalModelLineageRef.from_dict(item) for item in raw_external_parents
+            ),
             schema_version=value.get("model_lineage_schema_version"),
             kind=value.get("kind"),
         )
@@ -239,6 +328,8 @@ class ModelLineageWriteResult:
     catalog_path: Path
     lineage_digest: str
     source_evidence_artifact_ids: tuple[str, ...]
+    source_external_manifest_artifact_ids: tuple[str, ...]
+    external_parent_model_manifest_artifact_ids: tuple[str, ...]
 
 
 class ModelLineageStore:
@@ -250,6 +341,7 @@ class ModelLineageStore:
         self.layout = layout
         self.artifacts = LocalArtifactStore(layout)
         self.datasets = DatasetManifestStore(layout)
+        self.external = ExternalProvenanceStore(layout)
 
     @staticmethod
     def _digest(value: str) -> str:
@@ -269,9 +361,10 @@ class ModelLineageStore:
     def _resolve_datasets(
         self,
         record: ModelLineageRecord,
-    ) -> tuple[tuple[DatasetManifest, ...], tuple[str, ...]]:
+    ) -> tuple[tuple[DatasetManifest, ...], tuple[str, ...], tuple[str, ...]]:
         manifests: list[DatasetManifest] = []
         source_evidence: set[str] = set()
+        source_external: set[str] = set()
         for ref in record.datasets:
             try:
                 manifest = self.datasets.read_artifact(ref.manifest_artifact_id)
@@ -287,7 +380,39 @@ class ModelLineageStore:
             for split in manifest.splits:
                 for selection in split.selections:
                     source_evidence.add(selection.evidence_artifact_id)
-        return tuple(manifests), tuple(sorted(source_evidence))
+                for selection in split.external_selections:
+                    source_external.add(selection.source_manifest_artifact_id)
+        return (
+            tuple(manifests),
+            tuple(sorted(source_evidence)),
+            tuple(sorted(source_external)),
+        )
+
+    def _resolve_external_parent_models(
+        self, record: ModelLineageRecord
+    ) -> tuple[str, ...]:
+        resolved: list[str] = []
+        for ref in record.external_parent_models:
+            try:
+                manifest = self.external.read_model_artifact(ref.manifest_artifact_id)
+            except ExternalProvenanceError as exc:
+                raise ModelLineageError(
+                    f"external parent model manifest is invalid: {ref.manifest_artifact_id}"
+                ) from exc
+            if manifest.model_id != ref.model_id or manifest.version != ref.version:
+                raise ModelLineageError(
+                    "external parent model identity does not match exact manifest"
+                )
+            if manifest.model_digest != ref.model_digest:
+                raise ModelLineageError(
+                    "external parent model digest does not match exact manifest"
+                )
+            if manifest.checkpoint_artifact_id != ref.checkpoint_artifact_id:
+                raise ModelLineageError(
+                    "external parent checkpoint does not match exact manifest"
+                )
+            resolved.append(ref.manifest_artifact_id)
+        return tuple(sorted(resolved))
 
     def _validate_model_artifacts(self, record: ModelLineageRecord) -> None:
         for ref in record.artifacts:
@@ -325,7 +450,14 @@ class ModelLineageStore:
         if not isinstance(record, ModelLineageRecord):
             raise ModelLineageError("record must be a ModelLineageRecord")
         record.validate()
-        _, source_evidence_artifact_ids = self._resolve_datasets(record)
+        (
+            _,
+            source_evidence_artifact_ids,
+            source_external_manifest_artifact_ids,
+        ) = self._resolve_datasets(record)
+        external_parent_model_manifest_artifact_ids = self._resolve_external_parent_models(
+            record
+        )
         self._validate_model_artifacts(record)
 
         payload = _canonical_json_bytes(record.to_dict())
@@ -345,6 +477,12 @@ class ModelLineageStore:
                     item.manifest_artifact_id for item in record.datasets
                 ),
                 "source_evidence_artifact_ids": list(source_evidence_artifact_ids),
+                "source_external_manifest_artifact_ids": list(
+                    source_external_manifest_artifact_ids
+                ),
+                "external_parent_model_manifest_artifact_ids": list(
+                    external_parent_model_manifest_artifact_ids
+                ),
                 "model_artifact_ids": sorted({item.artifact_id for item in record.artifacts}),
             },
         )
@@ -353,6 +491,10 @@ class ModelLineageStore:
             catalog_path=catalog_path,
             lineage_digest=record.lineage_digest,
             source_evidence_artifact_ids=source_evidence_artifact_ids,
+            source_external_manifest_artifact_ids=source_external_manifest_artifact_ids,
+            external_parent_model_manifest_artifact_ids=(
+                external_parent_model_manifest_artifact_ids
+            ),
         )
 
     def read_artifact(self, artifact_id: str) -> ModelLineageRecord:
@@ -400,5 +542,16 @@ class ModelLineageStore:
         if not isinstance(record, ModelLineageRecord):
             raise ModelLineageError("record must be a ModelLineageRecord")
         record.validate()
-        _, source_evidence = self._resolve_datasets(record)
+        _, source_evidence, _ = self._resolve_datasets(record)
         return source_evidence
+
+    def source_external_manifest_artifact_ids(
+        self, record: ModelLineageRecord
+    ) -> tuple[str, ...]:
+        """Resolve imported external-source manifests reachable through datasets."""
+
+        if not isinstance(record, ModelLineageRecord):
+            raise ModelLineageError("record must be a ModelLineageRecord")
+        record.validate()
+        _, _, source_external = self._resolve_datasets(record)
+        return source_external
