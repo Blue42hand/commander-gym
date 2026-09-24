@@ -173,6 +173,7 @@ def _participants(seats: Sequence[PilotSeat]) -> list[RunParticipant]:
             deck_id=seat.deck_id,
             deck_version=seat.deck_version,
             primer_version=seat.primer_version,
+            binding=seat.binding,
         )
         for index, seat in enumerate(seats)
     ]
