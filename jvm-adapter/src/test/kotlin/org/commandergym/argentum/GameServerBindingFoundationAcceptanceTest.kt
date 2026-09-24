@@ -1,7 +1,10 @@
 package org.commandergym.argentum
 
+import com.wingedsheep.ai.llm.MulliganInfo
 import com.wingedsheep.engine.core.engineSerializersModule
 import com.wingedsheep.gameserver.GameServerApplication
+import com.wingedsheep.gameserver.ai.AiControllerContext
+import com.wingedsheep.gameserver.ai.AiControllerProvider
 import com.wingedsheep.gameserver.ai.AiControllerSpec
 import com.wingedsheep.gameserver.lobby.AiDeckSpec
 import com.wingedsheep.gameserver.protocol.AiControllerCatalog
@@ -10,6 +13,7 @@ import com.wingedsheep.gameserver.protocol.GetAiControllerCatalog
 import com.wingedsheep.gameserver.protocol.ServerMessage
 import com.wingedsheep.gameserver.protocol.SetQuickGameAiController
 import com.wingedsheep.sdk.core.DeckFormat
+import com.wingedsheep.sdk.model.EntityId
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.contentOrNull
@@ -180,22 +184,24 @@ class GameServerBindingFoundationAcceptanceTest {
                 client.messages.filterIsInstance<ServerMessage.QuickGameLobbyState>().last().aiDeck?.label,
             )
 
-            client.send(
-                ClientMessage.SubmitQuickGameLobbyDeck(
-                    deckList = mapOf("Plains" to 99),
-                    commander = "Zetalpa, Primal Dawn",
+            // Exercise the settled generic provider seam directly rather than broadening this
+            // foundation smoke into a gameplay lifecycle test. The provider still comes from the
+            // running normal Argentum Spring application and calls the production sidecar over HTTP.
+            val provider = context.getBeansOfType(AiControllerProvider::class.java).values
+                .single { it.mode == "commander-gym" }
+            val boundDeck = provider.profiles.single { it.id == "seat-a" }.deckSpec as AiDeckSpec.Fixed
+            val controller = provider.create(
+                AiControllerContext(
+                    playerId = EntityId.of("binding-foundation-ai"),
+                    gameSessionId = "binding-foundation-smoke",
+                    profileId = "seat-a",
+                    snapshot = { null },
                 )
             )
-            client.send(ClientMessage.SetQuickGameLobbyReady(true))
-            await(Duration.ofSeconds(30), "game creation") {
-                client.messages.any { it is ServerMessage.GameCreated }
-            }
-            await(Duration.ofSeconds(30), "human mulligan") {
-                client.messages.any { it is ServerMessage.MulliganDecision }
-            }
-            client.send(ClientMessage.KeepHand)
+            controller.setDeckList(boundDeck.deckList, boundDeck.commander)
+            assertEquals(true, controller.decideMulligan(MulliganInfo(emptyList(), emptyMap(), null, 0)))
 
-            val resolved = awaitEvidence(Duration.ofSeconds(30)) {
+            val resolved = awaitEvidence(Duration.ofSeconds(10)) {
                 it["event"] == "binding_seat_resolved" && it["profileId"] == "seat-a"
             }
             assertEquals("seat-a", resolved["bindingId"])
