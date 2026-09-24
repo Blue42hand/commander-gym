@@ -57,7 +57,9 @@ Initial specialization should favor high-quality imitation/distillation from str
 
 ## Magic-specialized local generalist
 
-The intended long-term neural substrate is a fine-tuned open model small enough to run locally.
+The intended long-term neural substrate is a **locally runnable Magic-generalist policy/representation** capable of broad strategic reasoning. A fine-tuned open language model is one viable implementation, but the architecture must also permit gameplay-trained encoders, policy/value heads, search-backed policies, or hybrids of gameplay and semantic models.
+
+Before training general Magic competence from scratch, Commander Gym should audit and benchmark transferable pretrained Magic models and representations. Useful prior training may come from 1v1 formats, Forge/XMage self-play, behavioral cloning, gameplay-derived card encoders, or Magic-specialized language models. Training provenance does not make the original engine a production dependency: deployed policies still consume Commander Gym's seat-safe Argentum observation/legal-action contract.
 
 It should internalize transferable Magic competence such as:
 
@@ -72,6 +74,28 @@ It should internalize transferable Magic competence such as:
 Argentum remains authoritative for rules and legal actions. Current card text and mutable card/rules knowledge should remain externally retrievable/versioned rather than becoming the sole responsibility of model weights.
 
 Deck-specific knowledge remains separately versioned from general Magic competence.
+
+### Transfer-learning decomposition
+
+Treat these as separable experimental layers rather than one monolithic training corpus:
+
+```text
+general 1v1 Magic competence
+  -> Commander/multiplayer strategic adaptation
+  -> deck-specific DeckKnowledge
+  -> native Argentum four-player experience
+  -> search / expert iteration / later RL
+```
+
+1v1 material is primarily evidence for sequencing, combat, resource use, interaction, tempo, and other general Magic competencies. Commander-specific primers, expert analysis, cEDH reasoning, reconstructed decisions, and native four-player evidence teach the multiplayer transformation: multiple opponents, asymmetric incentives, interaction allocation, threat assessment, long-game engines, and Commander deck-plan inference.
+
+Do not assume that a 1v1 policy transfers cleanly. Benchmark baseline, 1v1-enriched, and Commander-adapted candidates on identical held-out Argentum states/legal actions and report capability-level effects in addition to win rate.
+
+### Search and reinforcement learning
+
+The default path after behavioral cloning/distillation/transfer should favor information-safe search or expert-iteration labels when they provide denser supervision than terminal win/loss. Sparse-result PPO or other RL should not be the automatic next stage merely because self-play is available.
+
+Search that produces deployed-policy supervision must respect the acting seat's information boundary. Privileged critics/debuggers may exist as explicitly training-only artifacts, but opponent-private information, future draws, or full-state knowledge must never silently enter deployed-policy inputs or labels without explicit provenance and qualification.
 
 ## Canonical identity model
 
@@ -159,6 +183,35 @@ Given any training example, Commander Gym must be able to trace backward to:
 - routing/escalation metadata.
 
 A trained model/checkpoint must trace to its dataset manifests and ultimately to source evidence.
+
+## External model and evidence provenance
+
+The native lineage also admits external source artifacts, but they must not be disguised as native Commander Gym trajectories.
+
+For imported models/checkpoints preserve:
+
+- source project/repository and exact revision;
+- original checkpoint digest and framework/architecture;
+- license/usage/redistribution terms;
+- known training-data provenance;
+- source observation/action/value schemas;
+- formats/decks/opponent population;
+- known privileged-information exposure or evaluation contamination;
+- every conversion, quantization, head replacement, fine-tune, or distillation transform.
+
+For external evidence/datasets preserve source/version/retrieval date, license/terms, information completeness, acting-player information boundary, reconstruction transforms, uncertainty, deduplication identity, and split/grouping rules.
+
+Keep explicit source classes such as `native_engine_trajectory`, `external_observation_action_record`, `reconstructed_decision`, `expert_recommendation`, `metagame_result`, and `strategic_reference`.
+
+For reconstructed or narrated games distinguish:
+
+1. what the player actually did;
+2. what a commentator/expert recommends;
+3. what Commander Gym later adjudicates.
+
+Never invent hidden hands, omitted targets/actions, or rationales merely to make an external record look complete.
+
+Tracked by #112-#115.
 
 ## Three evidence layers
 
