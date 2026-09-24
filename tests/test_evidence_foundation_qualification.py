@@ -88,7 +88,7 @@ class EvidenceFoundationQualificationTests(unittest.TestCase):
             },
         )
 
-    def run(self, *, suffix, status="completed"):
+    def make_run(self, *, suffix, status="completed"):
         reason = None
         failure_domain = None
         if status == "failed":
@@ -127,13 +127,22 @@ class EvidenceFoundationQualificationTests(unittest.TestCase):
 
     def write_evidence(self, layout, *, suffix, status="completed"):
         result = RawEvidenceStore(layout).write(
-            self.run(suffix=suffix, status=status),
+            self.make_run(suffix=suffix, status=status),
             [self.record(suffix=suffix)],
             commander_gym_revision="cg-foundation-qualification",
         )
         return result
 
-    def manifest(self, *, version, train_artifact, train_decision, held_out_artifact, held_out_decision, annotations=()):
+    def manifest(
+        self,
+        *,
+        version,
+        train_artifact,
+        train_decision,
+        held_out_artifact,
+        held_out_decision,
+        annotations=(),
+    ):
         return DatasetManifest(
             dataset_id="foundation-evidence-qualification",
             version=version,
@@ -176,11 +185,24 @@ class EvidenceFoundationQualificationTests(unittest.TestCase):
             partial = self.write_evidence(layout, suffix="partial", status="stopped")
 
             raw_store = RawEvidenceStore(layout)
-            self.assertEqual(raw_store.read("run-train")["qualification"]["classification"], "completed")
-            self.assertEqual(raw_store.read("run-failed")["qualification"]["classification"], "failed")
-            self.assertTrue(raw_store.read("run-failed")["qualification"]["diagnostic_only"])
-            self.assertEqual(raw_store.read("run-partial")["qualification"]["classification"], "partial")
-            self.assertTrue(raw_store.read("run-partial")["qualification"]["diagnostic_only"])
+            self.assertEqual(
+                raw_store.read("run-train")["qualification"]["classification"],
+                "completed",
+            )
+            self.assertEqual(
+                raw_store.read("run-failed")["qualification"]["classification"],
+                "failed",
+            )
+            self.assertTrue(
+                raw_store.read("run-failed")["qualification"]["diagnostic_only"]
+            )
+            self.assertEqual(
+                raw_store.read("run-partial")["qualification"]["classification"],
+                "partial",
+            )
+            self.assertTrue(
+                raw_store.read("run-partial")["qualification"]["diagnostic_only"]
+            )
 
             annotation = AnnotationStore(layout).write(
                 AnnotationRecord(
