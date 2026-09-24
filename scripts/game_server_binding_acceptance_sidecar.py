@@ -5,7 +5,8 @@ The server itself is the production Binding/OpenAI sidecar assembled from an
 instance-supplied canonical catalog. The only test seam is a deterministic mulligan
 answer so the acceptance can reach the controller without making a model call; the
 resolved adapter still contains the exact canonical Binding/Pilot selected by the
-production loader.
+production loader. The synthetic Pilot declares the same public composed-runtime
+components required by production rather than relying on an implicit generic fallback.
 """
 
 from __future__ import annotations
@@ -18,6 +19,8 @@ from types import MethodType
 
 from commander_gym.deck_package import ArtifactRef
 from commander_gym.game_server_binding_openai_sidecar import (
+    BUILTIN_FORCED_PARAMETERLESS_COMPONENT_REF,
+    BUILTIN_OPENAI_RESPONSES_COMPONENT_REF,
     BindingOpenAIGameServerConfig,
     build_binding_openai_game_server_sidecar,
 )
@@ -53,7 +56,12 @@ def synthetic_catalog(root: Path) -> Path:
         deck_artifact=deck_artifact,
         format_metadata={"commander": "Zetalpa, Primal Dawn"},
     )
-    pilot = Pilot(pilot_id="synthetic-binding-pilot", revision="r1")
+    pilot = Pilot(
+        pilot_id="synthetic-binding-pilot",
+        revision="r1",
+        deterministic_policy=BUILTIN_FORCED_PARAMETERLESS_COMPONENT_REF,
+        escalation_provider=BUILTIN_OPENAI_RESPONSES_COMPONENT_REF,
+    )
     binding = Binding(
         binding_id="seat-a",
         revision="r1",

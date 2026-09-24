@@ -8,6 +8,8 @@ from pathlib import Path
 
 from commander_gym.deck_package import ArtifactRef
 from commander_gym.game_server_binding_openai_sidecar import (
+    BUILTIN_FORCED_PARAMETERLESS_COMPONENT_REF,
+    BUILTIN_OPENAI_RESPONSES_COMPONENT_REF,
     BindingOpenAIGameServerConfig,
     binding_openai_game_server_config_from_environment,
     build_binding_openai_game_server_sidecar,
@@ -40,7 +42,12 @@ def write_json(path: Path, value):
     path.write_text(json.dumps(value, sort_keys=True), encoding="utf-8")
 
 
-def synthetic_catalog(root: Path, *, active_binding: str = "seat-a") -> Path:
+def synthetic_catalog(
+    root: Path,
+    *,
+    active_binding: str = "seat-a",
+    pilot: Pilot | None = None,
+) -> Path:
     deck_artifact = ArtifactRef(
         kind="decklist",
         artifact_id="synthetic-decklist",
@@ -54,7 +61,13 @@ def synthetic_catalog(root: Path, *, active_binding: str = "seat-a") -> Path:
         deck_artifact=deck_artifact,
         format_metadata={"commander": "Synthetic Commander"},
     )
-    pilot = Pilot(pilot_id="synthetic-openai-pilot", revision="r1")
+    if pilot is None:
+        pilot = Pilot(
+            pilot_id="synthetic-openai-pilot",
+            revision="r1",
+            deterministic_policy=BUILTIN_FORCED_PARAMETERLESS_COMPONENT_REF,
+            escalation_provider=BUILTIN_OPENAI_RESPONSES_COMPONENT_REF,
+        )
     binding = Binding(
         binding_id="seat-a",
         revision="r1",
@@ -117,7 +130,7 @@ class BindingOpenAIGameServerSidecarTests(unittest.TestCase):
             self.assertEqual(config.catalog_path, catalog.resolve())
             self.assertEqual(config.instance_root, root.resolve())
 
-    def test_binding_catalog_configures_exact_deck_and_exact_pilot_without_fallback(self):
+    def test_binding_catalog_executes_exact_declared_pilot_graph_without_fallback(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             catalog = synthetic_catalog(root)
@@ -166,11 +179,78 @@ class BindingOpenAIGameServerSidecarTests(unittest.TestCase):
                     result.metadata["pilot"]["artifact_id"],
                     "synthetic-openai-pilot",
                 )
+                routing = result.metadata["routing"]
+                self.assertEqual(routing["path"], "composed")
+                self.assertEqual(routing["pilotId"], "synthetic-openai-pilot")
+                self.assertEqual(routing["pilotRevision"], "r1")
+                self.assertEqual(routing["handledBy"]["role"], "deterministic")
+                self.assertEqual(
+                    routing["handledBy"]["component"]["artifactId"],
+                    BUILTIN_FORCED_PARAMETERLESS_COMPONENT_REF.artifact_id,
+                )
+                self.assertEqual(
+                    routing["attempts"][0]["status"],
+                    "handled",
+                )
 
                 with self.assertRaises(UnknownProfileError):
                     server.resolve_seat("ai-one", "stale-binding")
             finally:
                 server.server_close()
+
+    def test_stale_declared_component_fails_instead_of_using_process_openai_fallback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            stale_pilot = Pilot(
+                pilot_id="synthetic-openai-pilot",
+                revision="r1",
+                deterministic_policy=BUILTIN_FORCED_PARAMETERLESS_COMPONENT_REF,
+                escalation_provider=ArtifactRef(
+                    kind=BUILTIN_OPENAI_RESPONSES_COMPONENT_REF.kind,
+                    artifact_id=BUILTIN_OPENAI_RESPONSES_COMPONENT_REF.artifact_id,
+                    version=BUILTIN_OPENAI_RESPONSES_COMPONENT_REF.version,
+                    digest="sha256:stale-provider-adapter",
+                ),
+            )
+            catalog = synthetic_catalog(root, pilot=stale_pilot)
+            config = BindingOpenAIGameServerConfig(
+                sidecar=OpenAIGameServerSidecarConfig(
+                    token="sidecar-secret",
+                    api_key="sk-test-secret",
+                    port=free_port(),
+                ),
+                catalog_path=catalog,
+                instance_root=root,
+            )
+
+            with self.assertRaisesRegex(
+                OpenAIGameServerSidecarConfigurationError,
+                "missing exact Binding Pilot component",
+            ):
+                build_binding_openai_game_server_sidecar(config, client=FakeClient())
+
+    def test_componentless_pilot_fails_instead_of_constructing_generic_openai_pilot(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            catalog = synthetic_catalog(
+                root,
+                pilot=Pilot(pilot_id="synthetic-openai-pilot", revision="r1"),
+            )
+            config = BindingOpenAIGameServerConfig(
+                sidecar=OpenAIGameServerSidecarConfig(
+                    token="sidecar-secret",
+                    api_key="sk-test-secret",
+                    port=free_port(),
+                ),
+                catalog_path=catalog,
+                instance_root=root,
+            )
+
+            with self.assertRaisesRegex(
+                OpenAIGameServerSidecarConfigurationError,
+                "contains no executable decision subsystem",
+            ):
+                build_binding_openai_game_server_sidecar(config, client=FakeClient())
 
     def test_unresolvable_active_binding_fails_at_startup(self):
         with tempfile.TemporaryDirectory() as directory:
