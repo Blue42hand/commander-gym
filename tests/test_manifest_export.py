@@ -178,7 +178,10 @@ class ManifestExportTests(unittest.TestCase):
             self.assertNotIn("binding", row["input"])
             self.assertEqual(row["provenance"]["outcome"]["winner"], 0)
             self.assertEqual(row["provenance"]["routing"]["path"], "strategic")
-            self.assertEqual(row["provenance"]["binding"]["id"], "binding-public-1")
+            self.assertEqual(
+                row["provenance"]["binding"]["artifact_id"],
+                "binding-public-1",
+            )
 
     def test_training_export_rejects_frozen_test_split(self):
         with tempfile.TemporaryDirectory() as tempdir:
