@@ -81,6 +81,10 @@ class GameServerSidecarServer(ThreadingHTTPServer):
         self._profile_seat_factory = profile_seat_factory
         self._profile_seats: dict[tuple[str, str], GameServerSeatAdapter] = {}
         self._profiles = self._validate_profiles(profiles)
+        if self._profiles and self._profile_seat_factory is None:
+            raise GameServerSidecarConfigurationError(
+                "advertised controller profiles require profile_seat_factory"
+            )
         self._seat_lock = threading.Lock()
         super().__init__(server_address, GameServerSidecarHandler)
 
@@ -148,8 +152,6 @@ class GameServerSidecarServer(ThreadingHTTPServer):
                     **({"commander": commander} if commander is not None else {}),
                 },
             }
-        if result and profile_seat_factory is None:  # type: ignore[name-defined]
-            pass
         return result
 
     @property
