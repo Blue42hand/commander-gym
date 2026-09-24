@@ -26,22 +26,25 @@ Every source must carry the #113 external-source provenance fields before it bec
 
 A public URL is not evidence of training/redistribution permission. Store only the minimum source material necessary for provenance when terms do not permit corpus reuse.
 
+Licensing and evidentiary quality are separate gates. A permissive license may permit reuse of prose while the material still remains only a `strategic_reference`; it does not turn a deck description or primer into an observed action, expert decision trace, or adjudicated policy target.
+
 ## Audited source classes
 
-### Owner-authored Commander Gym DeckKnowledge / primers
+### Existing Commander Gym Archidekt primer bundles
 
-Status: **eligible for private/internal curriculum use**, subject to #113 recording exact artifact identity and keeping private instance content out of the public repository.
+Status: **strategic_reference / candidate_hypothesis only** for the seven surviving legacy bundles currently in `commander-gym-private`.
 
-Use for:
+Their own metadata identifies them as generated tactical analysis with `status=initial_unplaytested` and `games_played=0`. They are therefore not owner-authored expert evidence and must not be used as:
 
-- mulligan heuristics;
-- deck-plan inference;
-- sequencing and resource preservation;
-- recovery priorities;
-- combat allocation;
-- commander-dependence and engine assessment.
+- `observed_action`;
+- `expert_recommendation`;
+- direct preferred-action/training targets.
 
-Raw private primer text should remain in the private instance/external data store. Public benchmark fixtures should use synthetic or separately licensed material.
+They may seed seat-safe synthetic scenarios, review queues, deck-plan hypotheses, mulligan hypotheses, and later adjudication work. Preserve the exact Deck revision plus policy/primer digest so any later accepted claim is traceable to the source hypothesis.
+
+The Gitrog bundle additionally contains source-derived material and exact-list adaptations. Direct reuse of outside-source material remains behind #113 license/provenance review.
+
+Future genuinely owner-authored DeckKnowledge may be admitted separately when its authorship and provenance are explicit; do not inherit that status for the generated legacy bundles.
 
 ### Native Commander Gym decisions + later adjudication
 
@@ -56,6 +59,40 @@ Use for:
 - later search/counterfactual labels.
 
 This is the cleanest long-term source because seat-visible input and legal-action provenance are native.
+
+### cEDH Decklist Database
+
+Repository: `cEDH-Decklist-Database/cEDH-Decklist-Database`
+
+Audited revision: `c9e503c4e6be77aa90b2a472c34cbc65ef2d6725`
+
+Repository license: **MIT**.
+
+The audited database contains 137 entries, including 56 marked `COMPETITIVE`; all 137 have repository-hosted short descriptions, and the data contains 191 linked decklist references marked as primers.
+
+Repository-hosted descriptions are **strategic_reference** candidates for archetype/deck-plan concept extraction, not observed decisions. The MIT repository license does not automatically extend to third-party Moxfield/other primer links, which require separate provenance and terms review.
+
+A keyword audit of the 56 competitive descriptions found broad concept-frequency cues including combo (43), grind/value (35), speed (30), interaction (18), combat (15), graveyard (13), stax (10), instant-speed (3), and board-wipe (2). These counts may guide curriculum coverage, but they are not action labels or expert recommendations.
+
+### cEDH Yisan primer repository
+
+Repository: `fecet/cedh-yisan`
+
+Audited revision: `9bc57dbfcde655f3f9cab2b36dfddd8356055629`
+
+Repository license: **MIT**.
+
+The in-repository Yisan strategy/combo primer is a permissively licensed **strategic_reference** and may become an `expert_recommendation` source for deck-specific claims only after quality/adjudication review. Keep source-authored recommendations separate from Commander Gym's later judgment.
+
+Do not treat separately linked Chinese/Moxfield primer content as covered by the GitHub repository license.
+
+### headpunter/deck-primers
+
+The repository publishes multiple Commander primers but exposes no public license in the audited repository surface.
+
+Status: **reference_only / pending_permission**.
+
+Do not import its prose into the training corpus unless permission/license terms are resolved.
 
 ### Sam Black, "When Should You Interact in cEDH?" (TopDeck.gg)
 
@@ -92,36 +129,84 @@ Never infer hidden cards, omitted targets, unshown sequencing, or rationale. If 
 
 The first dataset revisions should target bounded reasoning slices rather than broad "play Commander well" labels.
 
-### Slice A — interaction allocation
+### Slice A — interaction allocation and table incentives
 
 Target concepts:
 
 - immediate win/fundamental-turn detection;
+- sole-answer versus redundant-answer situations;
 - personal cost of spending interaction;
 - likelihood another player can answer;
+- who should spend the answer when several players benefit;
 - whether allowing resolution materially reduces one's own winning chances;
+- whether a stax piece protects the table from a faster opponent;
 - whether a permanent prevents one's own route to victory;
-- preserving interaction when a threat is strong but not decisive.
+- preserving premium interaction when a threat is strong but not decisive;
+- board-wipe/table-incentive asymmetry.
 
 Preferred eligible evidence sources:
 
 1. qualified native Commander Gym states with teacher/human/search adjudication;
-2. owner-authored/synthetic scenarios grounded in private DeckKnowledge but rewritten as seat-safe state/action fixtures;
-3. permissively licensed expert material if found.
+2. project-owned synthetic scenarios grounded in strategic references but independently specified and adjudicated;
+3. permissively licensed expert material after separate quality/adjudication review.
 
-The Sam Black article is a concept reference only until permission is resolved.
+Reference-only sources may identify concepts but may not contribute copied prose or labels.
 
 ### Slice B — deck-plan inference and mulligans
 
-Use owner-authored DeckKnowledge plus qualified native states to test whether a generally competent Magic player adapts to the bound deck rather than applying one universal mulligan heuristic.
+Use qualified DeckKnowledge/strategic references plus native or project-owned seat-safe states to test whether a generally competent Magic player adapts to the bound deck rather than applying one universal mulligan heuristic.
 
 ### Slice C — recovery and long-game engine assessment
 
-Focus on commander removal, board wipes, preserving independent engines, recast-tax decisions, and deciding when a board can absorb an opponent's medium-strength permanent rather than spending premium interaction.
+Focus on commander removal, board wipes, preserving independent engines, recast-tax decisions, graveyard/rebuild resources, and deciding when a board can absorb an opponent's medium-strength permanent rather than spending premium interaction.
 
 ### Slice D — multiplayer combat allocation
 
-Focus on attack-target selection, crack-back risk, commander damage, whether a wide attack exposes needed engines, and opponent-specific blockers/resources.
+Focus on attack-target selection, crack-back risk, commander damage, whether a wide attack exposes needed engines, opponent-specific blockers/resources, and political/incentive consequences of allocating combat damage.
+
+### Slice E — combo/win-attempt response windows
+
+Focus on:
+
+- Consult/Oracle-style win attempts;
+- Breach/graveyard recursion windows;
+- stack-versus-permanent interaction timing;
+- holding interaction until the point of maximum certainty;
+- deciding whether another player is both able and incentivized to answer.
+
+Do not teach specific preferred responses until the acting-seat observation and legal choices are explicit and independently adjudicated.
+
+## Project-synthetic benchmark seeds
+
+Before #113 lands, synthetic scenarios remain **scenario-design artifacts**, not `BenchmarkCase`, `DecisionRecord`, or training examples. In particular, do not populate a required `chosen_action_id` merely to satisfy an existing schema when no observed action exists.
+
+Every pre-#113 seed must carry these semantics:
+
+```json
+{
+  "source_class": "project_synthetic",
+  "benchmark_seed_only": true,
+  "training_eligible": false,
+  "observed_action": null,
+  "expert_recommendation": null,
+  "commander_gym_adjudication": {
+    "status": "provisional"
+  }
+}
+```
+
+The initial seed should cover at least:
+
+1. sole-answer immediate win;
+2. avoiding redundant interaction when another player can and should answer;
+3. holding a stax piece that protects against a faster opponent;
+4. board-wipe/table-incentive asymmetry;
+5. Consult/Oracle response windows;
+6. Breach/graveyard response windows;
+7. preserving premium interaction versus a value engine;
+8. who-should-answer multiplayer allocation.
+
+These are benchmark-design fixtures only until #113 can materialize them with canonical provenance, leakage groups, acting-seat information boundaries, and independent adjudication.
 
 ## Example record semantics
 
@@ -153,4 +238,4 @@ The #113 implementation owns the canonical schema. This example is semantic guid
 - observed action, source recommendation, Commander Gym adjudication, and uncertainty remain separate;
 - at least one bounded slice has enough audited eligible items to run as a benchmark/training ablation.
 
-Until then, source discovery and concept extraction may proceed, but reference-only sources must not be silently promoted into supervision.
+Until then, source discovery, concept extraction, and project-owned synthetic benchmark-seed design may proceed, but reference-only sources and generated legacy primer hypotheses must not be silently promoted into supervision.
