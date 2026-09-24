@@ -5,9 +5,10 @@ from pathlib import Path
 
 from commander_gym.dataset_manifest import (
     DatasetEvidenceSelection,
-    DatasetLineageRef if False else DatasetEvidenceSelection,
+    DatasetManifest,
+    DatasetManifestStore,
+    DatasetSplit,
 )
-from commander_gym.dataset_manifest import DatasetManifest, DatasetManifestStore, DatasetSplit
 from commander_gym.evidence import RawEvidenceStore
 from commander_gym.identity import IdentityRef
 from commander_gym.model_lineage import (
