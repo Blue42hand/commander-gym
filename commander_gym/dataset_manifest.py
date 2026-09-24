@@ -17,6 +17,7 @@ from typing import Any, Iterable, Mapping
 
 from .annotations import ANNOTATION_TARGET_DECISION, AnnotationError, AnnotationStore
 from .evidence import EvidenceError, validate_raw_evidence_envelope
+from .external_provenance import ExternalProvenanceError, ExternalProvenanceStore
 from .storage import LocalArtifactStore, StorageError, StorageLayout, StoredBlob, parse_artifact_id
 
 DATASET_MANIFEST_SCHEMA_VERSION = 1
@@ -92,12 +93,53 @@ class DatasetEvidenceSelection:
 
 
 @dataclass(frozen=True)
+class ExternalDatasetSelection:
+    """Exact record membership selected from one immutable external-source manifest."""
+
+    source_manifest_artifact_id: str
+    record_ids: tuple[str, ...]
+
+    def validate(self) -> None:
+        _artifact_id(self.source_manifest_artifact_id, "external source manifest artifact ID")
+        if not isinstance(self.record_ids, tuple) or not self.record_ids:
+            raise DatasetManifestError("external dataset selection requires record_ids")
+        if any(not isinstance(item, str) or not item for item in self.record_ids):
+            raise DatasetManifestError(
+                "external dataset selection record_ids must be non-empty strings"
+            )
+        if len(self.record_ids) != len(set(self.record_ids)):
+            raise DatasetManifestError("external dataset selection record_ids must be unique")
+
+    def to_dict(self) -> dict[str, Any]:
+        self.validate()
+        return {
+            "source_manifest_artifact_id": self.source_manifest_artifact_id,
+            "record_ids": sorted(self.record_ids),
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "ExternalDatasetSelection":
+        if not isinstance(value, Mapping):
+            raise DatasetManifestError("external dataset selection must be an object")
+        raw_ids = value.get("record_ids")
+        if not isinstance(raw_ids, list):
+            raise DatasetManifestError("external dataset selection record_ids must be an array")
+        selection = cls(
+            source_manifest_artifact_id=value.get("source_manifest_artifact_id"),
+            record_ids=tuple(raw_ids),
+        )
+        selection.validate()
+        return selection
+
+
+@dataclass(frozen=True)
 class DatasetSplit:
     """Frozen membership and qualification policy for one dataset split."""
 
     name: str
     role: str
     selections: tuple[DatasetEvidenceSelection, ...]
+    external_selections: tuple[ExternalDatasetSelection, ...] = ()
     allow_diagnostic_evidence: bool = False
     diagnostic_justification: str | None = None
 
@@ -107,8 +149,14 @@ class DatasetSplit:
             raise DatasetManifestError(
                 f"dataset split role must be one of {sorted(DATASET_SPLIT_ROLES)!r}"
             )
-        if not isinstance(self.selections, tuple) or not self.selections:
-            raise DatasetManifestError("dataset split requires at least one evidence selection")
+        if not isinstance(self.selections, tuple):
+            raise DatasetManifestError("dataset split selections must be a tuple")
+        if not isinstance(self.external_selections, tuple):
+            raise DatasetManifestError("dataset split external_selections must be a tuple")
+        if not self.selections and not self.external_selections:
+            raise DatasetManifestError(
+                "dataset split requires native evidence or external source selections"
+            )
         seen_sources: set[str] = set()
         seen_decisions: set[str] = set()
         for selection in self.selections:
@@ -127,6 +175,19 @@ class DatasetSplit:
                 )
             seen_sources.add(selection.evidence_artifact_id)
             seen_decisions.update(selection.decision_ids)
+
+        seen_external_sources: set[str] = set()
+        for selection in self.external_selections:
+            if not isinstance(selection, ExternalDatasetSelection):
+                raise DatasetManifestError(
+                    "dataset split external_selections must be ExternalDatasetSelection"
+                )
+            selection.validate()
+            if selection.source_manifest_artifact_id in seen_external_sources:
+                raise DatasetManifestError(
+                    "each external source manifest may appear only once per dataset split"
+                )
+            seen_external_sources.add(selection.source_manifest_artifact_id)
         if type(self.allow_diagnostic_evidence) is not bool:
             raise DatasetManifestError("allow_diagnostic_evidence must be a boolean")
         if self.allow_diagnostic_evidence and self.role != "diagnostic":
@@ -151,6 +212,17 @@ class DatasetSplit:
                 )
             ],
         }
+        if self.external_selections:
+            result["external_selections"] = [
+                item.to_dict()
+                for item in sorted(
+                    self.external_selections,
+                    key=lambda item: (
+                        item.source_manifest_artifact_id,
+                        tuple(sorted(item.record_ids)),
+                    ),
+                )
+            ]
         if self.diagnostic_justification is not None:
             result["diagnostic_justification"] = self.diagnostic_justification
         return result
@@ -159,13 +231,19 @@ class DatasetSplit:
     def from_dict(cls, value: Mapping[str, Any]) -> "DatasetSplit":
         if not isinstance(value, Mapping):
             raise DatasetManifestError("dataset split must be an object")
-        selections = value.get("selections")
+        selections = value.get("selections", [])
+        external_selections = value.get("external_selections", [])
         if not isinstance(selections, list):
             raise DatasetManifestError("dataset split selections must be an array")
+        if not isinstance(external_selections, list):
+            raise DatasetManifestError("dataset split external_selections must be an array")
         split = cls(
             name=value.get("name"),
             role=value.get("role"),
             selections=tuple(DatasetEvidenceSelection.from_dict(item) for item in selections),
+            external_selections=tuple(
+                ExternalDatasetSelection.from_dict(item) for item in external_selections
+            ),
             allow_diagnostic_evidence=value.get("allow_diagnostic_evidence", False),
             diagnostic_justification=value.get("diagnostic_justification"),
         )
@@ -178,6 +256,14 @@ class DatasetSplit:
             decision_id
             for selection in self.selections
             for decision_id in selection.decision_ids
+        )
+
+    @property
+    def external_record_keys(self) -> frozenset[tuple[str, str]]:
+        return frozenset(
+            (selection.source_manifest_artifact_id, record_id)
+            for selection in self.external_selections
+            for record_id in selection.record_ids
         )
 
 
@@ -238,6 +324,7 @@ class DatasetManifest:
 
         names: list[str] = []
         seen_decisions: dict[str, str] = {}
+        seen_external_records: dict[tuple[str, str], str] = {}
         for split in self.splits:
             if not isinstance(split, DatasetSplit):
                 raise DatasetManifestError("dataset splits must be DatasetSplit values")
@@ -250,6 +337,14 @@ class DatasetManifest:
                         f"decision {decision_id!r} appears in both {previous!r} and {split.name!r}"
                     )
                 seen_decisions[decision_id] = split.name
+            for record_key in split.external_record_keys:
+                previous = seen_external_records.get(record_key)
+                if previous is not None:
+                    raise DatasetManifestError(
+                        "external record "
+                        f"{record_key[1]!r} appears in both {previous!r} and {split.name!r}"
+                    )
+                seen_external_records[record_key] = split.name
         if len(names) != len(set(names)):
             raise DatasetManifestError("dataset split names must be unique")
 
@@ -341,6 +436,7 @@ class DatasetManifestStore:
         self.layout = layout
         self.artifacts = LocalArtifactStore(layout)
         self.annotations = AnnotationStore(layout)
+        self.external = ExternalProvenanceStore(layout)
 
     @staticmethod
     def _digest(value: str) -> str:
@@ -392,6 +488,8 @@ class DatasetManifestStore:
         evidence_cache: dict[str, Mapping[str, Any]] = {}
         selected_decisions: set[str] = set()
         selected_sources: set[str] = set()
+        external_index_cache: dict[str, tuple[str, Mapping[str, str]]] = {}
+        leakage_groups: dict[tuple[str, str], str] = {}
 
         for split in manifest.splits:
             for selection in split.selections:
@@ -417,6 +515,58 @@ class DatasetManifestStore:
                             f"{split.name!r} without an explicit safe-subset justification"
                         )
                 selected_decisions.update(selection.decision_ids)
+
+            for selection in split.external_selections:
+                cached = external_index_cache.get(selection.source_manifest_artifact_id)
+                if cached is None:
+                    try:
+                        external_manifest = self.external.read_data_source_artifact(
+                            selection.source_manifest_artifact_id
+                        )
+                        record_index = self.external.read_record_index(
+                            external_manifest.record_index_artifact_id
+                        )
+                    except ExternalProvenanceError as exc:
+                        raise DatasetManifestError(
+                            "external dataset source manifest/index is invalid: "
+                            + selection.source_manifest_artifact_id
+                        ) from exc
+                    if split.role != "diagnostic":
+                        if external_manifest.acting_player_information_boundary != "seat_visible":
+                            raise DatasetManifestError(
+                                "non-diagnostic external data must be explicitly seat_visible"
+                            )
+                        if external_manifest.uncertainty.get(
+                            "contains_privileged_or_future_information"
+                        ) is not False:
+                            raise DatasetManifestError(
+                                "external data must explicitly exclude privileged/future information"
+                            )
+                        if (
+                            split.role == "train"
+                            and external_manifest.license.training_allowed is not True
+                        ):
+                            raise DatasetManifestError(
+                                "external training data requires explicit training permission"
+                            )
+                    cached = (external_manifest.deduplication_identity, record_index)
+                    external_index_cache[selection.source_manifest_artifact_id] = cached
+                deduplication_identity, record_index = cached
+                missing = sorted(set(selection.record_ids) - set(record_index))
+                if missing:
+                    raise DatasetManifestError(
+                        f"dataset split {split.name!r} selects records missing from external "
+                        f"source {selection.source_manifest_artifact_id}: {', '.join(missing)}"
+                    )
+                for record_id in selection.record_ids:
+                    group_key = (deduplication_identity, record_index[record_id])
+                    previous = leakage_groups.get(group_key)
+                    if previous is not None and previous != split.name:
+                        raise DatasetManifestError(
+                            "external leakage group crosses dataset splits: "
+                            f"{group_key[1]!r} in {previous!r} and {split.name!r}"
+                        )
+                    leakage_groups[group_key] = split.name
 
         for annotation_artifact_id in manifest.required_annotation_artifact_ids:
             try:
@@ -587,4 +737,47 @@ def validate_export_selection(
             raise DatasetManifestError(
                 "frozen-test decisions cannot be re-ingested into train/validation export: "
                 + ", ".join(leaked)
+            )
+
+
+def validate_external_export_selection(
+    manifest: DatasetManifest,
+    split_name: str,
+    record_keys: Iterable[tuple[str, str]],
+) -> None:
+    """Fail closed if an external-record export escapes frozen manifest membership."""
+
+    if not isinstance(manifest, DatasetManifest):
+        raise DatasetManifestError("manifest must be a DatasetManifest")
+    manifest.validate()
+    split = manifest.split(split_name)
+    requested = list(record_keys)
+    if any(
+        not isinstance(item, tuple)
+        or len(item) != 2
+        or any(not isinstance(part, str) or not part for part in item)
+        for item in requested
+    ):
+        raise DatasetManifestError(
+            "external export record keys must be (source_manifest_artifact_id, record_id)"
+        )
+    if len(requested) != len(set(requested)):
+        raise DatasetManifestError("external export record keys must be unique")
+    outside = sorted(set(requested) - set(split.external_record_keys))
+    if outside:
+        rendered = ", ".join(f"{source}:{record}" for source, record in outside)
+        raise DatasetManifestError(
+            f"external export selects records outside split {split_name!r}: {rendered}"
+        )
+    if split.role in {"train", "validation"}:
+        frozen = {
+            record_key
+            for candidate in manifest.splits
+            if candidate.role == "frozen_test"
+            for record_key in candidate.external_record_keys
+        }
+        if set(requested) & frozen:
+            raise DatasetManifestError(
+                "frozen-test external records cannot be re-ingested into "
+                "train/validation export"
             )
