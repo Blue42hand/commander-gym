@@ -77,6 +77,16 @@ from .experiment import (
     run_experiment,
     write_experiment_artifact,
 )
+from .model_lineage import (
+    MODEL_LINEAGE_CATALOG_SCHEMA_VERSION,
+    MODEL_LINEAGE_SCHEMA_VERSION,
+    DatasetLineageRef,
+    ModelArtifactRef,
+    ModelLineageError,
+    ModelLineageRecord,
+    ModelLineageStore,
+    ModelLineageWriteResult,
+)
 from .openai_responses_pilot import OpenAIResponsesPilot, OpenAIResponsesPilotError
 from .orchestration import (
     ArgentumOrchestrator,
@@ -191,6 +201,7 @@ __all__ = [
     "DECK_SOURCE_SCHEMA_VERSION",
     "DatasetEvidenceSelection",
     "DatasetExportError",
+    "DatasetLineageRef",
     "DatasetManifest",
     "DatasetManifestError",
     "DatasetManifestStore",
@@ -217,6 +228,13 @@ __all__ = [
     "ForcedParameterlessChoiceHandler",
     "IDENTITY_EPOCH_BINDING_V1",
     "IDENTITY_EPOCH_PRE_BINDING_V1",
+    "MODEL_LINEAGE_CATALOG_SCHEMA_VERSION",
+    "MODEL_LINEAGE_SCHEMA_VERSION",
+    "ModelArtifactRef",
+    "ModelLineageError",
+    "ModelLineageRecord",
+    "ModelLineageStore",
+    "ModelLineageWriteResult",
     "OpenAIResponsesPilot",
     "OpenAIResponsesPilotError",
     "OrchestrationBackend",
