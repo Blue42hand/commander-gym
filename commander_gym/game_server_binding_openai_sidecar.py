@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .binding_catalog import BindingCatalogError, load_binding_catalog
-from .game_server_bindings import GameServerBindingRegistry, build_binding_game_server_sidecar
+from .game_server_bindings import GameServerBindingError, GameServerBindingRegistry
 from .game_server_openai_sidecar import (
     JsonlSeatProvenanceWriter,
     OpenAIGameServerSidecarConfig,
@@ -22,6 +22,7 @@ from .game_server_openai_sidecar import (
     SeatProvenanceSink,
     openai_game_server_sidecar_from_environment,
 )
+from .game_server_sidecar import GameServerSidecarServer
 from .identity import Binding, Pilot
 from .openai_responses_pilot import OpenAIResponsesPilot
 from .pilot import ArgentumActionChoice, ArgentumDecisionChoice, PilotChoice
@@ -122,7 +123,7 @@ def build_binding_openai_game_server_sidecar(
     *,
     client: Any | None = None,
     provenance_sink: SeatProvenanceSink | None = None,
-):
+) -> GameServerSidecarServer:
     """Build the Binding-only OpenAI sidecar from one instance-supplied catalog.
 
     The catalog is resolved eagerly through ``BindingResolver``. An explicit selected
@@ -161,13 +162,28 @@ def build_binding_openai_game_server_sidecar(
             pilot_factory=pilot_factory,
         )
         registry = GameServerBindingRegistry(loaded.resolver, loaded.binding_ids)
-    except BindingCatalogError as exc:
+    except (BindingCatalogError, GameServerBindingError) as exc:
         raise OpenAIGameServerSidecarConfigurationError(str(exc)) from exc
 
-    return build_binding_game_server_sidecar(
-        config.sidecar.sidecar_config(),
-        registry,
-        provenance_sink=provenance_sink,
+    sidecar = config.sidecar.sidecar_config()
+
+    def profile_seat_factory(player_id: str, profile_id: str):
+        sink = (
+            None
+            if provenance_sink is None
+            else lambda event, player_id=player_id: provenance_sink(player_id, event)
+        )
+        return registry.create_seat(
+            player_id,
+            profile_id,
+            provenance_sink=sink,
+        )
+
+    return GameServerSidecarServer(
+        (sidecar.bind_host, sidecar.port),
+        sidecar,
+        profiles=registry.profile_payloads(),
+        profile_seat_factory=profile_seat_factory,
     )
 
 
