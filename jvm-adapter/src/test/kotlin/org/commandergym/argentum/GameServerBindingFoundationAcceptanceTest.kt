@@ -199,7 +199,7 @@ class GameServerBindingFoundationAcceptanceTest {
                 )
             )
             controller.setDeckList(boundDeck.deckList, boundDeck.commander)
-            assertEquals(true, controller.decideMulligan(MulliganInfo(emptyList(), emptyMap(), null, 0)))
+            assertEquals(true, controller.decideMulligan(MulliganInfo(emptyList(), 0, 0)))
 
             val resolved = awaitEvidence(Duration.ofSeconds(10)) {
                 it["event"] == "binding_seat_resolved" && it["profileId"] == "seat-a"
