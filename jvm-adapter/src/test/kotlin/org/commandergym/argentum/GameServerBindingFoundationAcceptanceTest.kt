@@ -183,10 +183,7 @@ class GameServerBindingFoundationAcceptanceTest {
 
             client.send(
                 ClientMessage.SubmitQuickGameLobbyDeck(
-                    deckList = mapOf(
-                        "Zetalpa, Primal Dawn" to 1,
-                        "Plains" to 99,
-                    ),
+                    deckList = mapOf("Plains" to 99),
                     commander = "Zetalpa, Primal Dawn",
                 )
             )
@@ -269,9 +266,9 @@ class GameServerBindingFoundationAcceptanceTest {
             if (predicate()) return
             Thread.sleep(40)
         }
-        throw AssertionError(
-            "Timed out waiting for $description; evidence=${evidenceLines().takeLast(8)}"
-        )
+        val diagnostic = "Timed out waiting for $description; evidence=${evidenceLines().takeLast(8)}"
+        println("BINDING_ACCEPTANCE_TIMEOUT $diagnostic")
+        throw AssertionError(diagnostic)
     }
 
     private fun waitForPort(port: Int, timeout: Duration) {
