@@ -31,7 +31,8 @@ jobs:
           path: commander-gym
       - uses: actions/checkout@v6
         with:
-          repository: wingedsheep/argentum-engine
+          repository: Blue42hand/argentum-engine
+          ref: 493563799b1ec972288f03e818d8974914b45bd0
           path: argentum-engine
       - uses: actions/setup-java@v5
         with:
@@ -41,7 +42,7 @@ jobs:
         with:
           python-version: '3.12'
       - uses: gradle/actions/setup-gradle@v4
-      - name: Compile and test vanilla-Argentum adapter
+      - name: Compile and test accepted Argentum integration seam
         run: ./argentum-engine/gradlew -p commander-gym/jvm-adapter test
         env:
           ARGENTUM_ENGINE_DIR: ${{ github.workspace }}/argentum-engine
