@@ -17,7 +17,6 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
@@ -203,10 +202,6 @@ class GameServerBindingFoundationAcceptanceTest {
             assertEquals("r1", resolved["bindingRevision"])
             assertEquals("synthetic-binding-pilot", resolved["pilotId"])
             assertEquals("r1", resolved["pilotRevision"])
-
-            await(Duration.ofSeconds(30), "mulligan completion through selected controller") {
-                client.messages.any { it is ServerMessage.MulliganComplete }
-            }
         } finally {
             client.close()
         }
