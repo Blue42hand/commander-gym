@@ -102,6 +102,35 @@ Commander Gym's card-coverage work should therefore produce upstream-quality Arg
 8. **Progressively compile experience.** Move recurring decisions from frontier-model reasoning into validated deterministic skills, learned specialists, and a Magic-specialized local generalist when evidence supports it. The mature pilot should be primarily local; cloud models are teachers/evaluators/escalation resources.
 9. **Make evidence durable before scale.** Keep Deck, DeckKnowledge, Pilot, Binding, Run, Decision, Annotation, Dataset, and Model lineage explicit and immutable enough to reproduce training/evaluation.
 10. **Keep deployment portable.** Durable artifact identity must not depend on a host/path. Storage roots, model services, and remote-access infrastructure are configuration, not architecture.
+11. **Reuse learned Magic competence when evidence supports it.** Before spending large compute teaching basic Magic from scratch, audit and benchmark transferable gameplay-trained models, card representations, and semantic models. Imported artifacts must remain seat-safe, model-independent at the Pilot boundary, and fully traceable to their original training/evaluation provenance.
+12. **Measure transfer instead of assuming it.** Treat 1v1 Magic competence, Commander-specific knowledge, and four-player adaptation as separable experimental factors. Use held-out Argentum decision/game benchmarks to establish what transfers, what regresses, and what Commander-specific supervision is required.
+
+## Transfer-learning and external evidence workstream
+
+The local-generalist program should not assume that Commander Gym must relearn basic Magic from random initialization. A parallel research path now audits reusable pretrained gameplay models and representations, imports external artifacts with explicit provenance, and measures 1v1-to-Commander transfer before committing to large native-training runs.
+
+Current tracking:
+
+- **#112** — audit pretrained Magic gameplay models and reusable representations;
+- **#113** — add external model/dataset provenance and import contracts;
+- **#114** — benchmark 1v1 Magic transfer and Commander-specific adaptation;
+- **#115** — build a curated Commander expert curriculum from primers, cEDH analysis, and reconstructed decisions.
+
+The intended experimental sequence is:
+
+```text
+#77 foundation
+  -> #72 stable full-game pilot path
+  -> pretrained-model/representation transfer benchmark
+  -> select or compose the best local Magic substrate
+  -> Commander-specific adaptation
+  -> Argentum self-play / search / expert iteration
+  -> later RL where it adds measurable long-horizon value
+```
+
+Research, licensing checks, artifact characterization, schema work, and benchmark fixture preparation may proceed in parallel with #77. Substantive transfer/game comparisons should not outrun the stable identity/evidence/pilot contracts or be dominated by unresolved #72 transport/schema failures.
+
+Forge/XMage may be training provenance for an imported model, but they are not production dependencies. Imported models must still consume Commander Gym's seat-safe Argentum observation/legal-action contract.
 
 ## Reference implementations
 
