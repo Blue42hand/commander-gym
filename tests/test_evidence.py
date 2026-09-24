@@ -29,7 +29,7 @@ class RawEvidenceTests(unittest.TestCase):
     def component_ref(self, artifact_type, artifact_id, char):
         return IdentityRef(artifact_type, artifact_id, "r1", char * 64)
 
-    def make_record(self, *, binding=True, routing=True):
+    def make_record(self, *, binding=True, routing=True, model_io=False):
         pilot_metadata = {
             "provider": "fixture-provider",
             "modelRevision": "model-r3",
@@ -45,6 +45,48 @@ class RawEvidenceTests(unittest.TestCase):
                 "delegate": "teacher-pilot",
                 "delegateVersion": "v7",
                 "strategicWakeAvoided": False,
+            }
+        if model_io:
+            pilot_metadata["modelIo"] = {
+                "schemaVersion": 1,
+                "provider": "fixture-provider",
+                "selectedAttempt": 1,
+                "attempts": [
+                    {
+                        "attempt": 0,
+                        "request": {
+                            "model": "fixture-model",
+                            "instructions": "play only from visible state",
+                            "input": "first exact model input",
+                        },
+                        "response": {
+                            "responseId": "resp-0",
+                            "responseModel": "fixture-model-r3",
+                            "status": "completed",
+                            "usage": {"input_tokens": 11, "output_tokens": 4},
+                            "outputText": '{"channel":"action","semanticId":"invalid"}',
+                            "validationError": "semanticId was not legal",
+                        },
+                    },
+                    {
+                        "attempt": 1,
+                        "request": {
+                            "model": "fixture-model",
+                            "instructions": "play only from visible state",
+                            "input": "second exact model input with retry correction",
+                        },
+                        "response": {
+                            "responseId": "resp-1",
+                            "responseModel": "fixture-model-r3",
+                            "status": "completed",
+                            "usage": {"input_tokens": 16, "output_tokens": 5},
+                            "outputText": (
+                                '{"channel":"action",'
+                                '"semanticId":"action-semantic-1"}'
+                            ),
+                        },
+                    },
+                ],
             }
         return DecisionRecord(
             game_id="game-1",
@@ -167,6 +209,58 @@ class RawEvidenceTests(unittest.TestCase):
             decision["provenance"]["result_state_digest"], "state-after-1"
         )
 
+    def test_model_io_is_split_exactly_and_accounted(self):
+        run = self.make_run()
+        record = self.make_record(model_io=True)
+        envelope = build_raw_evidence_envelope(
+            run,
+            [record],
+            commander_gym_revision="cg-revision-model-io",
+        )
+        decision = envelope["decisions"][0]
+
+        input_io = decision["input"]["model_io"]
+        target_io = decision["target"]["model_io"]
+        provenance_io = decision["provenance"]["model_io"]
+        self.assertEqual(input_io["provider"], "fixture-provider")
+        self.assertEqual(input_io["attempts"][0]["request"]["input"], "first exact model input")
+        self.assertEqual(
+            input_io["attempts"][1]["request"]["input"],
+            "second exact model input with retry correction",
+        )
+        self.assertEqual(target_io["selected_attempt"], 1)
+        self.assertEqual(
+            target_io["attempts"][0]["output_text"],
+            '{"channel":"action","semanticId":"invalid"}',
+        )
+        self.assertEqual(
+            target_io["attempts"][1]["output_text"],
+            '{"channel":"action","semanticId":"action-semantic-1"}',
+        )
+        self.assertEqual(provenance_io["attempts"][0]["responseId"], "resp-0")
+        self.assertEqual(
+            provenance_io["attempts"][0]["validationError"],
+            "semanticId was not legal",
+        )
+        self.assertEqual(provenance_io["attempts"][1]["usage"]["output_tokens"], 5)
+        self.assertNotIn(
+            "modelIo", decision["provenance"]["metadata"]["pilot_metadata"]
+        )
+        self.assertNotIn("first exact model input", str(decision["provenance"]))
+
+        with tempfile.TemporaryDirectory() as tempdir:
+            layout = StorageLayout.create(Path(tempdir) / "evidence")
+            layout.ensure_directories()
+            written = RawEvidenceStore(layout).write(
+                run,
+                [record],
+                commander_gym_revision="cg-revision-model-io",
+            )
+            self.assertIsNotNone(written.accounting.model_input_bytes)
+            self.assertIsNotNone(written.accounting.model_output_bytes)
+            self.assertGreater(written.accounting.model_input_bytes, 0)
+            self.assertGreater(written.accounting.model_output_bytes, 0)
+
     def test_store_is_immutable_accounted_and_path_portable(self):
         run = self.make_run()
         record = self.make_record()
@@ -268,6 +362,23 @@ class RawEvidenceTests(unittest.TestCase):
             build_raw_evidence_envelope(
                 missing_schema,
                 [self.make_record()],
+                commander_gym_revision="cg-revision-123",
+            )
+
+        malformed_metadata = dict(self.make_record().metadata)
+        malformed_pilot_metadata = dict(malformed_metadata["pilot_metadata"])
+        malformed_pilot_metadata["modelIo"] = {
+            "schemaVersion": 1,
+            "provider": "fixture-provider",
+            "selectedAttempt": 1,
+            "attempts": [],
+        }
+        malformed_metadata["pilot_metadata"] = malformed_pilot_metadata
+        malformed_record = replace(self.make_record(), metadata=malformed_metadata)
+        with self.assertRaises(EvidenceError):
+            build_raw_evidence_envelope(
+                self.make_run(),
+                [malformed_record],
                 commander_gym_revision="cg-revision-123",
             )
 
