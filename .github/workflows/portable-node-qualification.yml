@@ -11,7 +11,9 @@ on:
       - 'commander_gym/storage_doctor.py'
       - 'scripts/run_argentum_gateway_service.sh'
       - 'scripts/qualify_portable_node.sh'
+      - 'scripts/qualify_portable_node_systemd.sh'
       - 'docs/storage-layout.md'
+      - 'docs/portable-node-qualification.md'
   workflow_dispatch:
 
 permissions:
@@ -79,3 +81,71 @@ jobs:
             ${{ runner.temp }}/portable-node-qualification/rendered/storage-layout.json
             ${{ runner.temp }}/portable-node-qualification/argentum.log
             ${{ runner.temp }}/portable-node-qualification/gateway.log
+
+  systemd-host-start:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      ARGENTUM_REVISION: ec8380b157957259493ec248c75b92330151177e
+    steps:
+      - name: Check out Commander Gym revision under test
+        uses: actions/checkout@v6
+        with:
+          path: commander-gym
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Check out pinned Argentum integration revision
+        uses: actions/checkout@v6
+        with:
+          repository: Blue42hand/argentum-engine
+          path: argentum-engine
+          ref: ${{ env.ARGENTUM_REVISION }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Expose Java 21 to system services
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo ln -sf "$JAVA_HOME/bin/java" /usr/local/bin/java
+          /usr/local/bin/java -version
+          test -d /run/systemd/system
+          systemctl is-system-running --wait || test "$(systemctl is-system-running)" = "degraded"
+
+      - name: Install rendered units, start with systemd, and inspect portable node
+        shell: bash
+        run: |
+          set -euo pipefail
+          commander_revision="$(git -C commander-gym rev-parse HEAD)"
+          argentum_revision="$(git -C argentum-engine rev-parse HEAD)"
+          test "$argentum_revision" = "$ARGENTUM_REVISION"
+          bash commander-gym/scripts/qualify_portable_node_systemd.sh \
+            "$GITHUB_WORKSPACE/commander-gym" \
+            "$commander_revision" \
+            "$GITHUB_WORKSPACE/argentum-engine" \
+            "$argentum_revision" \
+            "$RUNNER_TEMP/portable-node-systemd-qualification"
+
+      - name: Archive systemd qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: portable-node-systemd-qualification
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/portable-node-systemd-qualification/qualification.json
+            ${{ runner.temp }}/portable-node-systemd-qualification/node-package-input.json
+            ${{ runner.temp }}/portable-node-systemd-qualification/rendered/node-package.json
+            ${{ runner.temp }}/portable-node-systemd-qualification/rendered/storage-layout.json
+            ${{ runner.temp }}/portable-node-systemd-qualification/systemd-status.txt
+            ${{ runner.temp }}/portable-node-systemd-qualification/argentum-journal.log
+            ${{ runner.temp }}/portable-node-systemd-qualification/gateway-journal.log
