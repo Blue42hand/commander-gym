@@ -30,6 +30,7 @@ from .pilot import ArtificialPlayer, PilotChoice, PilotContractError
 from .pilot_routing import CertifiedMechanicalHandler, _annotate
 
 PILOT_ROUTING_MODE_STATIC_ORDER_V1 = "static-order-v1"
+PILOT_ROUTING_PATH_COMPOSED_V1 = "composed"
 PILOT_ROUTING_PROVENANCE_SCHEMA_VERSION = 1
 
 
@@ -278,6 +279,7 @@ class ComposedPilot:
             attempts.append(attempt)
             routing = {
                 "schemaVersion": PILOT_ROUTING_PROVENANCE_SCHEMA_VERSION,
+                "path": PILOT_ROUTING_PATH_COMPOSED_V1,
                 "mode": PILOT_ROUTING_MODE_STATIC_ORDER_V1,
                 "pilotId": self.pilot.pilot_id,
                 "pilotRevision": self.pilot.revision,
