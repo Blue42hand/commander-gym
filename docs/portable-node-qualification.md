@@ -38,7 +38,17 @@ The `systemd-host-start` GitHub Actions job runs this on a fresh Ubuntu VM with 
 
 A green systemd-host job closes the clean-host **installation/start mechanics** acceptance gap for the rendered package: the checked-in package renderer, ordinary preflight, rendered units, real system manager, pinned source guards, authenticated gateway, and compatibility doctor all work together on a host with no pre-existing Commander Gym service installation.
 
-It does not claim long-running production operations, local-hardware qualification, accelerator support, tunnel/VPN behavior, or the #53 evidence pipeline. Those remain separate concerns.
+It does not claim long-running production operations, tunnel/VPN behavior, or the #53 evidence pipeline. Those remain separate concerns.
+
+## Optional local inference and accelerator qualification
+
+Local inference remains deployment configuration rather than Pilot or model-selection policy. A node may configure `local_inference.command`, an optional working directory/environment file, and an optional `local_inference.accelerator_probe` argv list.
+
+When `accelerator_probe` is present, `commander_gym.node_preflight` executes it directly, without a shell, with a bounded timeout. Exit status zero means the deployment-specific capability requirement is available. A nonzero exit status, missing executable, or timeout fails the node preflight closed. Short stdout/stderr excerpts are included in the health report for diagnosis.
+
+Commander Gym does not interpret accelerator vendors or require a particular GPU API. The probe can therefore be a deployment-owned NVIDIA, ROCm, Metal, TPU, CPU-feature, memory-capacity, or provider-specific checker without encoding those technologies into Commander Gym's application contracts. Omitting the probe means the node has no accelerator requirement to validate.
+
+The accelerator probe is intentionally separate from `service_doctor`: preflight verifies that the configured host capability exists before startup, while service doctor verifies reachable running services and Argentum compatibility after startup.
 
 ## #53 boundary
 

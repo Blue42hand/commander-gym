@@ -22,5 +22,11 @@
       "models": "/mnt/commander-gym-models",
       "cache": "/var/cache/commander-gym"
     }
+  },
+  "local_inference": {
+    "command": ["/usr/local/bin/model-server", "serve"],
+    "working_directory": "/var/lib/commander-gym/models",
+    "environment_file": "/etc/commander-gym/model.env",
+    "accelerator_probe": ["/usr/local/bin/check-accelerator"]
   }
 }

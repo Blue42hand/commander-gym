@@ -63,6 +63,19 @@ def _http_url(value: object, *, field: str) -> str:
     return value.rstrip("/")
 
 
+def _command_argv(value: object, *, field: str) -> tuple[str, ...]:
+    if not isinstance(value, list) or not value:
+        raise NodePackageError(f"{field} must be a non-empty list")
+    command: list[str] = []
+    for index, item in enumerate(value):
+        if not isinstance(item, str) or not item:
+            raise NodePackageError(f"{field}[{index}] must be a non-empty string")
+        if "\n" in item or "\r" in item:
+            raise NodePackageError(f"{field} must not contain newlines")
+        command.append(item)
+    return tuple(command)
+
+
 @dataclass(frozen=True)
 class CheckoutSpec:
     root: Path
@@ -85,27 +98,16 @@ class LocalInferenceSpec:
     command: tuple[str, ...]
     working_directory: Path | None = None
     environment_file: Path | None = None
+    accelerator_probe: tuple[str, ...] | None = None
 
     @classmethod
     def from_mapping(cls, value: object) -> "LocalInferenceSpec":
         data = _mapping(value, field="local_inference")
-        raw_command = data.get("command")
-        if not isinstance(raw_command, list) or not raw_command:
-            raise NodePackageError("local_inference.command must be a non-empty list")
-        command: list[str] = []
-        for index, item in enumerate(raw_command):
-            if not isinstance(item, str) or not item:
-                raise NodePackageError(
-                    f"local_inference.command[{index}] must be a non-empty string"
-                )
-            if "\n" in item or "\r" in item:
-                raise NodePackageError("local_inference.command must not contain newlines")
-            command.append(item)
-
         working_directory = data.get("working_directory")
         environment_file = data.get("environment_file")
+        accelerator_probe = data.get("accelerator_probe")
         return cls(
-            command=tuple(command),
+            command=_command_argv(data.get("command"), field="local_inference.command"),
             working_directory=(
                 _absolute_path(working_directory, field="local_inference.working_directory")
                 if working_directory is not None
@@ -116,10 +118,15 @@ class LocalInferenceSpec:
                 if environment_file is not None
                 else None
             ),
+            accelerator_probe=(
+                _command_argv(accelerator_probe, field="local_inference.accelerator_probe")
+                if accelerator_probe is not None
+                else None
+            ),
         )
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        result: dict[str, Any] = {
             "command": list(self.command),
             "working_directory": (
                 str(self.working_directory) if self.working_directory is not None else None
@@ -128,6 +135,9 @@ class LocalInferenceSpec:
                 str(self.environment_file) if self.environment_file is not None else None
             ),
         }
+        if self.accelerator_probe is not None:
+            result["accelerator_probe"] = list(self.accelerator_probe)
+        return result
 
 
 @dataclass(frozen=True)

@@ -21,6 +21,9 @@ from .node_package import CheckoutSpec, NodePackageConfig, NodePackageError, loa
 from .storage import StorageError
 from .storage_doctor import StorageHealth, check_storage
 
+ACCELERATOR_PROBE_TIMEOUT_SECONDS = 10
+_PROBE_OUTPUT_LIMIT = 512
+
 
 @dataclass(frozen=True)
 class CommandHealth:
@@ -43,6 +46,19 @@ class FileHealth:
 
 
 @dataclass(frozen=True)
+class ProbeHealth:
+    """Result of one operator-configured, provider-neutral host capability probe."""
+
+    name: str
+    command: tuple[str, ...]
+    ok: bool
+    returncode: int | None = None
+    stdout: str | None = None
+    stderr: str | None = None
+    error: str | None = None
+
+
+@dataclass(frozen=True)
 class CheckoutHealth:
     name: str
     root: str
@@ -59,7 +75,7 @@ class NodePreflight:
     commands: tuple[CommandHealth, ...]
     checkouts: tuple[CheckoutHealth, ...]
     gateway_token: FileHealth
-    local_inference: tuple[FileHealth | CommandHealth, ...]
+    local_inference: tuple[FileHealth | CommandHealth | ProbeHealth, ...]
     storage: StorageHealth
 
     @property
@@ -266,16 +282,82 @@ def check_checkout(
         )
 
 
+def _trim_probe_output(value: str | None) -> str | None:
+    if value is None:
+        return None
+    stripped = value.strip()
+    if not stripped:
+        return None
+    if len(stripped) <= _PROBE_OUTPUT_LIMIT:
+        return stripped
+    return stripped[:_PROBE_OUTPUT_LIMIT] + "..."
+
+
+def _run_accelerator_probe(
+    command: tuple[str, ...],
+    *,
+    working_directory: Path | None,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+) -> ProbeHealth:
+    """Execute one explicitly configured accelerator/capability probe.
+
+    Commander Gym does not infer GPU vendors or accelerator policy. A deployment may
+    supply any shell-free argv probe appropriate for that host/provider. Exit status
+    zero means the requested capability is available; any other result fails closed.
+    """
+
+    try:
+        completed = runner(
+            list(command),
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=ACCELERATOR_PROBE_TIMEOUT_SECONDS,
+            cwd=(str(working_directory) if working_directory is not None else None),
+        )
+    except subprocess.TimeoutExpired as exc:
+        return ProbeHealth(
+            name="local-inference-accelerator",
+            command=command,
+            ok=False,
+            stdout=_trim_probe_output(exc.stdout if isinstance(exc.stdout, str) else None),
+            stderr=_trim_probe_output(exc.stderr if isinstance(exc.stderr, str) else None),
+            error=f"accelerator probe timed out after {ACCELERATOR_PROBE_TIMEOUT_SECONDS}s",
+        )
+    except OSError as exc:
+        return ProbeHealth(
+            name="local-inference-accelerator",
+            command=command,
+            ok=False,
+            error=str(exc),
+        )
+
+    return ProbeHealth(
+        name="local-inference-accelerator",
+        command=command,
+        ok=completed.returncode == 0,
+        returncode=completed.returncode,
+        stdout=_trim_probe_output(completed.stdout),
+        stderr=_trim_probe_output(completed.stderr),
+        error=(
+            None
+            if completed.returncode == 0
+            else f"accelerator probe exited with status {completed.returncode}"
+        ),
+    )
+
+
 def _check_local_inference(
     config: NodePackageConfig,
     *,
     command_resolver: Callable[[str], str | None],
-) -> tuple[FileHealth | CommandHealth, ...]:
+    probe_runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+) -> tuple[FileHealth | CommandHealth | ProbeHealth, ...]:
     spec = config.local_inference
     if spec is None:
         return ()
 
-    results: list[FileHealth | CommandHealth] = []
+    results: list[FileHealth | CommandHealth | ProbeHealth] = []
     command = spec.command[0]
     if "/" in command:
         results.append(
@@ -312,6 +394,14 @@ def _check_local_inference(
                 require_nonempty=True,
             )
         )
+    if spec.accelerator_probe is not None:
+        results.append(
+            _run_accelerator_probe(
+                spec.accelerator_probe,
+                working_directory=spec.working_directory,
+                runner=probe_runner,
+            )
+        )
     return tuple(results)
 
 
@@ -323,6 +413,7 @@ def check_node_preflight(
     require_systemd: bool = True,
     command_resolver: Callable[[str], str | None] = shutil.which,
     git_runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+    probe_runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
 ) -> NodePreflight:
     """Validate whether a rendered node package has the host prerequisites to start."""
 
@@ -356,7 +447,11 @@ def check_node_preflight(
         config.gateway_token_file,
         require_nonempty=True,
     )
-    local_inference = _check_local_inference(config, command_resolver=command_resolver)
+    local_inference = _check_local_inference(
+        config,
+        command_resolver=command_resolver,
+        probe_runner=probe_runner,
+    )
     storage = check_storage(
         config.storage,
         min_free_bytes=min_free_bytes,

@@ -71,6 +71,9 @@ def _config(tmp: Path, *, with_model: bool = False) -> NodePackageConfig:
         model.parent.mkdir(parents=True)
         model.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
         model.chmod(0o755)
+        probe = tmp / "bin" / "accelerator-probe"
+        probe.write_text("#!/bin/bash\necho accelerator-ok\nexit 0\n", encoding="utf-8")
+        probe.chmod(0o755)
         work = tmp / "model-work"
         work.mkdir()
         env = tmp / "secrets" / "model.env"
@@ -79,6 +82,7 @@ def _config(tmp: Path, *, with_model: bool = False) -> NodePackageConfig:
             "command": [str(model), "serve"],
             "working_directory": str(work),
             "environment_file": str(env),
+            "accelerator_probe": [str(probe)],
         }
     return NodePackageConfig.from_mapping(raw)
 
@@ -112,8 +116,42 @@ class NodePreflightTests(unittest.TestCase):
             self.assertTrue(report.storage.ok)
             self.assertTrue(all(item.ok for item in report.checkouts))
             self.assertTrue(all(item.ok for item in report.local_inference))
+            probe = next(
+                item
+                for item in report.local_inference
+                if getattr(item, "name", None) == "local-inference-accelerator"
+            )
+            self.assertEqual(probe.returncode, 0)
+            self.assertEqual(probe.stdout, "accelerator-ok")
             for path in config.storage.routes.values():
                 self.assertTrue(path.is_dir())
+
+    def test_accelerator_probe_failure_fails_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tmp = Path(directory)
+            config = _config(tmp, with_model=True)
+            failing_probe = tmp / "bin" / "missing-capability"
+            failing_probe.write_text("#!/bin/bash\necho unavailable >&2\nexit 7\n", encoding="utf-8")
+            failing_probe.chmod(0o755)
+            raw = config.to_dict()
+            raw["local_inference"]["accelerator_probe"] = [str(failing_probe)]
+            failed_config = NodePackageConfig.from_mapping(raw)
+
+            report = check_node_preflight(
+                failed_config,
+                initialize_storage=True,
+                command_resolver=_commands,
+            )
+            self.assertFalse(report.ok)
+            probe = next(
+                item
+                for item in report.local_inference
+                if getattr(item, "name", None) == "local-inference-accelerator"
+            )
+            self.assertFalse(probe.ok)
+            self.assertEqual(probe.returncode, 7)
+            self.assertEqual(probe.stderr, "unavailable")
+            self.assertEqual(probe.error, "accelerator probe exited with status 7")
 
     def test_revision_mismatch_fails_closed(self):
         with tempfile.TemporaryDirectory() as directory:

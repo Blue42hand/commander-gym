@@ -47,6 +47,7 @@ def config_mapping(tmp: Path, *, with_model: bool = False):
             "command": ["/usr/bin/example-model", "serve", "--port", "18000"],
             "working_directory": str(tmp / "model work"),
             "environment_file": str(tmp / "secrets" / "model.env"),
+            "accelerator_probe": ["accelerator-check", "--machine-readable"],
         }
     return config
 
@@ -72,6 +73,20 @@ class NodePackageConfigTests(unittest.TestCase):
             config = NodePackageConfig.from_mapping(config_mapping(tmp))
             self.assertEqual(config.storage.path("runs"), tmp / "data root" / "runs")
             self.assertEqual(config.storage.path("models"), tmp / "bulk models")
+
+    def test_optional_accelerator_probe_is_shell_free_argv(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tmp = Path(directory)
+            config = NodePackageConfig.from_mapping(config_mapping(tmp, with_model=True))
+            self.assertEqual(
+                config.local_inference.accelerator_probe,
+                ("accelerator-check", "--machine-readable"),
+            )
+
+            raw = config_mapping(tmp, with_model=True)
+            raw["local_inference"]["accelerator_probe"] = ["probe\nunsafe"]
+            with self.assertRaisesRegex(NodePackageError, "must not contain newlines"):
+                NodePackageConfig.from_mapping(raw)
 
 
 class RenderNodePackageTests(unittest.TestCase):
@@ -128,6 +143,11 @@ class RenderNodePackageTests(unittest.TestCase):
             unit = (package / "systemd" / "commander-gym-model.service").read_text()
             self.assertIn("Optional Local Inference Service", unit)
             self.assertIn(str(tmp / "secrets" / "model.env"), unit)
+            manifest = json.loads((package / "node-package.json").read_text())
+            self.assertEqual(
+                manifest["local_inference"]["accelerator_probe"],
+                ["accelerator-check", "--machine-readable"],
+            )
 
     def test_no_model_unit_when_local_inference_is_absent(self):
         with tempfile.TemporaryDirectory() as directory:
