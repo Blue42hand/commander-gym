@@ -25,7 +25,11 @@ from .argentum_client import (
     ArgentumGymClient,
     ArgentumRemoteError,
 )
-from .openai_responses_pilot import OpenAIResponsesPilot, OpenAIResponsesPilotError
+from .openai_responses_pilot import (
+    MODEL_IO_SCHEMA_VERSION,
+    OpenAIResponsesPilot,
+    OpenAIResponsesPilotError,
+)
 from .orchestration import (
     ArgentumOrchestrator,
     OrchestrationError,
@@ -60,6 +64,7 @@ from .run_records import (
 from .records import SCHEMA_VERSION as DECISION_RECORD_SCHEMA_VERSION
 
 FULL_GAME_ARTIFACT_VERSION = 2
+FAILED_PROVIDER_DIAGNOSTIC_SCHEMA_VERSION = 1
 
 QUALIFICATION_VALID_COMPLETE = "valid_complete"
 QUALIFICATION_TECHNICAL_CENSORED = "technical_censored"
@@ -240,6 +245,111 @@ def _failure(
     )
 
 
+def _provider_failure_diagnostic(
+    exc: Exception,
+    *,
+    stage: str,
+    decision_index: int | None,
+    seat: int | None,
+    observation: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Split an aborted provider wake into diagnostic input/target/provenance.
+
+    A provider failure may happen before ``PilotExecutionTrace`` exists, so there is no
+    submitted action and no durable DecisionRecord to carry the attempted request.  The
+    OpenAI adapter attaches only attempts that actually happened to its exception.  We
+    preserve those attempts here as diagnostic-only run metadata using the same strict
+    input/target/provenance information boundary as successful raw decision evidence.
+
+    No selected model attempt or gameplay target is synthesized.  A transport failure
+    therefore has an exact request in ``input`` and transport diagnostics in
+    ``provenance`` with an otherwise empty attempt in ``target``.
+    """
+
+    if stage != "pilot" or not isinstance(exc, OpenAIResponsesPilotError):
+        return None
+    model_io = getattr(exc, "model_io", None)
+    if not isinstance(model_io, Mapping):
+        return None
+    if model_io.get("schemaVersion") != MODEL_IO_SCHEMA_VERSION:
+        return None
+    if model_io.get("selectedAttempt") is not None:
+        return None
+    provider = model_io.get("provider")
+    attempts = model_io.get("attempts")
+    if not isinstance(provider, str) or not provider or not isinstance(attempts, list) or not attempts:
+        return None
+
+    input_attempts: list[dict[str, Any]] = []
+    target_attempts: list[dict[str, Any]] = []
+    provenance_attempts: list[dict[str, Any]] = []
+    for index, attempt in enumerate(attempts):
+        if not isinstance(attempt, Mapping) or attempt.get("attempt") != index:
+            return None
+        request = attempt.get("request")
+        response = attempt.get("response")
+        if not isinstance(request, Mapping) or not isinstance(response, Mapping):
+            return None
+
+        input_attempts.append({"attempt": index, "request": dict(request)})
+        target_attempt: dict[str, Any] = {"attempt": index}
+        output_text = response.get("outputText")
+        refusal = response.get("refusal")
+        if output_text is not None:
+            if not isinstance(output_text, str):
+                return None
+            target_attempt["output_text"] = output_text
+        if refusal is not None:
+            if not isinstance(refusal, str):
+                return None
+            target_attempt["refusal"] = refusal
+        target_attempts.append(target_attempt)
+
+        provenance_attempt = {"attempt": index}
+        provenance_attempt.update(
+            {
+                key: value
+                for key, value in response.items()
+                if key not in {"outputText", "refusal"}
+            }
+        )
+        provenance_attempts.append(provenance_attempt)
+
+    return {
+        "diagnostic_schema_version": FAILED_PROVIDER_DIAGNOSTIC_SCHEMA_VERSION,
+        "kind": "provider_attempt_failure",
+        "input": {
+            "observation": dict(observation) if isinstance(observation, Mapping) else None,
+            "model_io": {
+                "schema_version": MODEL_IO_SCHEMA_VERSION,
+                "provider": provider,
+                "attempts": input_attempts,
+            },
+        },
+        "target": {
+            "model_io": {
+                "schema_version": MODEL_IO_SCHEMA_VERSION,
+                "selected_attempt": None,
+                "attempts": target_attempts,
+            },
+        },
+        "provenance": {
+            "stage": stage,
+            "decision_index": decision_index,
+            "seat": seat,
+            "failure_domain": FAILURE_DOMAIN_MODEL,
+            "error_type": type(exc).__name__,
+            "message": str(exc) or type(exc).__name__,
+            "model_io": {
+                "schema_version": MODEL_IO_SCHEMA_VERSION,
+                "provider": provider,
+                "selected_attempt": None,
+                "attempts": provenance_attempts,
+            },
+        },
+    }
+
+
 def _annotate_outcome(
     records: Sequence[DurablePilotDecision], outcome: Mapping[str, Any]
 ) -> tuple[DurablePilotDecision, ...]:
@@ -283,7 +393,9 @@ def run_full_game(
     decisions: list[DurablePilotDecision] = []
     acted_seats: set[int] = set()
     last_observation: Mapping[str, Any] | None = None
+    seat_observation: Mapping[str, Any] | None = None
     failures: list[FullGameFailure] = []
+    diagnostic_failures: list[dict[str, Any]] = []
     qualification = QUALIFICATION_TECHNICAL_CENSORED
     stage = "inspect"
     decision_index: int | None = None
@@ -309,6 +421,7 @@ def run_full_game(
 
         for decision_index in range(max_choices):
             last_observation = observation
+            seat_observation = None
             terminated = observation.get("terminated")
             if type(terminated) is not bool:
                 raise PilotSessionError("Argentum observation terminated must be boolean")
@@ -382,15 +495,23 @@ def run_full_game(
             )
 
     except Exception as exc:
-        failures.append(
-            _failure(
-                exc,
-                stage=stage,
-                decision_index=decision_index,
-                seat=seat_index,
-            )
+        failure = _failure(
+            exc,
+            stage=stage,
+            decision_index=decision_index,
+            seat=seat_index,
         )
-        qualification = failures[-1].qualification
+        failures.append(failure)
+        diagnostic = _provider_failure_diagnostic(
+            exc,
+            stage=stage,
+            decision_index=decision_index,
+            seat=seat_index,
+            observation=seat_observation,
+        )
+        if diagnostic is not None:
+            diagnostic_failures.append(diagnostic)
+        qualification = failure.qualification
     finally:
         if env_id is not None:
             try:
@@ -493,6 +614,7 @@ def run_full_game(
                 int(record.metadata.get("retry_count", 0)) for record in annotated
             ),
             "pilot_configurations": [dict(seat.pilot_config) for seat in seats],
+            "diagnostic_failures": diagnostic_failures,
             "commander_gym": {
                 "revision": _commander_gym_revision(),
                 "full_game_artifact_version": FULL_GAME_ARTIFACT_VERSION,
