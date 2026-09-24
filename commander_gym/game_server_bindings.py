@@ -8,7 +8,7 @@ uses the same :class:`BindingResolver` as the Gym launch path.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 from .binding_resolver import BindingResolutionError, BindingResolver, ResolvedSeatBinding
 from .binding_session import BindingLaunchError, default_argentum_player_config
@@ -147,18 +147,6 @@ class GameServerBindingRegistry:
         return GameServerSeatAdapter(
             resolved.artificial_player,
             player_id,
-            binding=resolved.binding,
-            pilot_config={
-                "source": "canonical-binding-v1",
-                "binding": resolved.binding.to_dict(),
-                "deck": resolved.deck.to_dict(),
-                "deck_knowledge": (
-                    resolved.deck_knowledge.to_dict()
-                    if resolved.deck_knowledge is not None
-                    else None
-                ),
-                "pilot": resolved.pilot.to_dict(),
-            },
             provenance_sink=provenance_sink,
         )
 
