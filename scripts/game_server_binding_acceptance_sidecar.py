@@ -148,9 +148,9 @@ def main() -> int:
                     "event": "binding_seat_resolved",
                     "playerId": player_id,
                     "profileId": profile_id,
-                    "bindingId": canonical.binding.artifact_id,
+                    "bindingId": canonical.binding.binding_id,
                     "bindingRevision": canonical.binding.revision,
-                    "pilotId": canonical.pilot.artifact_id,
+                    "pilotId": canonical.pilot.pilot_id,
                     "pilotRevision": canonical.pilot.revision,
                 },
             )
