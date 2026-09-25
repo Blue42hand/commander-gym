@@ -12,7 +12,7 @@ This is an evidence inventory, not a strength ranking. Forge/XMage may be traini
 | Austinio/Talor Forge BC | `Talor-A/forge@ai_investigation` head `511dbb731d2974a6bb32734392bd6a50257101e3` | **Yes** | Nine ONNX model components plus external-data files are committed under `forge-ai-rl/models/`. |
 | Anvil | `Tyrathalis/anvil` observed at `67f80e57118aece2a2d0d1cbf0833d9609da7715` | Not located | Checkpoints/models are gitignored and GitHub releases are empty. GPL-3.0-or-later. |
 | Jack Maiorino XMage RL | observed at `af17fe16dff6a74b0ea46b3f2bc3d07bba28ac42` | Not located | v2.1 is ~2.1M params with transformer candidate scoring; model/profile artifacts are gitignored. Repo license is MIT. |
-| MageZero | observed at `11a5974668c3f0f3d19559d7dcbf6e323f140808` | Not located | v0.2 release contains the framework/XMage bundle, not pretrained weights. MIT. |
+| MageZero | current `11a5974668c3f0f3d19559d7dcbf6e323f140808`; legacy artifact lineage pinned below | Current v0.2: **No**; legacy UWTempo: **Yes** | Current v0.2 release contains the framework/XMage bundle but no weights. A legacy 2.21M-param UWTempo checkpoint + exact state/action sidecars are recoverable, but its evaluation and mutable action-vocabulary path have major qualification hazards. MIT rights are explicit for the current project and for an immutable tree retaining the legacy ONNX. |
 | Austinio original Forge RL | `ai_investigation` head `88105ef0325523e1c4a5839e9c2aa2faeea15861` | No release | `rl_data/` is ignored; Talor's fork preserves a usable exported model from this line. GPL-3.0. |
 | npiguet/price-predictor | observed at `15d49c875b1f759d8e544a7b8a32e223d0ae2ca5` | Not located | `models/` is ignored, no releases, and GitHub reports no repository license. Gameplay-derived card work needs primary-source tracing. |
 | MTG-specialized local LLMs | pending exact model-card pass | Some known downloadable | Semantic baseline only; not gameplay-trained. |
@@ -55,6 +55,21 @@ Primary upstream files confirm that existing MageZero search supervision is not 
 - `faq_goals.md` says the neural state representation excludes hidden information, but deterministic tree search leaks future draws, opponent hands, and random outcomes.
 
 A future network checkpoint may still be useful after input validation, but existing MCTS action labels must be classified as privileged search evidence rather than deployable-policy supervision.
+
+## Current MageZero v0.2: evaluation provenance is non-stationary
+
+Exact current source: `WillWroble/MageZero@11a5974668c3f0f3d19559d7dcbf6e323f140808`.
+
+The README reports long-running UWTempo reinforcement-learning results including a rise from a 16% minimax baseline to about 66% RL win rate, but the underlying `results/roundrobin-trainlog.txt` is not a stationary generation-by-generation evaluation series:
+
+- between generation-7 runs it explicitly records `SWITCHED SEARCH BUDGET FROM 150 TO 300`;
+- nearby runs are marked `gen7 - no policy` and `gen7 - no target policy`;
+- generation 12 is marked `target was turned on`;
+- the later `b` trajectory explicitly switches to a new value-labeling scheme at gen17, runs gen18b-gen21b without policy, then restores policy at gen22b.
+
+The README's approximately 66% UWTempo headline is consistent with the later gen23b five-opponent mean (about 65.9%), not with one controlled model-only trajectory. That point occurs after the value-labeling change and after policy was re-enabled. Therefore the source win-rate curve mixes checkpoint progression with search-budget, policy/target-mode, and value-labeling changes.
+
+For #112/#114, treat all current MageZero win-rate figures as source-context only unless each result is bound to an exact checkpoint, search budget, policy/target mode, value-target regime, opponent/deck pool, and fallback behavior. Do not compare these percentages directly with Anvil, Talor, Maiorino, or Commander Gym cohorts.
 
 ## Next bounded audit slice
 
@@ -130,6 +145,18 @@ A historically public MageZero gameplay checkpoint family is recoverable even th
   - The action map is a recoverable 51-entry string->index map. It assigns, for example, Pass=0, Play Adarkar Wastes=1, Play Island=24, Cast Spell Pierce=37, and Cast No More Lies=40. The map also contains simplegreen/opponent-era actions because mappings were persistent across extraction runs; do not assume all 51 indices occur as UWTempo policy labels without inspecting the corpus.
 - Feature reconstruction is deterministic in source: `features_mapping.ser` stores the hierarchical feature map plus `ignoreList`; `StateEncoder.getCompressedVector()` scans raw feature indices in ascending order, skips ignored indices, and packs the first 4000 surviving features. Therefore the frozen legacy feature contract is in principle reproducible without XMage at runtime once the Java serialization artifact is decoded.
 - Information boundary: checkpoint-era `StateEncoder.processOpponentState()` includes public opponent battlefield/graveyard and opponent hand count only, not hidden hand identities. Historical `ComputerPlayerMCTS.createMCTSGame()` also randomizes acting-library order and replaces each opponent hidden hand by shuffling it back into that opponent library and redrawing the same count before search. Classify supervision as search-teacher provenance, but do not conflate it with deterministic hidden-hand leakage.
+
+### Legacy evaluation and action-vocabulary qualification
+
+The exact committed `testing.bin` contains 250 fixed-size records and exercises only 13 of the 51 persisted action indices. `Pass` is 155/250 records (62%). The held-out artifact contains no Spell Pierce or No More Lies policy labels despite both actions existing in the mapping.
+
+The checkpoint-era test extractor describes its sample as “5 random states,” but the source actually uses `labeledStateBatch.subList(0, 5)` for each of 50 games. This systematically selects the first five recorded macro decisions per game. The historical roughly 90% policy-accuracy claim is therefore early-game, class-imbalanced, deck-local evidence rather than broad gameplay-policy qualification. A Pass-only classifier already scores 62% on the committed test artifact.
+
+The value label is also not a terminal win probability: the source blends a tanh-normalized evaluator score with discounted terminal result. The flat binary stores state bits, action index, and value only; it does not retain a game/source identifier or RNG seed. The committed artifacts alone therefore cannot prove group-disjoint train/test leakage. #113/#114 must recover independent generation provenance sufficient for leakage grouping or fail closed.
+
+There is also a deployment hazard in the policy vocabulary. The network emits 128 policy logits, while the persisted action map has only 51 strings. Checkpoint-era `MCTSNode.expand()` passes current legal actions through mutable `ActionEncoder.addAction()` and directly indexes `policy[idx]`. Previously unseen action strings can therefore be assigned indices 51-127 that were never positive training targets, and dynamic growth to index >=128 can exceed the policy vector.
+
+Commander Gym must not reproduce this behavior. Freeze the recovered action vocabulary, map only exact verified action semantics to Argentum legal actions, and fail closed on unsupported actions. This materially downgrades direct legacy policy-head transfer; the frozen 256d shared trunk/value representation remains the preferred first #114 probe.
 
 ### Bounded #114 transfer experiment
 
