@@ -183,7 +183,12 @@ class BenchmarkScenario:
         for action in self.legal_actions:
             if not isinstance(action, ActionRecord):
                 raise RecordValidationError("legal_actions must contain ActionRecord values")
-            action.validate()
+            if not isinstance(action.action_id, str) or not action.action_id:
+                raise RecordValidationError("action.action_id must be a non-empty string")
+            if not isinstance(action.payload, dict):
+                raise RecordValidationError("action.payload must be an object")
+            if action.label is not None and not isinstance(action.label, str):
+                raise RecordValidationError("action.label must be a string or null")
         action_ids = [action.action_id for action in self.legal_actions]
         if len(action_ids) != len(set(action_ids)):
             raise RecordValidationError("legal_actions action_id values must be unique")
