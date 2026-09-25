@@ -328,3 +328,18 @@ The #113 implementation owns the canonical schema. This example is semantic guid
 - at least one bounded slice has enough audited eligible items to run as a benchmark/training ablation.
 
 Until then, source discovery, concept extraction, and project-owned synthetic benchmark-seed design may proceed, but reference-only sources and generated legacy primer hypotheses must not be silently promoted into supervision.
+
+#### Yisan quality/adjudication conclusion
+
+Primary-repository review of `fecet/cedh-yisan@9bc57dbfcde655f3f9cab2b36dfddd8356055629` confirms that the repository is explicitly a competitive-EDH Yisan primer. The root license is MIT (copyright 2021 fecet), and the repository-authored README contains deck-specific inclusion/exclusion judgments, infinite-mana and outlet lines, backup-loop guidance, and opening-hand sequencing for Vitalize-like effects.
+
+Do **not** promote this source to `expert_recommendation` supervision yet. Keep it as `strategic_reference` / source-recommendation candidate evidence.
+
+Reasons:
+
+- no independent evidence was located for author tournament results, testing volume, or recommendation accuracy;
+- the README explicitly assumes prior material from an externally linked Moxfield/BRC primer and separately links a Chinese primer, so inherited claims are not safely attributable to the MIT repository;
+- the strongest self-contained material is mostly deterministic combo sequencing rather than the multiplayer-transformation slices prioritized by #115;
+- the source does not provide observed acting-seat states, pod context, legal-action sets, or independently adjudicated alternatives.
+
+Narrow in-repository claims may seed licensed concept/deck-plan anchors or independently adjudicated synthetic work, but they must not become preferred-action labels directly. Keep linked BRC/Chinese content under separate provenance and terms.
