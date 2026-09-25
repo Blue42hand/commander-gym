@@ -125,6 +125,62 @@ Status: **reconstructed_decision** only when acting-seat information is recovera
 
 Never infer hidden cards, omitted targets, unshown sequencing, or rationale. If a reconstruction cannot establish what the acting player knew and which relevant alternatives existed, keep it diagnostic/reference-only.
 
+### Magda Community cEDH Mega Primer
+
+Repository: `mattrondel/mtg`
+
+Audited revision: `1ee652cb96132d12dd457f20d6ba221cf14c0bb3`
+
+Source file: `Magda_Community_CEDH_Mega_Primer.md`
+
+This is a high-value deck-specific cEDH strategy source covering combo starters and enders, winning through varying stax pieces, protection, package/card reasoning, and detailed line navigation. The primer also attributes some staple-list choices to consensus among notable pilots in the Open Hands cEDH community.
+
+No repository `LICENSE` or `LICENSE.md` was present at the audited revision, and the primer itself exposes no reuse terms.
+
+Status: **reference_only / pending_permission**.
+
+Do not copy its prose or promote community-consensus recommendations into `expert_recommendation` or training targets until permission/license scope is resolved. If permission is later obtained, preserve the exact repository revision and distinguish source/community recommendation from Commander Gym adjudication.
+
+### Kuuusoda/magic-skill
+
+Repository: `Kuuusoda/magic-skill`
+
+Audited revision: `8894ab1eb94fd71d83e9cc1302b90398260e2a28`
+
+Repository license: **MIT**.
+
+The repository contains cEDH concepts, pod-dynamics material, decision-tree structures, source-aware strategy schemas, and synthesized analyses that point back to other strategy sources. It is useful for concept discovery and for designing Commander-specific benchmark questions.
+
+Status: **strategic_reference / source-discovery framework**.
+
+The permissive repository license does not establish expert authorship, observed decisions, or correctness of synthesized recommendations. Do not use its synthesized preferences as `expert_recommendation` or direct training targets without independent source verification and adjudication. Any third-party material it references must retain its own provenance/terms.
+
+### DeckFlow Commander content knowledge base
+
+Repository: `luntc1972/DeckFlow`
+
+Audited revision: `244f010ee7a90a75140f2e074e747dc245a90a7b`
+
+Repository license: **Apache-2.0**.
+
+The repository contains generated Commander/cEDH knowledge-base summaries with source URLs and time-indexed clips, including material derived from third-party strategy videos. This is useful for finding strategically relevant source moments and concepts.
+
+Status: **strategic_reference / source-discovery framework**.
+
+Do not treat the repository license as licensing the underlying third-party video content or as evidence that generated summaries are expert supervision. Audit the original source and its terms separately before any source recommendation is admitted.
+
+### Additional primer repository license checks
+
+The following repositories expose strategically useful Commander/cEDH primer material but no `LICENSE` or `LICENSE.md` in the audited public surface:
+
+- `AndrewLo42/Battle-Primers@b2b2c90e7ca4e95817daf70533738d0bcb4c73ee` — project explicitly aims to provide competitive-format primers for lending battle-box decks;
+- `mbellucio/bia-attendance@2f7602031ae222b77e32ac54c113f1d8cf4a085e` — contains a detailed Vivi Ornitier cEDH primer with mulligan, interaction, engine, and combo guidance;
+- `Sephiraxx/Mazos@c5605cf3b58f4f8dbba0ba4bc125bc9f936e3a27` — contains eight Spanish cEDH pilot guides spanning mulligans, combo lines, interaction, matchups, and common errors.
+
+Status for all three: **reference_only / pending_permission**.
+
+Public readability and apparent strategic quality are not enough to import prose or recommendations into the curriculum.
+
 ## Initial curriculum slices
 
 The first dataset revisions should target bounded reasoning slices rather than broad "play Commander well" labels.
