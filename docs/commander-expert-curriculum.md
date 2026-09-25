@@ -181,6 +181,39 @@ Status for all three: **reference_only / pending_permission**.
 
 Public readability and apparent strategic quality are not enough to import prose or recommendations into the curriculum.
 
+### cEDH.guide archive
+
+Repository: `rrdelaney/cedh.guide`
+
+Audited revision: `5273ad8d0d3befefb9a41a94f15253e0d17cace2`
+
+The archive contains unusually useful first-party and community-authored cEDH strategy material. In particular, `pages/articles/ben-loeb-interview.mdx` is an interview by Ken Baumann with Silicon Dynasty winner and veteran Malcolm/Tymna pilot Ben Loeb. It contains explicit source-expert guidance on disciplined mulligans, identifying short/long or grindy/all-in game context, comparing present versus future win equity before passing, enumerating stax constraints before a win attempt, reasoning through a complete win line before acting, and mana-versus-card resource valuation in multiplayer midrange.
+
+The same archive includes community framing around cooperative interaction and avoiding kingmaking/spite/random allocation, aggregate analysis of 440+ recorded cEDH games, and Commander variance/evaluation methodology.
+
+Repository metadata reports no license and the audited root tree contains no `LICENSE` file.
+
+Status: **reference_only / pending_permission**.
+
+Do not import prose or source recommendations into training data until permission/license scope is resolved. Tournament-play anecdotes named in the interview are promising reconstruction targets, but the article does not establish complete acting-seat observations or legal alternatives; do not convert them directly into `observed_action` or preferred-action labels.
+
+### Curated licensed cEDH DDB concept targets
+
+The MIT-licensed repository-hosted descriptions at `cEDH-Decklist-Database/cEDH-Decklist-Database@c9e503c4e6be77aa90b2a472c34cbc65ef2d6725` can support a small, auditable **strategic_reference** concept slice without touching linked third-party primers.
+
+Initial high-information candidates:
+
+- `xhy3u2jsb1d` — **Tana Tymna Turbo Naus**: speed-versus-grind framing and stronger mulligan options from persistent engines;
+- `ijjs5kgobeyy` — **Plagon Blink**: generous mulligans enabled by command-zone refill, plus pivoting between early tempo and later storm;
+- `x7txc2sqb07s` — **Ellivere Stax**: proactive static interaction, combat-driven value, playing through one's own stax, and board-wipe vulnerability;
+- `fv0q3xbxye4y` — **Brigid Cradlestorm**: fast-plan mulligan requirements, stax backup plan, and explicit post-board-wipe recovery weakness;
+- `x6ljhq8ypi7d` — **Rocco Creature Tutor**: repeated win-attempt resilience in the face of interaction;
+- `x6pk5r7yr36` — **K'rrik, Son of Yawgmoth**: pod/deck-plan inference around stax, countermagic, graveyard hate, and expected win window;
+- `xwgigg3i3hym` — **Elsha Top**: timing flexibility, advancing one's own plan while hindering others, and interaction density;
+- `x1yub0v2fnz` — **Najeela Tempo**: combat pressure as both an independent win vector and a setup for infinite-combat lines.
+
+These are curriculum concept anchors, not action supervision. They may inform capability coverage, synthetic scenario design, and later adjudication queues, but they do not establish an acting-seat observation, legal-action set, observed action, or expert recommendation. Linked Moxfield primers remain separately licensed sources.
+
 ## Initial curriculum slices
 
 The first dataset revisions should target bounded reasoning slices rather than broad "play Commander well" labels.
