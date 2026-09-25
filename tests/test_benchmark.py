@@ -3,7 +3,17 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from commander_gym.benchmark import BenchmarkCase, load_jsonl, score_action, summarize_scores
+from commander_gym.benchmark import (
+    BENCHMARK_SUITE_IDENTITY_SCHEMA,
+    BENCHMARK_SUITE_IDENTITY_SCHEMA_V2,
+    BenchmarkCase,
+    BenchmarkScenario,
+    benchmark_entry_input_identity,
+    benchmark_suite_identity,
+    load_jsonl,
+    score_action,
+    summarize_scores,
+)
 from commander_gym.records import ActionRecord, DecisionRecord, PilotProvenance, RecordValidationError
 from commander_gym.training_guard import assert_training_records_exclude_benchmark
 
@@ -101,6 +111,109 @@ class BenchmarkSchemaTests(unittest.TestCase):
             with self.assertRaisesRegex(RecordValidationError, r":1:"):
                 load_jsonl(path)
 
+
+    def test_loads_explicit_input_scenario_and_uses_v2_suite_identity(self):
+        scenario = {
+            "case_kind": "input_scenario",
+            "schema_version": 1,
+            "case_id": "input-only",
+            "category": "interaction",
+            "held_out": True,
+            "tags": ["project_synthetic"],
+            "decision_type": "priority",
+            "seat": 1,
+            "observation_schema": "synthetic-v1",
+            "observation": {"public": {"turn": 5}, "private": {"hand_size": 3}},
+            "legal_actions": [
+                {"action_id": "pass", "payload": {"kind": "pass"}, "label": None},
+                {"action_id": "cast", "payload": {"kind": "cast"}, "label": "Cast"},
+            ],
+            "judgment": {
+                "preferred_action_ids": ["cast"],
+                "ranked_action_ids": ["cast", "pass"],
+                "rationale": "held-out synthetic judgment",
+                "provenance": {"source": "unit-test"},
+            },
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "benchmark.jsonl"
+            path.write_text(json.dumps(scenario) + "\n", encoding="utf-8")
+            cases = load_jsonl(path)
+
+        self.assertEqual(len(cases), 1)
+        self.assertIsInstance(cases[0], BenchmarkScenario)
+        self.assertEqual(
+            benchmark_suite_identity(cases)["schema"],
+            BENCHMARK_SUITE_IDENTITY_SCHEMA_V2,
+        )
+
+    def test_legacy_suite_retains_v1_identity_schema(self):
+        case = BenchmarkCase.from_dict(synthetic_case_dict())
+        self.assertEqual(
+            benchmark_suite_identity([case])["schema"],
+            BENCHMARK_SUITE_IDENTITY_SCHEMA,
+        )
+
+    def test_scenario_input_fingerprint_ignores_case_id_and_judgment(self):
+        base = {
+            "case_kind": "input_scenario",
+            "schema_version": 1,
+            "case_id": "scenario-a",
+            "category": "interaction",
+            "held_out": True,
+            "tags": ["project_synthetic"],
+            "decision_type": "priority",
+            "seat": 0,
+            "observation_schema": "synthetic-v1",
+            "observation": {"public": {"turn": 7}},
+            "legal_actions": [
+                {"action_id": "pass", "payload": {"kind": "pass"}, "label": None},
+                {"action_id": "cast", "payload": {"kind": "cast"}, "label": None},
+            ],
+            "judgment": {"preferred_action_ids": ["cast"]},
+        }
+        changed = dict(base)
+        changed["case_id"] = "scenario-renamed"
+        changed["judgment"] = {"preferred_action_ids": ["pass"]}
+        first = BenchmarkScenario.from_dict(base)
+        second = BenchmarkScenario.from_dict(changed)
+        self.assertEqual(
+            benchmark_entry_input_identity(first),
+            benchmark_entry_input_identity(second),
+        )
+
+    def test_training_guard_blocks_relabelled_scenario_input(self):
+        scenario = {
+            "case_kind": "input_scenario",
+            "schema_version": 1,
+            "case_id": "held-out-scenario",
+            "category": "interaction",
+            "held_out": True,
+            "tags": ["project_synthetic"],
+            "decision_type": "priority",
+            "seat": 0,
+            "observation_schema": "synthetic-v1",
+            "observation": {"public": {"turn": 3}, "private": {"hand_size": 4}},
+            "legal_actions": [
+                {"action_id": "pass", "payload": {"kind": "pass"}, "label": None},
+                {
+                    "action_id": "cast",
+                    "payload": {"kind": "cast", "card": "Synthetic Spell"},
+                    "label": None,
+                },
+            ],
+            "judgment": {"preferred_action_ids": ["pass"]},
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "benchmark.jsonl"
+            path.write_text(json.dumps(scenario) + "\n", encoding="utf-8")
+            relabelled_training_record = synthetic_decision("different-decision-id")
+            with self.assertRaisesRegex(
+                RecordValidationError, "scenario inputs must not be ingested"
+            ):
+                assert_training_records_exclude_benchmark(
+                    [relabelled_training_record], [path]
+                )
 
 if __name__ == "__main__":
     unittest.main()
