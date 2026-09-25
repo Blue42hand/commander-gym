@@ -1,3 +1,4 @@
+import hashlib
 import unittest
 
 from commander_gym.benchmark import BenchmarkCase, BenchmarkJudgment
@@ -9,6 +10,7 @@ from commander_gym.transfer_benchmark import (
     TransferCohort,
     build_transfer_benchmark_summary,
     capability_tag,
+    transfer_capability_identity,
 )
 
 
@@ -74,12 +76,18 @@ class TransferBenchmarkTests(unittest.TestCase):
             ),
         }
 
+    def capability_sidecar(self):
+        return {
+            "seq": ("sequencing",),
+            "threat": ("threat_assessment",),
+        }
+
     def cohorts(self):
         return [
             TransferCohort(
                 role=role,
                 report=self.reports[role],
-                provenance_artifact_ids=(f"artifact:{role}",),
+                provenance_artifact_ids=(f"sha256:{hashlib.sha256(role.encode()).hexdigest()}",),
             )
             for role in TRANSFER_COHORT_ROLES
         ]
@@ -89,6 +97,7 @@ class TransferBenchmarkTests(unittest.TestCase):
             self.cases,
             self.cohorts(),
             leakage_group_by_case={"seq": ("source-a", "game-a"), "threat": ("source-b", "game-b")},
+            capability_by_case=self.capability_sidecar(),
         )
 
         self.assertFalse(summary["notes"]["frontier_reference_is_ground_truth"])
@@ -117,29 +126,46 @@ class TransferBenchmarkTests(unittest.TestCase):
                 self.cases,
                 self.cohorts()[:-1],
                 leakage_group_by_case={"seq": ("source-a", "game-a"), "threat": ("source-b", "game-b")},
+                capability_by_case=self.capability_sidecar(),
             )
 
-    def test_requires_capability_tags(self):
-        broken = BenchmarkCase(
-            case_id="untagged",
-            category=self.cases[0].category,
-            decision=self.cases[0].decision,
-            judgment=self.cases[0].judgment,
-            tags=["synthetic"],
-        )
-        broken_reports = {
-            role: report([broken], role, lambda _: "cast")
-            for role in TRANSFER_COHORT_ROLES
-        }
-        cohorts = [
-            TransferCohort(role, broken_reports[role], (f"artifact:{role}",))
-            for role in TRANSFER_COHORT_ROLES
-        ]
-        with self.assertRaisesRegex(TransferBenchmarkError, "capability tag"):
+    def test_requires_exact_capability_sidecar_membership(self):
+        with self.assertRaisesRegex(TransferBenchmarkError, "capability-sidecar membership"):
             build_transfer_benchmark_summary(
-                [broken],
-                cohorts,
-                leakage_group_by_case={"untagged": ("source-a", "game-a")},
+                self.cases,
+                self.cohorts(),
+                leakage_group_by_case={
+                    "seq": ("source-a", "game-a"),
+                    "threat": ("source-b", "game-b"),
+                },
+                capability_by_case={"seq": ("sequencing",)},
+            )
+
+    def test_capability_sidecar_fingerprint_changes_on_reclassification(self):
+        first = transfer_capability_identity(self.capability_sidecar())
+        changed = transfer_capability_identity(
+            {"seq": ("sequencing", "resource_use"), "threat": ("threat_assessment",)}
+        )
+        self.assertNotEqual(first["fingerprint"], changed["fingerprint"])
+        self.assertFalse(first["qualification_ready"])
+        self.assertIn("resource_use", first["missing_capabilities"])
+
+    def test_rejects_noncanonical_provenance_artifact_ids(self):
+        bad = list(self.cohorts())
+        bad[0] = TransferCohort(
+            role="baseline",
+            report=self.reports["baseline"],
+            provenance_artifact_ids=("artifact:not-canonical",),
+        )
+        with self.assertRaisesRegex(TransferBenchmarkError, "canonical sha256"):
+            build_transfer_benchmark_summary(
+                self.cases,
+                bad,
+                leakage_group_by_case={
+                    "seq": ("source-a", "game-a"),
+                    "threat": ("source-b", "game-b"),
+                },
+                capability_by_case=self.capability_sidecar(),
             )
 
     def test_requires_exact_leakage_group_membership(self):
@@ -148,6 +174,7 @@ class TransferBenchmarkTests(unittest.TestCase):
                 self.cases,
                 self.cohorts(),
                 leakage_group_by_case={"seq": ("source-a", "game-a")},
+                capability_by_case=self.capability_sidecar(),
             )
 
 
