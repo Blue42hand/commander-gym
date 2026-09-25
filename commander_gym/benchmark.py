@@ -317,7 +317,10 @@ def scenario_input_identity(
         "seat": seat,
         "observation_schema": observation_schema,
         "observation": dict(observation),
-        "legal_actions": [asdict(action) for action in legal_actions],
+        "legal_actions": [
+            asdict(action)
+            for action in sorted(legal_actions, key=lambda action: action.action_id)
+        ],
     }
     return {
         "schema": BENCHMARK_SCENARIO_INPUT_IDENTITY_SCHEMA,
