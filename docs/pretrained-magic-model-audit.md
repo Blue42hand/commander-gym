@@ -96,3 +96,17 @@ Architecture/training: about 118M parameters, decoder-only, d=768, 14 layers, Sw
 The model card reports a 5,051-card held-out v8 test with 91.6% parse and 45.6% canonical-exact accuracy. Those are mechanics/compiler metrics only. The audited v8 DSL also contains 117 later-retired counterfeit enum values; v9 checkpoints are expected to supersede it.
 
 **Qualification:** use only as a frozen card/ability-mechanics representation control against random or price/text encoders. Make no gameplay-policy claim and do not create a production compiler dependency.
+
+
+## Commander AI Lab branch-level checkpoint/adaptation audit
+
+Primary repository: `KoalaTrapLord/commander-ai-lab`.
+
+A branch-level artifact check confirms there is still no public trained neural checkpoint in the repository, including the most suggestive non-main branches:
+
+- `feat/overnight-update-weights@a3e35c73cd59212de049a7d36430f560bef75481` contains `ml/scripts/update_weights.py`, but that script updates scalar simulation heuristics into `learned_weights.json`; it does not download or publish a neural policy checkpoint. The branch still expects locally trained `ml/models/checkpoints/best_policy.pt` / `best_ppo.pt`, neither of which is committed.
+- `feature/n-player-sim@fa43fe3ecde86eaae5b950fd02086e83604e7843` extends the simulator, but the ML encoder remains hard-coded to the 1v1 6,177d contract: it explicitly iterates `players[:2]`, encodes four zones for exactly two players, and the policy network still consumes a 6,177d state and emits eight macro-actions.
+
+This means the repository's n-player simulation work does **not** supply a reusable multi-opponent learned representation. Even if a checkpoint later appears, a direct Commander transfer would still omit/collapse two opponents in the model input. The smallest acceptable #114 experiment remains a Commander Gym-owned actor-relative/multi-opponent wrapper around any frozen reusable substrate; do not import the existing 1v1 action head as a four-player policy.
+
+No public checkpoint, release asset, NPZ dataset, or committed `learned_weights.json` was found on the audited branches. Treat this project as architecture/training-pipeline evidence unless an exact artifact becomes public.
