@@ -1,6 +1,6 @@
 import unittest
 
-from commander_gym.benchmark import BenchmarkCase, BenchmarkJudgment
+from commander_gym.benchmark import BenchmarkCase, BenchmarkJudgment, BenchmarkScenario
 from commander_gym.benchmark_runner import (
     BENCHMARK_REPORT_VERSION,
     BenchmarkInput,
@@ -187,6 +187,36 @@ class BenchmarkRunnerTests(unittest.TestCase):
         self.assertTrue(row["invalid_output"])
         self.assertIn("input_tokens", row["error"])
 
+
+    def test_input_only_scenario_projects_without_observed_decision_fields(self):
+        scenario = BenchmarkScenario(
+            case_id="scenario-input",
+            category="interaction",
+            decision_type="priority",
+            seat=2,
+            observation_schema="synthetic-v1",
+            observation={"public": {"turn": 6}},
+            legal_actions=[
+                ActionRecord(action_id="pass", payload={"kind": "pass"}),
+                ActionRecord(action_id="cast", payload={"kind": "cast"}),
+            ],
+            judgment=BenchmarkJudgment(preferred_action_ids=["cast"]),
+            tags=["project_synthetic"],
+        )
+        captured = []
+
+        def inspect(value: BenchmarkInput) -> str:
+            captured.append(value)
+            return "cast"
+
+        report = run_benchmark([scenario], CallablePilot("scenario-pilot", "1", inspect))
+        self.assertTrue(report["cases"][0]["preferred"])
+        self.assertEqual(len(captured), 1)
+        benchmark_input = captured[0]
+        self.assertEqual(benchmark_input.seat, 2)
+        self.assertFalse(hasattr(benchmark_input, "judgment"))
+        self.assertFalse(hasattr(benchmark_input, "chosen_action_id"))
+        self.assertFalse(hasattr(benchmark_input, "pilot"))
 
 if __name__ == "__main__":
     unittest.main()
