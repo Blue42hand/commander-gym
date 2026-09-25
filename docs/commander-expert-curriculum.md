@@ -66,13 +66,15 @@ Repository: `cEDH-Decklist-Database/cEDH-Decklist-Database`
 
 Audited revision: `c9e503c4e6be77aa90b2a472c34cbc65ef2d6725`
 
-Repository license: **MIT**.
+Root repository license: **MIT for repository-owned software/documentation; do not assume this licenses user-submitted deck descriptions.**
 
 The audited database contains 137 entries, including 56 marked `COMPETITIVE`; all 137 have repository-hosted short descriptions, and the data contains 191 linked decklist references marked as primers.
 
-Repository-hosted descriptions are **strategic_reference** candidates for archetype/deck-plan concept extraction, not observed decisions. The MIT repository license does not automatically extend to third-party Moxfield/other primer links, which require separate provenance and terms review.
+Primary-source rights review of the submission flow establishes authorship/permission-to-submit, but not downstream reuse rights. `submit.html` requires submitters to certify that they are the sole author of submitted content or have permission from other authors; `_includes/markdown/submit.md` says accepted submitted descriptions will be used on the DDB; `_includes/markdown/admin/privacy.md` identifies descriptions as user input and provides a DMCA takedown path. No audited submission/legal surface grants the DDB or downstream users an explicit reusable content license for those descriptions.
 
-A keyword audit of the 56 competitive descriptions found broad concept-frequency cues including combo (43), grind/value (35), speed (30), interaction (18), combat (15), graveyard (13), stax (10), instant-speed (3), and board-wipe (2). These counts may guide curriculum coverage, but they are not action labels or expert recommendations.
+Therefore repository-hosted user descriptions are **strategic_reference / pending_permission**. They may guide source discovery, deck-plan taxonomy, capability coverage, and independently authored synthetic scenarios, but their prose must not be copied into `commander-expert-curriculum-v0` or promoted directly to `expert_recommendation` labels merely because the DDB reviewer team accepted them. Linked Moxfield/other primers remain separate provenance and rights domains.
+
+The DDB review process remains useful quality evidence independent of licensing: accepted submissions are reviewed for cEDH viability and require descriptions of main/backup plans, strengths, and weaknesses. A keyword audit of the 56 competitive descriptions found broad concept-frequency cues including combo (43), grind/value (35), speed (30), interaction (18), combat (15), graveyard (13), stax (10), instant-speed (3), and board-wipe (2). These counts may guide curriculum coverage, but they are not action labels or expert recommendations.
 
 ### cEDH Yisan primer repository
 
@@ -197,9 +199,9 @@ Status: **reference_only / pending_permission**.
 
 Do not import prose or source recommendations into training data until permission/license scope is resolved. Tournament-play anecdotes named in the interview are promising reconstruction targets, but the article does not establish complete acting-seat observations or legal alternatives; do not convert them directly into `observed_action` or preferred-action labels.
 
-### Curated licensed cEDH DDB concept targets
+### Curated cEDH DDB concept targets (pending-permission strategic reference)
 
-The MIT-licensed repository-hosted descriptions at `cEDH-Decklist-Database/cEDH-Decklist-Database@c9e503c4e6be77aa90b2a472c34cbc65ef2d6725` can support a small, auditable **strategic_reference** concept slice without touching linked third-party primers.
+The repository-hosted descriptions at `cEDH-Decklist-Database/cEDH-Decklist-Database@c9e503c4e6be77aa90b2a472c34cbc65ef2d6725` are high-value **strategic_reference / pending_permission** concept anchors. The repository's MIT software license must not be used as the content-rights basis for user-submitted descriptions.
 
 Initial high-information candidates:
 
@@ -212,7 +214,79 @@ Initial high-information candidates:
 - `xwgigg3i3hym` — **Elsha Top**: timing flexibility, advancing one's own plan while hindering others, and interaction density;
 - `x1yub0v2fnz` — **Najeela Tempo**: combat pressure as both an independent win vector and a setup for infinite-combat lines.
 
-These are curriculum concept anchors, not action supervision. They may inform capability coverage, synthetic scenario design, and later adjudication queues, but they do not establish an acting-seat observation, legal-action set, observed action, or expert recommendation. Linked Moxfield primers remain separately licensed sources.
+Use these entries only to guide source discovery, capability coverage, synthetic scenario design, and later adjudication queues. Do not copy the user-submitted prose or treat it as `expert_recommendation`, `observed_action`, or preferred-action supervision until rights are independently established. Linked Moxfield primers remain separately licensed sources.
+
+### fbatista Krark/Sakashima tournament report
+
+Source: GitHub Gist `fbatista/ea5a230f6b32dbf8f565fb68d962a04e`, `report.md`
+
+Audited raw revision: `c31ccf72a2f8ebf079ed1e2e42b1bcfc47725ddc`
+
+No explicit reuse license was located.
+
+Status: **reconstruction_candidate / strategic_reference / reference_only / pending_permission**.
+
+Round 4 is unusually well narrated but still insufficient for a native legal-action label. The report says a prior Gitaxian Probe exposed Tasigur's hand; at the key state Tasigur protects Jace at 3 loyalty, Fierce Guardianship is known on top, and Vampiric Tutor, Demonic Consultation, and Thassa's Oracle are reported in hand. The Krark/Sakashima pilot reports holding only Swan Song and Finale of Promise, casts Intuition at end step, and later self-critiques the pile while naming Cephalid Coliseum / Brain Freeze / Grapeshot as a better pile.
+
+Preserve this as a source-narrated observed action plus source self-critique/recommendation candidate. Do **not** treat the later recommendation as independent Commander Gym adjudication. Complete library/graveyard contents, mana/resources, and the full legal Intuition search space are not established, so do not invent `chosen_action_id` or a legal-action set.
+
+The finals Intuition negotiation and semifinal threat-redirection/table-talk are high-value multiplayer incentive evidence, but the pilot's speech is strategic communication rather than an Argentum-native legal game action. Keep it as reasoning/reference context unless #72/#114 intentionally defines a separate communication-action contract.
+
+### CPDH.guide competitive Pauper Commander interviews
+
+Repository: `cpdhleague/Guide-book`
+
+Audited revision: `40609e8b71e53ea8c80ec18851f54c7bf9e3e86b`
+
+No repository/content license was located in the audited public surface.
+
+Status: **Commander-variant strategic_reference / reference_only / pending_permission**.
+
+The archive contains recent competitive Pauper Commander winner interviews with unusually useful multiplayer decision narration. The Hawkeye/Cloudy Commons Cup IV interview includes waiting to deploy a commander into a lower-interaction window, exploiting opponents spending removal elsewhere, accepting combat risk because blocking would sacrifice a next-turn win, recognizing an overconfident declined draw, and identifying a counter war among opponents as the decisive tapped-out window. The Hudson Valley Disciple of Deceit interview adds source recommendations about preserving cards in hand for overlapping combo routes, mulligan discipline, forcing opponents to hold interaction instead of developing, and late-game pivoting after control players exhaust resources fighting each other.
+
+These are retrospective interviews, not native trajectories: they do not establish complete acting hands, every legal action/target, or all hidden information. Preserve source-stated action/reasoning separately from Commander Gym adjudication and uncertainty.
+
+cPDH is a distinct format domain. Its multiplayer incentives are useful transfer hypotheses, but card-pool, interaction-density, combo-structure, and speed priors must not silently become cEDH labels. Carry an explicit format-domain tag and map only abstract capability concepts unless a scenario is independently reconstructed/adjudicated.
+
+### TrainingARK reconstructed cEDH scenarios
+
+Repository: `EshaanS/TrainingARK`
+
+Audited revision: `db7108e5a5893144359b579d0f7ad4d2746282a8`
+
+No project/content license or reuse terms were located in the audited repository surface.
+
+Status: **reconstruction_candidate / strategic_reference / reference_only / pending_permission**.
+
+TrainingARK is unusually close to the desired decision-artifact class: an interactive four-player cEDH training simulator built from real or representative game states, with prompts, choices, explanations, and `best|ok|blunder` quality labels authored by each scenario creator.
+
+Those labels are **source-author judgment**, not Commander Gym adjudication or ground truth. The schema does not provide an independently verified observed-player action or complete native legal-action enumeration. Do not map TrainingARK choice IDs directly to #114 `chosen_action_id`.
+
+The UI is acting-seat aware, but the raw data contract is not necessarily seat-safe for ML ingestion. Opponent hands are hidden by the viewer, yet hidden-zone entries can still retain full `Card` objects including true card names. Any future import must derive an actor-visible projection: preserve the acting player's private information, public zones, and explicitly revealed opponent cards; strip or opaque hidden opponent hand/library identities. Renderer visibility is not evidence of data-level information safety.
+
+Scenario JSON also lacks enough canonical provenance to infer training eligibility by itself: source-game URL/event/game ID, real-versus-representative origin, source rights, and confidence are not required fields. #113 must wrap any accepted scenario with exact source revision, scenario author, origin/reference, rights, and leakage-family metadata.
+
+If rights/provenance are later resolved, the safe promotion path is: (1) #113-bind the exact source and origin; (2) derive the seat-visible state; (3) retain author labels as source-author judgment with uncertainty; (4) independently establish observed action and native legal alternatives before #114 action labels; and (5) independently adjudicate preferred alternatives before training eligibility.
+
+### cEDH Wiki (Fandom)
+
+Source: `https://cedh.fandom.com/wiki/CEDH_Wiki` and individual strategy/commander pages.
+
+License: **CC-BY-SA 3.0 for community text unless otherwise noted**. Fandom's licensing guidance states that wiki contributors retain copyright while licensing submitted text under Creative Commons Attribution-ShareAlike; the cEDH Wiki pages themselves display the CC-BY-SA notice.
+
+Status: **licensed strategic_reference / quality-unverified community source**.
+
+This is the first audited external cEDH strategy source in this workstream with an explicit reusable content license rather than an inferred repository-software license. It contains reusable archetype/deck-plan statements relevant to #115, including:
+
+- K'rrik: early repeated win pressure forcing opponents to choose between board development and holding interaction;
+- Gitrog: resilience/recovery framing and the importance of interacting before a difficult-to-stop graveyard engine is established;
+- Azami/Orvar: draw-go control, holding interaction, value-engine development, and long-game win setup;
+- Anje: proactive commander deployment, low-mulligan pivoting toward midrange/beatdown, and graveyard/stax vulnerability;
+- Reanimator/Polymorph strategy pages: deck-speed, setup, resource expenditure, and recovery constraints.
+
+Licensing does **not** establish expert quality. The wiki is openly community-edited and does not provide per-claim expert credentials or observed decision provenance. Use it as a licensed strategic-reference/concept source, not as `expert_recommendation`, `observed_action`, or preferred-action supervision without independent quality review/adjudication.
+
+If text is imported rather than merely used for concept discovery, #113 must preserve page URL/revision, attribution, CC-BY-SA-3.0 license metadata, and share-alike obligations. Linked external primers and videos retain their own provenance and rights and are not covered by the wiki page license.
 
 ## Initial curriculum slices
 
