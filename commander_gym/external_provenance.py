@@ -33,6 +33,19 @@ EXTERNAL_SOURCE_CLASSES = frozenset(
     }
 )
 INFORMATION_COMPLETENESS = frozenset({"complete", "partial", "aggregate", "unknown"})
+POLICY_INPUT_INFORMATION_BOUNDARIES = frozenset(
+    {"seat_visible", "privileged", "future_derived", "ambiguous", "unqualified"}
+)
+PRIVILEGED_INFORMATION_CHANNELS = frozenset(
+    {
+        "critic_input",
+        "value_target",
+        "outcome_target",
+        "adjudication_target",
+        "search_teacher",
+        "training_target",
+    }
+)
 SEAT_SAFE_QUALIFICATIONS = frozenset(
     {"unreviewed", "qualified", "rejected", "training_only_privileged"}
 )
@@ -145,6 +158,7 @@ class ExternalDataSourceManifest:
     license: ExternalLicense
     information_completeness: str
     acting_player_information_boundary: str
+    privileged_information_channels: tuple[str, ...]
     missing_fields: tuple[str, ...]
     reconstruction_transforms: tuple[Mapping[str, Any], ...]
     uncertainty: Mapping[str, Any]
@@ -176,6 +190,23 @@ class ExternalDataSourceManifest:
             raise ExternalProvenanceError(
                 f"source_class must be one of {sorted(EXTERNAL_SOURCE_CLASSES)!r}"
             )
+        if self.acting_player_information_boundary not in POLICY_INPUT_INFORMATION_BOUNDARIES:
+            raise ExternalProvenanceError(
+                "acting_player_information_boundary describes the policy-input channel and "
+                "must be one of "
+                + repr(sorted(POLICY_INPUT_INFORMATION_BOUNDARIES))
+            )
+        _require_string_tuple(
+            self.privileged_information_channels, "privileged_information_channels"
+        )
+        unknown_channels = sorted(
+            set(self.privileged_information_channels) - PRIVILEGED_INFORMATION_CHANNELS
+        )
+        if unknown_channels:
+            raise ExternalProvenanceError(
+                "privileged_information_channels contains unsupported channels: "
+                + ", ".join(unknown_channels)
+            )
         _artifact_id(self.payload_artifact_id, "payload_artifact_id")
         _artifact_id(self.record_index_artifact_id, "record_index_artifact_id")
         if not isinstance(self.license, ExternalLicense):
@@ -192,6 +223,12 @@ class ExternalDataSourceManifest:
         if any(not isinstance(item, Mapping) for item in self.reconstruction_transforms):
             raise ExternalProvenanceError("each reconstruction transform must be an object")
         _require_mapping(self.uncertainty, "uncertainty")
+        if "contains_privileged_or_future_information" in self.uncertainty:
+            raise ExternalProvenanceError(
+                "source-wide contains_privileged_or_future_information is ambiguous; "
+                "qualify policy inputs with acting_player_information_boundary and record "
+                "privileged target/critic/search provenance in privileged_information_channels"
+            )
         _require_mapping(self.record_schema, "record_schema")
 
     def _digest_payload(self) -> dict[str, Any]:
@@ -210,6 +247,7 @@ class ExternalDataSourceManifest:
             "license": self.license.to_dict(),
             "information_completeness": self.information_completeness,
             "acting_player_information_boundary": self.acting_player_information_boundary,
+            "privileged_information_channels": sorted(self.privileged_information_channels),
             "missing_fields": sorted(self.missing_fields),
             "reconstruction_transforms": [
                 dict(item) for item in self.reconstruction_transforms
@@ -233,10 +271,15 @@ class ExternalDataSourceManifest:
         _require_mapping(value, "external data source manifest")
         raw_missing = value.get("missing_fields", [])
         raw_transforms = value.get("reconstruction_transforms", [])
+        raw_privileged_channels = value.get("privileged_information_channels")
         if not isinstance(raw_missing, list):
             raise ExternalProvenanceError("missing_fields must be an array")
         if not isinstance(raw_transforms, list):
             raise ExternalProvenanceError("reconstruction_transforms must be an array")
+        if not isinstance(raw_privileged_channels, list):
+            raise ExternalProvenanceError(
+                "privileged_information_channels must be an explicit array"
+            )
         result = cls(
             source_id=value.get("source_id"),
             version=value.get("version"),
@@ -251,6 +294,7 @@ class ExternalDataSourceManifest:
             acting_player_information_boundary=value.get(
                 "acting_player_information_boundary"
             ),
+            privileged_information_channels=tuple(raw_privileged_channels),
             missing_fields=tuple(raw_missing),
             reconstruction_transforms=tuple(raw_transforms),
             uncertainty=value.get("uncertainty"),
@@ -289,6 +333,8 @@ class ExternalModelManifest:
     decks: tuple[str, ...]
     opponent_population: Mapping[str, Any]
     privileged_information_exposure: Mapping[str, Any]
+    policy_input_information_boundary: str
+    privileged_training_channels: tuple[str, ...]
     evaluation_caveats: tuple[str, ...]
     adapter_history: tuple[Mapping[str, Any], ...]
     seat_safe_qualification: str
@@ -331,6 +377,22 @@ class ExternalModelManifest:
         _require_mapping(
             self.privileged_information_exposure, "privileged_information_exposure"
         )
+        if self.policy_input_information_boundary not in POLICY_INPUT_INFORMATION_BOUNDARIES:
+            raise ExternalProvenanceError(
+                "policy_input_information_boundary must be one of "
+                + repr(sorted(POLICY_INPUT_INFORMATION_BOUNDARIES))
+            )
+        _require_string_tuple(
+            self.privileged_training_channels, "privileged_training_channels"
+        )
+        unknown_channels = sorted(
+            set(self.privileged_training_channels) - PRIVILEGED_INFORMATION_CHANNELS
+        )
+        if unknown_channels:
+            raise ExternalProvenanceError(
+                "privileged_training_channels contains unsupported channels: "
+                + ", ".join(unknown_channels)
+            )
         _require_string_tuple(self.evaluation_caveats, "evaluation_caveats")
         if not isinstance(self.adapter_history, tuple):
             raise ExternalProvenanceError("adapter_history must be a tuple")
@@ -340,6 +402,13 @@ class ExternalModelManifest:
             raise ExternalProvenanceError(
                 "seat_safe_qualification must be one of "
                 + repr(sorted(SEAT_SAFE_QUALIFICATIONS))
+            )
+        if (
+            self.seat_safe_qualification == "qualified"
+            and self.policy_input_information_boundary != "seat_visible"
+        ):
+            raise ExternalProvenanceError(
+                "qualified external models require explicitly seat_visible policy inputs"
             )
 
     def _digest_payload(self) -> dict[str, Any]:
@@ -366,6 +435,8 @@ class ExternalModelManifest:
             "privileged_information_exposure": dict(
                 self.privileged_information_exposure
             ),
+            "policy_input_information_boundary": self.policy_input_information_boundary,
+            "privileged_training_channels": sorted(self.privileged_training_channels),
             "evaluation_caveats": sorted(self.evaluation_caveats),
             "adapter_history": [dict(item) for item in self.adapter_history],
             "seat_safe_qualification": self.seat_safe_qualification,
@@ -392,6 +463,7 @@ class ExternalModelManifest:
         raw_decks = value.get("decks", [])
         raw_caveats = value.get("evaluation_caveats", [])
         raw_history = value.get("adapter_history", [])
+        raw_privileged_channels = value.get("privileged_training_channels")
         for label, raw in (
             ("formats", raw_formats),
             ("decks", raw_decks),
@@ -400,6 +472,10 @@ class ExternalModelManifest:
         ):
             if not isinstance(raw, list):
                 raise ExternalProvenanceError(f"{label} must be an array")
+        if not isinstance(raw_privileged_channels, list):
+            raise ExternalProvenanceError(
+                "privileged_training_channels must be an explicit array"
+            )
         checkpoint_artifact_id = value.get("checkpoint_artifact_id")
         if value.get("checkpoint_digest") != checkpoint_artifact_id:
             raise ExternalProvenanceError(
@@ -426,6 +502,10 @@ class ExternalModelManifest:
             privileged_information_exposure=value.get(
                 "privileged_information_exposure"
             ),
+            policy_input_information_boundary=value.get(
+                "policy_input_information_boundary"
+            ),
+            privileged_training_channels=tuple(raw_privileged_channels),
             evaluation_caveats=tuple(raw_caveats),
             adapter_history=tuple(raw_history),
             seat_safe_qualification=value.get("seat_safe_qualification"),
