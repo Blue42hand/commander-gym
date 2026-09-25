@@ -288,6 +288,55 @@ Licensing does **not** establish expert quality. The wiki is openly community-ed
 
 If text is imported rather than merely used for concept discovery, #113 must preserve page URL/revision, attribution, CC-BY-SA-3.0 license metadata, and share-alike obligations. Linked external primers and videos retain their own provenance and rights and are not covered by the wiki page license.
 
+
+### LearnCEDH expert strategy and mixed-source courses
+
+Primary site: `https://learncedh.com/`
+
+Creator/maintainer: Evan Pierce / FreedomWaffle.
+
+Audited pages include:
+
+- `https://learncedh.com/coaching`;
+- `https://learncedh.com/decklists/gitrog`;
+- `https://learncedh.com/courses`;
+- `https://learncedh.com/intermediate-course/threat-assessment`;
+- `https://learncedh.com/intermediate-course/kingmaking`;
+- `https://learncedh.com/intermediate-course/sandbagging`;
+- `https://learncedh.com/intermediate-course/the-window`;
+- `https://learncedh.com/advanced-course/heuristics-goldfishing`;
+- `https://learncedh.com/advanced-course/hidden-information`.
+
+LearnCEDH is the strongest audited **expert-quality / rights-unresolved** Commander strategy source in this workstream so far. Its site identifies Evan Pierce / FreedomWaffle as creator and maintainer and presents named cEDH coaches. Independent tournament evidence materially corroborates expert provenance rather than relying only on site self-description: a 2026-09-25 cEDHStats snapshot ranks Evan Pierce #1 with 81 tournaments, 16 tournament wins, and 55/81 top cuts, and ranks Ian Flannery #5 with 114 tournaments, 15 wins, and 68/112 top cuts. These records are evidence of competitive experience only; tournament databases remain metagame/expertise evidence rather than decision supervision.
+
+The site-native Evan Pierce deck material is decision-relevant strategic reference. The audited Gitrog page covers mulligan priorities, early/mid/late game plans, adaptation to fast-combo and stax pods, interaction allocation, resilience/recovery, and matchup timing. No explicit Creative Commons/permissive content license or downstream redistribution/training grant was located on the audited LearnCEDH homepage, Start A Community page, coaching page, or Gitrog page.
+
+Status for site-native LearnCEDH prose: **expert strategic_reference / pending_permission**.
+
+Do not copy site-native prose into `commander-expert-curriculum-v0` or promote it directly to reusable `expert_recommendation` labels unless a compatible permission/license basis is established. Before permission, it may guide capability taxonomy, source discovery, independently specified synthetic scenarios, and adjudication queues.
+
+The LearnCEDH course corpus has an additional provenance boundary: it is explicitly mixed-source/derivative rather than simply LearnCEDH-authored. The Courses page thanks **Eisenherz, Playing With Power, Lemora's Cards, and Rebell Lily** for providing videos used to create the courses. Individual lessons attribute source videos to those upstream creators, including:
+
+- Eisenherz — Threat Assessment, Kingmaking, Sandbagging, Hidden Information, Heuristics/Goldfishing, and other advanced/intermediate lessons;
+- Rebell Lily — `When to Combo Off (The Window)`;
+- Playing With Power MTG — beginner-course material such as `What is cEDH?`;
+- Lemora's Cards — deck/staple course material.
+
+These lessons are highly relevant to #115 capability slices such as multiplayer threat assessment, interaction allocation, table incentives/kingmaking, hidden-information discipline, and combo-window timing. They remain **reference_only / pending_permission** unless the derivative lesson itself has a rights basis that covers reuse.
+
+A future site-level LearnCEDH permission must not be assumed to license third-party-derived course content. For any course lesson admitted through #113, preserve at minimum:
+
+1. exact LearnCEDH lesson URL/version/date;
+2. upstream creator identity;
+3. upstream video/source URL when recoverable;
+4. rights/permission basis that covers the derivative lesson;
+5. source-class and leakage-family metadata;
+6. the distinction between source recommendation, observed action, and Commander Gym adjudication.
+
+No explicit reusable-content grant was located in the audited public surfaces for the upstream course creators during this pass. Their material therefore remains separately unresolved rather than inheriting LearnCEDH permission by implication.
+
+LearnCEDH and the cEDH Wiki solve opposite halves of the source problem: LearnCEDH has much stronger independently corroborated expert provenance but unresolved/mixed rights; the cEDH Wiki has explicit reusable CC-BY-SA rights but weak per-author expert provenance. Do not combine rights or expertise across those sources by inference.
+
 ## Initial curriculum slices
 
 The first dataset revisions should target bounded reasoning slices rather than broad "play Commander well" labels.
