@@ -33,10 +33,13 @@ Every substantive #114 report compares the exact same held-out cases across:
 Imported gameplay models remain behind the normal Commander Gym Pilot boundary.
 Forge/XMage origin does not make those engines runtime dependencies.
 
-## Capability tags
+## Capability sidecar
 
-A held-out case can exercise more than one capability. Use
-`capability:<name>` tags on the existing `BenchmarkCase.tags` field.
+A held-out case can exercise more than one capability, but transfer classification is
+research metadata rather than immutable benchmark evidence. Store it in the
+versioned/fingerprinted `commander-gym-transfer-capabilities@v1` sidecar keyed by
+`case_id`; do not mutate `BenchmarkCase.tags` or `BenchmarkScenario.tags` merely
+to reclassify transfer capability.
 
 The initial frozen taxonomy is:
 
@@ -54,26 +57,46 @@ The initial frozen taxonomy is:
 - `long_game`
 
 This is deliberately orthogonal to the existing single primary `category` field so a
-case can count in multiple strategic slices without copying the decision.
+case can count in multiple strategic slices without copying the decision. Qualification
+readiness fails closed until all twelve canonical slices are represented. Reclassifying
+a case changes only the capability-sidecar fingerprint, not the benchmark-suite
+fingerprint.
 
 ## Leakage and provenance
 
 #113 owns external model/dataset provenance and leakage-group semantics. #114 must not
 invent a competing external-source schema.
 
-The transfer reporter therefore consumes two sidecars:
-
-- opaque provenance artifact IDs for each cohort; and
-- an exact `case_id -> (deduplication_identity, leakage_group_id)` mapping supplied
-  by the #113 external-source record index/dataset layer.
+The transfer reporter consumes canonical `sha256:<64 lowercase hex>` provenance
+artifact IDs for each cohort. External-derived benchmark evidence additionally consumes
+an exact `case_id -> (deduplication_identity, leakage_group_id)` mapping supplied by
+the #113 external-source record index/dataset layer. Pure project-synthetic scenarios
+remain Commander Gym-owned evidence and must not be mislabeled as external provenance.
 
 The mapping is fingerprinted into the transfer report. #113 remains responsible for
 proving that one source game/reconstruction and all of its derivatives cannot straddle
 train/validation/frozen-test boundaries.
 
-The benchmark runner continues to project cases through `BenchmarkInput`, so tags,
-judgments, recorded choices, outcomes, deck identity, leakage groups, and provenance do
-not enter the evaluated policy input.
+The benchmark runner accepts both legacy recorded `BenchmarkCase` rows and explicit
+input-only `BenchmarkScenario` rows. Legacy-only suites preserve the exact
+`commander-gym-benchmark-suite@v1` identity; any suite containing an input scenario
+uses typed `commander-gym-benchmark-suite@v2` identity.
+
+Input-only rows require `case_kind=input_scenario` and contain only decision type,
+seat, observation schema, seat-safe observation, explicit legal actions, judgment,
+held-out marker, and research tags/category. They must not claim a game/decision ID,
+observed action, Pilot provenance, deck identity, outcome, or post-decision metadata.
+
+The runner projects either case kind through the same `BenchmarkInput`, so category,
+tags, judgments, recorded choices, outcomes, deck identity, leakage groups, and
+provenance do not enter the evaluated policy input.
+
+For project-synthetic leakage protection, Commander Gym separately fingerprints the
+policy input with `commander-gym-benchmark-scenario-input@v1` from decision type,
+seat, observation schema, canonical seat-safe observation, and semantic legal actions.
+That fingerprint excludes case ID, judgment, category/tags, and capability
+classification so copying or relabeling the same held-out input remains blocked from
+training.
 
 ## Measurements
 
