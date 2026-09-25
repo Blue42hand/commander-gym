@@ -17,10 +17,12 @@ import hashlib
 import json
 from typing import Any, Dict, Mapping, Sequence, Tuple
 
-from .benchmark import BenchmarkCase, benchmark_suite_identity
+from .benchmark import BenchmarkEntry, benchmark_suite_identity
 from .benchmark_runner import BENCHMARK_REPORT_VERSION
+from .storage import StorageError, parse_artifact_id
 
 TRANSFER_BENCHMARK_SCHEMA_VERSION = 1
+TRANSFER_CAPABILITY_SIDECAR_SCHEMA = "commander-gym-transfer-capabilities@v1"
 TRANSFER_CAPABILITY_TAG_PREFIX = "capability:"
 TRANSFER_CAPABILITIES = (
     "mulligan",
@@ -76,6 +78,13 @@ class TransferCohort:
             )
         if len(self.provenance_artifact_ids) != len(set(self.provenance_artifact_ids)):
             raise TransferBenchmarkError("cohort provenance_artifact_ids must be unique")
+        for artifact_id in self.provenance_artifact_ids:
+            try:
+                parse_artifact_id(artifact_id)
+            except StorageError as exc:
+                raise TransferBenchmarkError(
+                    "cohort provenance_artifact_ids must use canonical sha256 artifact IDs"
+                ) from exc
 
 
 def capability_tag(capability: str) -> str:
@@ -84,27 +93,78 @@ def capability_tag(capability: str) -> str:
     return f"{TRANSFER_CAPABILITY_TAG_PREFIX}{capability}"
 
 
-def _case_capabilities(case: BenchmarkCase) -> Tuple[str, ...]:
-    case.validate()
-    capabilities = []
-    for tag in case.tags:
-        if not tag.startswith(TRANSFER_CAPABILITY_TAG_PREFIX):
-            continue
-        capability = tag[len(TRANSFER_CAPABILITY_TAG_PREFIX) :]
-        if capability not in TRANSFER_CAPABILITIES:
-            raise TransferBenchmarkError(
-                f"case {case.case_id!r} uses unknown capability tag {tag!r}"
-            )
-        capabilities.append(capability)
-    if not capabilities:
-        raise TransferBenchmarkError(
-            f"case {case.case_id!r} must carry at least one transfer capability tag"
-        )
-    return tuple(sorted(set(capabilities)))
+def transfer_capability_identity(
+    capability_by_case: Mapping[str, Sequence[str]],
+) -> Dict[str, Any]:
+    """Validate and fingerprint the #114 capability-classification sidecar."""
 
+    if not isinstance(capability_by_case, Mapping):
+        raise TransferBenchmarkError("capability_by_case must be an object")
+    membership = []
+    represented = set()
+    for case_id in sorted(capability_by_case):
+        capabilities = capability_by_case[case_id]
+        if not isinstance(case_id, str) or not case_id:
+            raise TransferBenchmarkError("capability sidecar case_id must be non-empty")
+        if not isinstance(capabilities, (list, tuple)) or not capabilities:
+            raise TransferBenchmarkError(
+                f"capabilities for {case_id!r} must be a non-empty array"
+            )
+        normalized = []
+        for capability in capabilities:
+            if capability not in TRANSFER_CAPABILITIES:
+                raise TransferBenchmarkError(
+                    f"case {case_id!r} uses unknown transfer capability {capability!r}"
+                )
+            normalized.append(capability)
+            represented.add(capability)
+        normalized = sorted(set(normalized))
+        membership.append({"case_id": case_id, "capabilities": normalized})
+
+    payload = {
+        "schema": TRANSFER_CAPABILITY_SIDECAR_SCHEMA,
+        "membership": membership,
+    }
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    ).encode("utf-8")
+    missing = sorted(set(TRANSFER_CAPABILITIES) - represented)
+    return {
+        "schema": TRANSFER_CAPABILITY_SIDECAR_SCHEMA,
+        "case_count": len(membership),
+        "represented_capabilities": sorted(represented),
+        "missing_capabilities": missing,
+        "qualification_ready": not missing,
+        "fingerprint": f"sha256:{hashlib.sha256(encoded).hexdigest()}",
+    }
+
+
+def _validate_capabilities(
+    cases: Sequence[BenchmarkEntry],
+    capability_by_case: Mapping[str, Sequence[str]],
+) -> Tuple[Dict[str, Tuple[str, ...]], Dict[str, Any]]:
+    expected = {case.case_id for case in cases}
+    actual = set(capability_by_case)
+    if actual != expected:
+        missing = sorted(expected - actual)
+        extra = sorted(actual - expected)
+        raise TransferBenchmarkError(
+            f"capability-sidecar membership must exactly match benchmark cases; "
+            f"missing={missing!r} extra={extra!r}"
+        )
+    identity = transfer_capability_identity(capability_by_case)
+    normalized = {
+        case_id: tuple(sorted(set(capability_by_case[case_id])))
+        for case_id in expected
+    }
+    return normalized, identity
 
 def _validate_leakage_groups(
-    cases: Sequence[BenchmarkCase],
+    cases: Sequence[BenchmarkEntry],
     leakage_group_by_case: Mapping[str, Tuple[str, str]],
 ) -> Dict[str, Tuple[str, str]]:
     """Validate exact #113 grouping identity without redefining its source schema."""
@@ -290,10 +350,11 @@ def _disagreement(
 
 
 def build_transfer_benchmark_summary(
-    cases: Sequence[BenchmarkCase],
+    cases: Sequence[BenchmarkEntry],
     cohorts: Sequence[TransferCohort],
     *,
     leakage_group_by_case: Mapping[str, Tuple[str, str]],
+    capability_by_case: Mapping[str, Sequence[str]],
 ) -> Dict[str, Any]:
     """Build one exact four-cohort #114 comparison over already-frozen cases.
 
@@ -305,10 +366,9 @@ def build_transfer_benchmark_summary(
     if not case_list:
         raise TransferBenchmarkError("transfer benchmark requires at least one case")
     benchmark_identity = benchmark_suite_identity(case_list)
-    capabilities_by_case = {
-        case.case_id: _case_capabilities(case)
-        for case in case_list
-    }
+    capabilities_by_case, capability_identity = _validate_capabilities(
+        case_list, capability_by_case
+    )
     leakage_groups = _validate_leakage_groups(case_list, leakage_group_by_case)
 
     cohort_by_role: Dict[str, TransferCohort] = {}
@@ -383,6 +443,7 @@ def build_transfer_benchmark_summary(
         "schema_version": TRANSFER_BENCHMARK_SCHEMA_VERSION,
         "benchmark": benchmark_identity,
         "leakage_groups": _leakage_group_identity(leakage_groups),
+        "capability_sidecar": capability_identity,
         "cohorts": {
             role: {
                 "pilot": dict(cohort_by_role[role].report["pilot"]),
