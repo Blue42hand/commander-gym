@@ -63,3 +63,36 @@ A future network checkpoint may still be useful after input validation, but exis
 3. Resolve Anvil checkpoint availability.
 4. Trace npiguet's gameplay-derived representation and repository terms.
 5. Complete exact model-card/revision/terms records for MTG-specialized local LLM semantic baselines.
+
+## MTG-Llama semantic baseline
+
+Exact model snapshot: `jakeboggs/MTG-Llama@4bd3d56a8655f176d1215dadc73f53d3c4d16d30`.
+
+Exact training-code snapshot: `JakeBoggs/Large-Language-Models-for-Magic-the-Gathering@dfd71e489bd83d48c6c8c736d1eb18de8f1e5e83`.
+
+The public checkpoint is a merged Llama 3 8B Instruct causal language model in F16 safetensors, roughly 16 GB of first-party weights. Training uses QLoRA with rank 64, alpha 32, dropout 0.05 over attention and MLP projections, then merges the adapters into the base model.
+
+The training corpus is `jakeboggs/MTG-Eval`: 80,032 synthetic QA pairs made from MTGJSON and Commander Spellbook and reformatted with GPT-3.5. It contains 26,702 card-description examples, 27,104 rules questions, and 26,226 card-interaction examples. It contains no game-state/action trajectories, legal-action policy labels, combat or multiplayer decisions, or opponent populations.
+
+**Qualification:** semantic/rules/combo knowledge only. Do not classify MTG-Llama as gameplay pretraining or place it in the 1v1-enriched gameplay cohort.
+
+**Licensing blocker:** the Hugging Face model card exposes no license metadata; the training repository reports no license and has no LICENSE file. The merged derivative also inherits relevant Meta Llama 3 terms. Until explicit derivative terms are documented, #113 should treat redistribution/training rights as unresolved even though the checkpoint is publicly downloadable.
+
+**Evaluation caveat:** the source project uses a random 95/5 example split rather than card/combo/source-group-disjoint evaluation. Its evaluation script uses stochastic generation plus GPT-4 judging and, at the audited source revision, points `model_id` at `NousResearch/Meta-Llama-3-8B-Instruct` rather than the fine-tuned checkpoint. The reported uplift therefore remains source-project context, not Commander Gym qualification evidence.
+
+Smallest #114 use: register the exact merged checkpoint through #113 (and any quantization as a separate artifact), then use it only as a semantic/rules baseline on input-only held-out #114 fixtures. Optionally compare generated MTG context or hidden-state features against the base local model, but do not place it in the 1v1-enriched gameplay cohort.
+
+## Wyrmling compact semantic baseline
+
+Exact checkpoint snapshot: `Tagashy/wyrmling-110M-mtg-dsl@cd7172fc0a0f18c07f344ec8ddf908730f181732`.
+
+The project is MIT licensed for its rights in the weights; its model card separately notes Fan Content/Wizards-IP limits. Public artifacts include:
+
+- `model.safetensors` — SHA-256 `28862accda2e1dfac555d7432f677c1538ab8b43b623f1a30d4db137309b66c4`;
+- `wyrmling-sft-final.pt` — LFS object SHA-256 `efbb23a2a256b700bae47bc00c25eb4abad3048430ea8f3b1e52d99adab1874d`.
+
+Architecture/training: about 118M parameters, decoder-only, d=768, 14 layers, SwiGLU, RoPE, QK normalization, untied embeddings, logit soft-cap, and a custom roughly 12k BPE vocabulary. It was trained from scratch on about 0.295B token-positions of v8 MTG DSL corpus plus rare-dense synthetic grammar data, then SFT for two epochs on intent-to-DSL pairs. It has no gameplay supervision.
+
+The model card reports a 5,051-card held-out v8 test with 91.6% parse and 45.6% canonical-exact accuracy. Those are mechanics/compiler metrics only. The audited v8 DSL also contains 117 later-retired counterfeit enum values; v9 checkpoints are expected to supersede it.
+
+**Qualification:** use only as a frozen card/ability-mechanics representation control against random or price/text encoders. Make no gameplay-policy claim and do not create a production compiler dependency.
