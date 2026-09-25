@@ -110,3 +110,33 @@ A branch-level artifact check confirms there is still no public trained neural c
 This means the repository's n-player simulation work does **not** supply a reusable multi-opponent learned representation. Even if a checkpoint later appears, a direct Commander transfer would still omit/collapse two opponents in the model input. The smallest acceptable #114 experiment remains a Commander Gym-owned actor-relative/multi-opponent wrapper around any frozen reusable substrate; do not import the existing 1v1 action head as a four-player policy.
 
 No public checkpoint, release asset, NPZ dataset, or committed `learned_weights.json` was found on the audited branches. Treat this project as architecture/training-pipeline evidence unless an exact artifact becomes public.
+
+
+## Historical MageZero UWTempo checkpoint: artifact usability provenance
+
+A historically public MageZero gameplay checkpoint family is recoverable even though current MageZero v0.2 publishes no weights. Treat this as a separate legacy lineage, not as a v0.2 checkpoint.
+
+- Primary model source: `WillWroble/MageZero@14669a98d4be0a2b1d865174bad6217c530e885b`.
+  - `models/ckpt_40.pt`: Git blob `d3f97f798f70c832b3b0b058b8d4a9ca6a21f04a`, 8,854,912 bytes.
+  - `exports/UWTempo/UWTempo2.onnx`: Git blob `c5020186a9d364be027048cb98a5118b4d47cb99`, 8,853,386 bytes.
+  - `data/UWTempo/ver3/training.bin`: blob `dc31632caa1dd612ee5ef36e71ebbe30ccc1bff4`, 5,074,872 bytes.
+  - `data/UWTempo/ver3/testing.bin`: blob `de07c1420a88c8035a0f84e38f6d19041fa2388b`, 129,012 bytes.
+- Rights anchor: upstream `WillWroble/MageZero@a494fd3e57581c35d7ab0e1a2a22ddfa16628cc3` adds the project MIT license while retaining both historical ONNX exports. Prefer the ONNX artifact for #113 provenance. Canonical SHA-256 is still unresolved until exact binary bytes can be materialized and verified; do not infer it from the Git blob SHA-1.
+- Compatible checkpoint-era network: dense 4000-bit actor state -> 512 -> 256 shared trunk, 128-way policy head, tanh scalar value head; 2,212,993 parameters. Later EmbeddingBag-era exporters are not a reproducibility source for this ONNX.
+- Exact XMage-side source/data pairing is recoverable at `WillWroble/mage@95391f5d35c980f13ade2fb0369f941aed2a6827` (MIT). Its committed `Mage.Tests/training.bin` and `testing.bin` are byte-identical by Git blob identity to MageZero UWTempo/ver3 above. The extraction test explicitly uses `UWTempo.dck` as PlayerA and `simplegreen.dck` as PlayerB.
+- Crucially, the serialization sidecars required to interpret the checkpoint are also committed in that exact XMage tree:
+  - `Mage.Tests/features_mapping.ser`: blob `0db8f8a0c459f580fd97105321f0c3a0f502d18d`, 1,135,107 bytes.
+  - `Mage.Tests/actions_mapping.ser`: blob `3aa6a115d8f4db185bd9b51bd32b047e7fd27f3b`, 2,814 bytes.
+  - The action map is a recoverable 51-entry string->index map. It assigns, for example, Pass=0, Play Adarkar Wastes=1, Play Island=24, Cast Spell Pierce=37, and Cast No More Lies=40. The map also contains simplegreen/opponent-era actions because mappings were persistent across extraction runs; do not assume all 51 indices occur as UWTempo policy labels without inspecting the corpus.
+- Feature reconstruction is deterministic in source: `features_mapping.ser` stores the hierarchical feature map plus `ignoreList`; `StateEncoder.getCompressedVector()` scans raw feature indices in ascending order, skips ignored indices, and packs the first 4000 surviving features. Therefore the frozen legacy feature contract is in principle reproducible without XMage at runtime once the Java serialization artifact is decoded.
+- Information boundary: checkpoint-era `StateEncoder.processOpponentState()` includes public opponent battlefield/graveyard and opponent hand count only, not hidden hand identities. Historical `ComputerPlayerMCTS.createMCTSGame()` also randomizes acting-library order and replaces each opponent hidden hand by shuffling it back into that opponent library and redrawing the same count before search. Classify supervision as search-teacher provenance, but do not conflate it with deterministic hidden-hand leakage.
+
+### Bounded #114 transfer experiment
+
+1. #113-bind the exact ONNX, mapping sidecars, extractor/XMage revision, corpus blobs, deck pair, and split construction. Materialize exact bytes and compute canonical SHA-256 only after verifying Git blob and byte size.
+2. Decode `features_mapping.ser` and reproduce the 4000-bit actor-visible feature vector from frozen Argentum masked-seat fixtures. If feature semantics cannot be reproduced exactly, fail closed rather than inventing a mapping.
+3. Probe the frozen 256d shared representation/value path against random/general baselines on input-only #114 fixtures before adapting policy.
+4. Only use the 128-way policy head where exact action-index semantics and corresponding Argentum legal actions are established. Unsupported actions must fail closed.
+5. Source-project policy accuracy is context only; split leakage and label distribution still require independent qualification.
+
+This changes the legacy MageZero status from “historical bytes exist” to “artifact is plausibly adaptable”: both the model and the exact state/action interpretation sidecars are publicly recoverable. Remaining hard gates are binary materialization/canonical hashing, exact Java-sidecar decoding, and #114 leakage-safe qualification.
