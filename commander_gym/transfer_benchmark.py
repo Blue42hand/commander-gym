@@ -17,7 +17,7 @@ import hashlib
 import json
 from typing import Any, Dict, Mapping, Sequence, Tuple
 
-from .benchmark import BenchmarkEntry, benchmark_suite_identity
+from .benchmark import (\n    BenchmarkEntry,\n    BenchmarkScenario,\n    benchmark_entry_input_identity,\n    benchmark_suite_identity,\n)
 from .benchmark_runner import BENCHMARK_REPORT_VERSION
 from .storage import StorageError, parse_artifact_id
 
@@ -163,25 +163,50 @@ def _validate_capabilities(
     }
     return normalized, identity
 
+def _is_project_synthetic_case(case: BenchmarkEntry) -> bool:
+    return isinstance(case, BenchmarkScenario) and case.tags == ["project_synthetic"]
+
+
 def _validate_leakage_groups(
     cases: Sequence[BenchmarkEntry],
     leakage_group_by_case: Mapping[str, Tuple[str, str]],
-) -> Dict[str, Tuple[str, str]]:
-    """Validate exact #113 grouping identity without redefining its source schema."""
+) -> Dict[str, Dict[str, str]]:
+    """Combine #113 external grouping with local project-synthetic input identity."""
 
     if not isinstance(leakage_group_by_case, Mapping):
         raise TransferBenchmarkError("leakage_group_by_case must be an object")
-    expected = {case.case_id for case in cases}
+
+    case_by_id = {case.case_id: case for case in cases}
+    expected = set(case_by_id)
     actual = set(leakage_group_by_case)
-    if actual != expected:
-        missing = sorted(expected - actual)
-        extra = sorted(actual - expected)
+    project_synthetic = {
+        case.case_id for case in cases if _is_project_synthetic_case(case)
+    }
+
+    overlap = sorted(project_synthetic & actual)
+    if overlap:
         raise TransferBenchmarkError(
-            f"leakage-group membership must exactly match benchmark cases; "
-            f"missing={missing!r} extra={extra!r}"
+            "project-synthetic cases must not carry external leakage provenance; "
+            f"overlap={overlap!r}"
         )
-    normalized: Dict[str, Tuple[str, str]] = {}
-    for case_id, group_key in leakage_group_by_case.items():
+
+    extra = sorted(actual - expected)
+    if extra:
+        raise TransferBenchmarkError(
+            f"leakage-group mapping contains unknown benchmark cases; extra={extra!r}"
+        )
+
+    external_expected = expected - project_synthetic
+    missing = sorted(external_expected - actual)
+    if missing:
+        raise TransferBenchmarkError(
+            "external leakage-group membership must cover every non-project-synthetic "
+            f"benchmark case; missing={missing!r}"
+        )
+
+    normalized: Dict[str, Dict[str, str]] = {}
+    for case_id in sorted(external_expected):
+        group_key = leakage_group_by_case[case_id]
         if (
             not isinstance(group_key, tuple)
             or len(group_key) != 2
@@ -191,23 +216,65 @@ def _validate_leakage_groups(
                 f"leakage group for {case_id!r} must be "
                 "(deduplication_identity, leakage_group_id)"
             )
-        normalized[case_id] = (group_key[0], group_key[1])
+        normalized[case_id] = {
+            "source": "external",
+            "deduplication_identity": group_key[0],
+            "leakage_group_id": group_key[1],
+        }
+
+    for case_id in sorted(project_synthetic):
+        fingerprint = benchmark_entry_input_identity(case_by_id[case_id])["fingerprint"]
+        normalized[case_id] = {
+            "source": "project_synthetic",
+            "input_fingerprint": fingerprint,
+        }
+
     return normalized
 
 
 def _leakage_group_identity(
-    leakage_group_by_case: Mapping[str, Tuple[str, str]],
+    leakage_group_by_case: Mapping[str, Mapping[str, str]],
 ) -> Dict[str, Any]:
+    membership: list[Dict[str, str]] = []
+    groups: set[Tuple[str, ...]] = set()
+    external_case_count = 0
+    project_synthetic_case_count = 0
+
+    for case_id in sorted(leakage_group_by_case):
+        value = leakage_group_by_case[case_id]
+        source = value["source"]
+        if source == "external":
+            external_case_count += 1
+            deduplication_identity = value["deduplication_identity"]
+            leakage_group_id = value["leakage_group_id"]
+            membership.append(
+                {
+                    "case_id": case_id,
+                    "source": source,
+                    "deduplication_identity": deduplication_identity,
+                    "leakage_group_id": leakage_group_id,
+                }
+            )
+            groups.add(("external", deduplication_identity, leakage_group_id))
+        elif source == "project_synthetic":
+            project_synthetic_case_count += 1
+            input_fingerprint = value["input_fingerprint"]
+            membership.append(
+                {
+                    "case_id": case_id,
+                    "source": source,
+                    "input_fingerprint": input_fingerprint,
+                }
+            )
+            groups.add(("project_synthetic", input_fingerprint))
+        else:
+            raise TransferBenchmarkError(
+                f"unsupported leakage source {source!r} for case {case_id!r}"
+            )
+
     payload = {
-        "schema": "commander-gym-transfer-leakage-groups@v1",
-        "membership": [
-            {
-                "case_id": case_id,
-                "deduplication_identity": leakage_group_by_case[case_id][0],
-                "leakage_group_id": leakage_group_by_case[case_id][1],
-            }
-            for case_id in sorted(leakage_group_by_case)
-        ],
+        "schema": "commander-gym-transfer-leakage-coverage@v2",
+        "membership": membership,
     }
     encoded = json.dumps(
         payload,
@@ -218,10 +285,13 @@ def _leakage_group_identity(
     ).encode("utf-8")
     return {
         "schema": payload["schema"],
-        "case_count": len(leakage_group_by_case),
-        "group_count": len(set(leakage_group_by_case.values())),
+        "case_count": len(membership),
+        "group_count": len(groups),
+        "external_case_count": external_case_count,
+        "project_synthetic_case_count": project_synthetic_case_count,
         "fingerprint": f"sha256:{hashlib.sha256(encoded).hexdigest()}",
     }
+
 
 def _validate_report(
     report: Mapping[str, Any],
