@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from time import perf_counter
 from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Protocol, Tuple, Union
 
-from .benchmark import BenchmarkCase, benchmark_suite_identity, score_action
+from .benchmark import BenchmarkCase, BenchmarkEntry, BenchmarkScenario, benchmark_suite_identity, score_action
 from .records import ActionRecord
 
 BENCHMARK_REPORT_VERSION = 1
@@ -48,6 +48,8 @@ class PilotDecision:
     input_tokens: Optional[int] = None
     output_tokens: Optional[int] = None
     cost_usd: Optional[float] = None
+    escalated: bool = False
+    escalation_reason: Optional[str] = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
 
@@ -76,7 +78,7 @@ class CallablePilot:
         return self.chooser(benchmark_input)
 
 
-def benchmark_input_for_case(case: BenchmarkCase) -> BenchmarkInput:
+def benchmark_input_for_case(case: BenchmarkEntry) -> BenchmarkInput:
     """Project a held-out case onto only the information available at choice time.
 
     Nested mappings are deep-copied so a mutable benchmark adapter cannot alter the
@@ -84,19 +86,30 @@ def benchmark_input_for_case(case: BenchmarkCase) -> BenchmarkInput:
     """
 
     case.validate()
-    decision = case.decision
+    if isinstance(case, BenchmarkCase):
+        decision_type = case.decision.decision_type
+        seat = case.decision.seat
+        observation_schema = case.decision.observation_schema
+        observation = case.decision.observation
+        legal_actions = case.decision.legal_actions
+    else:
+        decision_type = case.decision_type
+        seat = case.seat
+        observation_schema = case.observation_schema
+        observation = case.observation
+        legal_actions = case.legal_actions
     return BenchmarkInput(
-        decision_type=decision.decision_type,
-        seat=decision.seat,
-        observation_schema=decision.observation_schema,
-        observation=deepcopy(decision.observation),
+        decision_type=decision_type,
+        seat=seat,
+        observation_schema=observation_schema,
+        observation=deepcopy(observation),
         legal_actions=tuple(
             ActionRecord(
                 action_id=action.action_id,
                 payload=deepcopy(action.payload),
                 label=action.label,
             )
-            for action in decision.legal_actions
+            for action in legal_actions
         ),
     )
 
@@ -123,6 +136,14 @@ def _normalize_decision(value: PilotResult) -> PilotDecision:
         or decision.cost_usd < 0
     ):
         raise ValueError("pilot cost_usd must be a non-negative number or null")
+    if type(decision.escalated) is not bool:
+        raise ValueError("pilot escalated must be a boolean")
+    if decision.escalation_reason is not None and (
+        not isinstance(decision.escalation_reason, str) or not decision.escalation_reason
+    ):
+        raise ValueError("pilot escalation_reason must be a non-empty string or null")
+    if decision.escalation_reason is not None and not decision.escalated:
+        raise ValueError("pilot escalation_reason requires escalated=true")
     if not isinstance(decision.metadata, Mapping):
         raise ValueError("pilot metadata must be a mapping")
     return decision
@@ -137,6 +158,7 @@ def _summarize(group: list[Dict[str, Any]]) -> Dict[str, Any]:
             "invalid_output_rate": None,
             "preferred_rate": None,
             "error_rate": None,
+            "escalation_rate": None,
         }
     return {
         "cases": total,
@@ -144,10 +166,11 @@ def _summarize(group: list[Dict[str, Any]]) -> Dict[str, Any]:
         "invalid_output_rate": sum(bool(row["invalid_output"]) for row in group) / total,
         "preferred_rate": sum(bool(row["preferred"]) for row in group) / total,
         "error_rate": sum(row["error"] is not None for row in group) / total,
+        "escalation_rate": sum(bool(row["escalated"]) for row in group) / total,
     }
 
 
-def run_benchmark(cases: Iterable[BenchmarkCase], pilot: BenchmarkPilot) -> Dict[str, Any]:
+def run_benchmark(cases: Iterable[BenchmarkEntry], pilot: BenchmarkPilot) -> Dict[str, Any]:
     """Run a pilot over held-out cases and return a versioned offline report.
 
     Pilot failures are evidence, not reasons to substitute another policy. A
@@ -211,6 +234,8 @@ def run_benchmark(cases: Iterable[BenchmarkCase], pilot: BenchmarkPilot) -> Dict
             "input_tokens": decision.input_tokens,
             "output_tokens": decision.output_tokens,
             "cost_usd": decision.cost_usd,
+            "escalated": decision.escalated,
+            "escalation_reason": decision.escalation_reason,
             "pilot_metadata": dict(decision.metadata),
         }
         rows.append(row)

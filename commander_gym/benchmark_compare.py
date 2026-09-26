@@ -12,7 +12,7 @@ from collections import defaultdict
 from copy import deepcopy
 from typing import Any, Dict, Mapping, Sequence, Tuple
 
-from .benchmark import BENCHMARK_SUITE_IDENTITY_SCHEMA
+from .benchmark import BENCHMARK_SUITE_IDENTITY_SCHEMA, BENCHMARK_SUITE_IDENTITY_SCHEMA_V2
 from .benchmark_runner import BENCHMARK_REPORT_VERSION
 
 BENCHMARK_COMPARISON_VERSION = 1
@@ -33,9 +33,13 @@ def _require_report(report: Mapping[str, Any], label: str) -> Tuple[Dict[str, An
     benchmark = report.get("benchmark")
     if not isinstance(benchmark, Mapping):
         raise BenchmarkComparisonError(f"{label} report is missing benchmark identity")
-    if benchmark.get("schema") != BENCHMARK_SUITE_IDENTITY_SCHEMA:
+    supported_schemas = {
+        BENCHMARK_SUITE_IDENTITY_SCHEMA,
+        BENCHMARK_SUITE_IDENTITY_SCHEMA_V2,
+    }
+    if benchmark.get("schema") not in supported_schemas:
         raise BenchmarkComparisonError(
-            f"{label} report benchmark schema must be {BENCHMARK_SUITE_IDENTITY_SCHEMA}"
+            f"{label} report benchmark schema must be one of {sorted(supported_schemas)!r}"
         )
     fingerprint = benchmark.get("fingerprint")
     if not isinstance(fingerprint, str) or not fingerprint.startswith("sha256:"):
