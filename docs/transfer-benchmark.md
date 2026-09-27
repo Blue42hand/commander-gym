@@ -112,6 +112,47 @@ The same metrics are reported overall and per capability slice. Disagreement is
 evidence for adjudication/review; agreement with the frontier reference is not
 automatically correctness.
 
+## Qualification and attribution contract
+
+A transfer result is decision-relevant only when the comparison can attribute the
+observed difference to the intended factor rather than to benchmark bookkeeping,
+runtime assistance, or correlated samples.
+
+Qualification-ready reporting therefore needs all of the following:
+
+- both pairwise and four-cohort comparison paths use one frozen-case validator that
+  recomputes legality/preference/invalid-output from the benchmark cases instead of
+  trusting report booleans;
+- immutable run/report evidence is content-addressed and bound to the exact canonical
+  Pilot identity and runner/runtime revision that produced it;
+- benchmark observation bytes carry recognized seat-visible projection/boundary
+  provenance, while #113/#53 own imported/native evidence admission and leakage
+  identities;
+- capability classification is fingerprinted separately but bound to the exact
+  benchmark-suite revision it classifies;
+- source-game/reconstruction leakage groups affect inference, not only admission:
+  decision-level diagnostics remain available, but transfer effects and uncertainty
+  are group-aware so repeated decisions from one game do not count as independent
+  evidence;
+- the experiment declares whether each contrast is causal or observational. A causal
+  baseline -> 1v1 contrast must hold the Pilot scaffold fixed except for the admitted
+  1v1-enrichment derivation; Commander adaptation must descend from that exact
+  evaluated 1v1 checkpoint and vary only by declared Commander factors;
+- stochastic cohorts use a predeclared replicate/seed policy (or empirical repeated
+  runs when a provider has no controllable seed), while deterministic cohorts bind
+  exact decoding/runtime configuration and prove reproducible strategic selections;
+- per-decision producer/subsystem identity is recorded from canonical Pilot routing
+  provenance so composite seat-level quality is reported separately from autonomous
+  candidate quality/coverage. Frontier-assisted selections are not evidence that the
+  underlying local candidate produced the action;
+- immutable raw usage telemetry is kept separate from dollar valuation. Dollar cost is
+  derived only under an explicit compatible accounting method/tariff with sufficient
+  token/usage coverage.
+
+`qualification_ready` must fail closed when any required evidence above is missing.
+Coverage thresholds and uncertainty rules are versioned comparison-design metadata,
+not universal Commander constants.
+
 ## Dependencies
 
 - #112 supplies candidate pretrained models/representations and their concrete adapter
