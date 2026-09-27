@@ -58,24 +58,34 @@ The initial frozen taxonomy is:
 
 This is deliberately orthogonal to the existing single primary `category` field so a
 case can count in multiple strategic slices without copying the decision. Qualification
-readiness fails closed until all twelve canonical slices are represented. Reclassifying
-a case changes only the capability-sidecar fingerprint, not the benchmark-suite
-fingerprint.
+readiness fails closed until all twelve canonical slices are represented. The sidecar
+must also carry/bind the exact benchmark-suite identity it classifies: reclassifying a
+case changes the capability-sidecar fingerprint, while changing benchmark content
+invalidates the old sidecar even when case IDs are reused.
 
 ## Leakage and provenance
 
 #113 owns external model/dataset provenance and leakage-group semantics. #114 must not
 invent a competing external-source schema.
 
-The transfer reporter consumes canonical `sha256:<64 lowercase hex>` provenance
-artifact IDs for each cohort. External-derived benchmark evidence additionally consumes
-an exact `case_id -> (deduplication_identity, leakage_group_id)` mapping supplied by
-the #113 external-source record index/dataset layer. Pure project-synthetic scenarios
-remain Commander Gym-owned evidence and must not be mislabeled as external provenance.
+Cohort/report provenance must use typed canonical identities rather than a loose
+bag of syntactically valid hashes. #114 binds an immutable benchmark report to the
+exact canonical Pilot/run identity that produced it; #113 remains authoritative for
+model/dataset derivation lineage.
 
-The mapping is fingerprinted into the transfer report. #113 remains responsible for
-proving that one source game/reconstruction and all of its derivatives cannot straddle
-train/validation/frozen-test boundaries.
+Leakage provenance is likewise typed. Recorded native evidence consumes the canonical
+native-game leakage identity from admitted #53 evidence; imported/reconstructed
+evidence consumes #113's canonical external source/group identity plus any derivative
+aliases; pure project-synthetic scenarios use their local policy-input fingerprint.
+#114 verifies exact case coverage and split exclusion against those identities but does
+not relabel native evidence as "external" or invent another source ontology.
+
+The leakage sidecar/report records those canonical identities and is itself bound to
+the exact benchmark revision. #113 remains responsible for proving that one source
+game/reconstruction and all of its derivatives cannot straddle
+train/validation/frozen-test boundaries. Group membership also drives inference:
+multiple decisions from one source game/reconstruction are correlated evidence and
+must not be counted as independent samples.
 
 The benchmark runner accepts both legacy recorded `BenchmarkCase` rows and explicit
 input-only `BenchmarkScenario` rows. Legacy-only suites preserve the exact
@@ -103,14 +113,51 @@ training.
 Do not reduce transfer to win rate. Each cohort records:
 
 - legal/preferred/invalid-output/error rates;
-- explicit escalation rate and reason;
-- latency, input/output tokens, and cost when available;
-- preferred-action delta versus the baseline;
-- action-selection disagreement across all four cohorts.
+- adjudication coverage and valid strategic-selection coverage;
+- explicit escalation rate, reason, and canonical producer/subsystem identity;
+- latency plus raw usage counters with explicit telemetry coverage;
+- cost only as a derived value under an explicit compatible accounting method;
+- paired preferred-action deltas versus the baseline;
+- strategic disagreement across all four cohorts only where every compared cohort
+  produced a legal, non-error selection;
+- raw failure/invalid divergence separately from strategic disagreement;
+- independent leakage-group counts and group-aware uncertainty overall/per capability;
+- replicate/run variance for stochastic inference separately from source-group
+  uncertainty.
 
-The same metrics are reported overall and per capability slice. Disagreement is
-evidence for adjudication/review; agreement with the frontier reference is not
-automatically correctness.
+Case-level diagnostics remain available, but decision-relevant effect estimates are
+paired and group-aware so a game with many recorded decisions cannot dominate by row
+count. Disagreement is evidence for adjudication/review; agreement with the frontier
+reference is not automatically correctness.
+
+## Frozen report validation contract
+
+Benchmark reports are untrusted execution evidence until validated against the exact
+frozen cases. Both `compare_benchmark_reports()` and the four-cohort transfer summary
+must consume one canonical validator/scorer rather than maintain separate safety
+semantics.
+
+That validator must:
+
+- require exact benchmark-suite identity and exact case membership/category;
+- recompute `legal`, `preferred`, rank, and `invalid_output` from the frozen case
+  plus `selected_action_id` via `score_action()`;
+- reject forged/stale report scoring fields;
+- require finite non-negative latency on every row;
+- require optional token counts to be non-negative integers and optional cost values to
+  be finite/non-negative;
+- expose telemetry coverage and keep aggregates null when optional telemetry is
+  incomplete rather than silently undercounting;
+- preserve provider/error rows as failures rather than treating their empty/invalid
+  selections as strategic changes;
+- mark strategic selection/disagreement as valid only for legal, non-error selections;
+- distinguish unadjudicated cases (for example an empty preferred-action set) from
+  strategic misses.
+
+The same immutable report must validate identically through generic pairwise comparison
+and transfer comparison. Runtime telemetry/report identity is separate from the
+deterministic frozen-suite identity; content-addressing freezes the run evidence, while
+the shared validator proves its semantic consistency.
 
 ## Qualification and attribution contract
 
