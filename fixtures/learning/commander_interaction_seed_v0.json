@@ -1,0 +1,220 @@
+{
+  "dataset_lineage": "commander-interaction-seed-v0",
+  "schema_status": "pre-113 scenario-design artifact",
+  "benchmark_seed_only": true,
+  "training_eligible": false,
+  "intended_consumer": "#114 input-only BenchmarkScenario path after provenance/materialization is available",
+  "invariants": {
+    "source_class": "project_synthetic",
+    "observed_action": null,
+    "expert_recommendation": null,
+    "chosen_action_id": null,
+    "commander_gym_adjudication_status": "provisional",
+    "hidden_information_policy": "Only acting-seat-visible information may be materialized. Never invent hidden hands, omitted targets, or future draws.",
+    "legal_actions_policy": "Legal actions must be supplied by an explicit fixture/native engine state before qualification; scenario designs do not invent omitted legal actions."
+  },
+  "scenarios": [
+    {
+      "scenario_id": "interaction-sole-answer-immediate-win",
+      "source_class": "project_synthetic",
+      "capability_slices": [
+        "interaction_timing",
+        "multiplayer_interaction_allocation",
+        "threat_assessment"
+      ],
+      "design_goal": "Acting seat has a known legal answer to an opponent's explicit immediate win attempt and public information establishes that the other opponents cannot answer.",
+      "fixture_requirements": [
+        "explicit win attempt on stack or deterministic public-board activation",
+        "acting-seat legal answer present",
+        "other seats' inability to answer established only from public/seat-visible evidence",
+        "no hidden-hand assumptions"
+      ],
+      "observed_action": null,
+      "expert_recommendation": null,
+      "commander_gym_adjudication": {
+        "status": "provisional",
+        "preferred_action": null
+      },
+      "uncertainty": [
+        "exact fixture not yet materialized",
+        "legal action IDs not yet bound"
+      ]
+    },
+    {
+      "scenario_id": "interaction-avoid-redundant-answer",
+      "source_class": "project_synthetic",
+      "capability_slices": [
+        "multiplayer_interaction_allocation",
+        "resource_use",
+        "table_incentives"
+      ],
+      "design_goal": "Test whether the acting seat preserves premium interaction when another opponent has an explicit public/seat-visible answer and a stronger incentive to spend it first.",
+      "fixture_requirements": [
+        "threat is consequential but not uniquely lethal to acting seat",
+        "another player's available answer is established without hidden-hand inference",
+        "priority order makes waiting a legal choice",
+        "acting seat retains a later response window"
+      ],
+      "observed_action": null,
+      "expert_recommendation": null,
+      "commander_gym_adjudication": {
+        "status": "provisional",
+        "preferred_action": null
+      },
+      "uncertainty": [
+        "incentive model requires independent adjudication",
+        "exact response window not yet materialized"
+      ]
+    },
+    {
+      "scenario_id": "stax-hold-protective-piece",
+      "source_class": "project_synthetic",
+      "capability_slices": [
+        "threat_assessment",
+        "deck_plan_adherence",
+        "table_incentives"
+      ],
+      "design_goal": "Test whether a player avoids removing a stax piece that constrains a faster opponent more than it constrains the acting seat.",
+      "fixture_requirements": [
+        "stax effect and affected actions explicit",
+        "acting deck has a viable line through or around the stax",
+        "faster opponent's public board/commander/deck-plan signal is explicit",
+        "removal action is legal but optional"
+      ],
+      "observed_action": null,
+      "expert_recommendation": null,
+      "commander_gym_adjudication": {
+        "status": "provisional",
+        "preferred_action": null
+      },
+      "uncertainty": [
+        "relative pod-speed judgment requires adjudication"
+      ]
+    },
+    {
+      "scenario_id": "board-wipe-table-incentive-asymmetry",
+      "source_class": "project_synthetic",
+      "capability_slices": [
+        "recovery",
+        "threat_assessment",
+        "table_incentives"
+      ],
+      "design_goal": "Evaluate a board wipe whose immediate card exchange is favorable but whose post-wipe rebuild asymmetry may benefit a different opponent more than the acting seat.",
+      "fixture_requirements": [
+        "all relevant battlefield permanents public",
+        "known commander-zone/recast information explicit",
+        "acting seat's visible rebuild resources explicit",
+        "no assumptions about hidden recovery cards"
+      ],
+      "observed_action": null,
+      "expert_recommendation": null,
+      "commander_gym_adjudication": {
+        "status": "provisional",
+        "preferred_action": null
+      },
+      "uncertainty": [
+        "post-wipe engine value requires independent adjudication"
+      ]
+    },
+    {
+      "scenario_id": "consult-oracle-response-window",
+      "source_class": "project_synthetic",
+      "capability_slices": [
+        "interaction_timing",
+        "combo_response_windows",
+        "multiplayer_interaction_allocation"
+      ],
+      "design_goal": "Test response timing across a publicly identifiable Consultation/Oracle-style win attempt without teaching an answer before the exact stack and legal-action window are explicit.",
+      "fixture_requirements": [
+        "stack objects and targets/modes explicit",
+        "acting-seat legal actions native or exhaustively reconstructed",
+        "priority order explicit",
+        "no opponent hidden-card assumptions"
+      ],
+      "observed_action": null,
+      "expert_recommendation": null,
+      "commander_gym_adjudication": {
+        "status": "provisional",
+        "preferred_action": null
+      },
+      "uncertainty": [
+        "best response point depends on exact stack state"
+      ]
+    },
+    {
+      "scenario_id": "breach-graveyard-response-window",
+      "source_class": "project_synthetic",
+      "capability_slices": [
+        "interaction_timing",
+        "combo_response_windows",
+        "graveyard_resource_assessment"
+      ],
+      "design_goal": "Test whether interaction is allocated at the correct public graveyard/stack window during an Underworld Breach-style win attempt.",
+      "fixture_requirements": [
+        "graveyards public and exact",
+        "Breach/combo-enabler state explicit",
+        "available legal graveyard/stack interaction explicit",
+        "future draws and hidden hands excluded"
+      ],
+      "observed_action": null,
+      "expert_recommendation": null,
+      "commander_gym_adjudication": {
+        "status": "provisional",
+        "preferred_action": null
+      },
+      "uncertainty": [
+        "line completeness and response timing require fixture-level adjudication"
+      ]
+    },
+    {
+      "scenario_id": "preserve-premium-interaction-vs-value",
+      "source_class": "project_synthetic",
+      "capability_slices": [
+        "resource_use",
+        "interaction_timing",
+        "long_game_engine_assessment"
+      ],
+      "design_goal": "Test whether a player spends premium interaction on a strong value engine or preserves it for a more decisive threat when the engine is not immediately winning.",
+      "fixture_requirements": [
+        "value engine's public effect explicit",
+        "acting-seat premium interaction explicit",
+        "known near-term threats represented only by public/seat-visible evidence",
+        "passing/holding interaction is legal"
+      ],
+      "observed_action": null,
+      "expert_recommendation": null,
+      "commander_gym_adjudication": {
+        "status": "provisional",
+        "preferred_action": null
+      },
+      "uncertainty": [
+        "engine valuation and future-threat distribution require adjudication"
+      ]
+    },
+    {
+      "scenario_id": "who-should-answer-multiplayer-allocation",
+      "source_class": "project_synthetic",
+      "capability_slices": [
+        "multiplayer_interaction_allocation",
+        "table_incentives",
+        "threat_assessment"
+      ],
+      "design_goal": "Compare which seat should spend a scarce answer when multiple opponents benefit from stopping the same threat and response order/incentives are asymmetric.",
+      "fixture_requirements": [
+        "priority/turn order explicit",
+        "each seat's publicly known exposure to the threat explicit",
+        "acting-seat action set explicit",
+        "no inference of hidden answers in other hands"
+      ],
+      "observed_action": null,
+      "expert_recommendation": null,
+      "commander_gym_adjudication": {
+        "status": "provisional",
+        "preferred_action": null
+      },
+      "uncertainty": [
+        "cross-seat incentive ordering requires human/teacher/search adjudication"
+      ]
+    }
+  ]
+}
