@@ -1,7 +1,7 @@
 # Pretrained Magic model audit
 
 Tracking: #112  
-Snapshot: 2026-09-24
+Snapshot: 2026-10-01
 
 This is an evidence inventory, not a strength ranking. Forge/XMage may be training provenance, but imported policies must ultimately use Commander Gym's seat-safe Argentum Pilot boundary.
 
@@ -13,6 +13,7 @@ This is an evidence inventory, not a strength ranking. Forge/XMage may be traini
 | Anvil | `Tyrathalis/anvil` observed at `67f80e57118aece2a2d0d1cbf0833d9609da7715` | Not located | Checkpoints/models are gitignored and GitHub releases are empty. GPL-3.0-or-later. |
 | Jack Maiorino XMage RL | observed at `af17fe16dff6a74b0ea46b3f2bc3d07bba28ac42` | Not located | v2.1 is ~2.1M params with transformer candidate scoring; model/profile artifacts are gitignored. Repo license is MIT. |
 | MageZero | current `11a5974668c3f0f3d19559d7dcbf6e323f140808`; legacy artifact lineage pinned below | Current v0.2: **No**; legacy UWTempo: **Yes** | Current v0.2 release contains the framework/XMage bundle but no weights. A legacy 2.21M-param UWTempo checkpoint + exact state/action sidecars are recoverable, but its evaluation and mutable action-vocabulary path have major qualification hazards. MIT rights are explicit for the current project and for an immutable tree retaining the legacy ONNX. |
+| DraftZero FDN exp1 | harness tag `danieljbrooks/draft-zero@exp1-fdn-generalist` -> `0c0328002934c639a573330eb4092d9911c4895f`; training harness ran at `a65951e69c9874b63148d85c885c31329d5a459b`; MageZero `bcc76de`; current research head `bd953e856b1ee6f64742d04232e8e32422d18fb5` | **Yes** | Public gen0/gen10/gen33 PyTorch checkpoints and full deck/eval artifacts are CC BY 4.0. Gen33 is a 21.9M-param 512d gameplay encoder, but exp1 network inputs and MCTS supervision were clairvoyant: opponent-hand identities and future draws leaked into training/search. Treat policy/value heads as privileged-search contaminated; frozen trunk only as a risky transfer probe. |
 | Austinio original Forge RL | `ai_investigation` head `88105ef0325523e1c4a5839e9c2aa2faeea15861` | No release | `rl_data/` is ignored; Talor's fork preserves a usable exported model from this line. GPL-3.0. |
 | npiguet/price-predictor | observed at `15d49c875b1f759d8e544a7b8a32e223d0ae2ca5` | Not located | `models/` is ignored, no releases, and GitHub reports no repository license. Gameplay-derived card work needs primary-source tracing. |
 | MTG-specialized local LLMs | pending exact model-card pass | Some known downloadable | Semantic baseline only; not gameplay-trained. |
@@ -167,3 +168,77 @@ Commander Gym must not reproduce this behavior. Freeze the recovered action voca
 5. Source-project policy accuracy is context only; split leakage and label distribution still require independent qualification.
 
 This changes the legacy MageZero status from “historical bytes exist” to “artifact is plausibly adaptable”: both the model and the exact state/action interpretation sidecars are publicly recoverable. Remaining hard gates are binary materialization/canonical hashing, exact Java-sidecar decoding, and #114 leakage-safe qualification.
+
+## DraftZero FDN generalist checkpoint qualification
+
+Primary public release: `danbrooks/draftzero-fdn-exp1` on Hugging Face (CC BY 4.0). The experiment harness is MIT licensed. The reproducible experiment lineage is:
+
+- `danieljbrooks/draft-zero@exp1-fdn-generalist` -> commit `0c0328002934c639a573330eb4092d9911c4895f`;
+- training harness at `a65951e69c9874b63148d85c885c31329d5a459b`;
+- MageZero fork `danieljbrooks/MageZero@bcc76de` (MIT);
+- set-wide action vocabulary `assets/vocab/FDN_SPG.tsv`, blob `ea12b42c93fa7cb854dc786334505cdc613bfd69`, width 1024;
+- generalist XMage fork commit `5a32441c` on the experiment line.
+
+The public checkpoint family is fully obtainable. Canonical SHA-256 values published by Hugging Face are:
+
+- gen0: `0e928bc842e7212aba2706083073ba8a258b7740babac15143941ee66c9417dd`;
+- gen10: `f399152f5fa47736a9baa8cbbccc089b96528d8db7c9d209a820a621d7c3fa19`;
+- gen33: `a534190014428f678b1f662f80c0b7a6f6beee8e3d87773a5f01f9bd4219c47d`.
+
+The public release also contains the full 31,516-deck FDN pool, train/eval split, fixed eval pairs, all 2,507 game summaries, metrics, final evaluation and report. Decks and human reference statistics derive from 17Lands public FDN Premier Draft data under CC BY 4.0.
+
+### Architecture and separability
+
+The final gen33 model has about 21.9M parameters. Its learned input table ended at 31,676 x 512. A 2-layer TransformerEncoder (d_model 512, 4 heads, FFN 1024) processes the sparse state-feature token sequence and mean-pools it to a separable **512d gameplay-state representation**. Five MLP heads consume that shared state:
+
+- player-priority policy: 1024 actions;
+- opponent-priority prediction: 1024 actions;
+- target choice: 1024;
+- binary yes/no: 2;
+- scalar tanh value.
+
+The action vocabulary gives 644 known action strings and 530 target strings dedicated indices inside a 1024-wide space, with remaining/unseen cases handled by the source hash-tail behavior. This is a Foundation-specific action contract and is not suitable for direct Commander policy transfer.
+
+The neural forward pass is ordinary PyTorch and can be run without XMage once an exact feature tensor is reconstructed. The hard dependency is semantic, not runtime: the state-token and action contracts originate in the MageZero/XMage extractor. Full source MCTS inference was GPU-bound; a frozen offline trunk probe is much cheaper than reproducing source search.
+
+### Training population and evaluation
+
+Experiment #1 trained one generalist agent over 28,366 train decks and evaluated on 3,150 decks held out by draft, all drawn from >=60%-win-rate FDN Premier Draft players. Training ran 34 generations / 2,507 games with 96 MCTS simulations per decision. Opponents were 70% current self, 20% past checkpoints and 10% gen0.
+
+Gen33 beat same-budget raw search 110/197 (55.8%, 95% CI 49-63%) in the final held-out-deck evaluation, but tied gen10 at 96/196 (49.0%, CI 42-56%). Training therefore plateaued early. Card-strength statistics were weak: commons correlated only about 0.28 with 17Lands after gen10.
+
+Those results are **not clean gameplay-strength evidence** because both the learner and its baseline shared a major information leak.
+
+### Consequential hidden/future-information contamination
+
+A later source audit demonstrated that experiment #1 is a privileged-information training run:
+
+1. `StateEncoder.perfectInfo` defaulted true.
+2. The experiment YAML wrote `hidden_info`, while the JVM read `hiddenInfo`, so the masking switch was ignored.
+3. As a result, **both players' hand identities were present in every network training row and network evaluation**.
+4. MCTS copied the exact live game without determinizing hidden zones. The search therefore saw the opponent's real hand, both real library orders and future draws.
+5. Root visit counts became policy targets, so direct policy supervision inherited the leak.
+6. Value targets blended the game result with MCTS root estimates; at the experiment's lambda=0.70, the search estimate dominated most targets.
+
+Controlled counterspell and cantrip probes later showed that the search's action values changed when only an unobservable opponent card or unseen next draw changed. Masking the network input alone did not remove the effect because the transition/search tree itself remained clairvoyant.
+
+Therefore:
+
+- **do not use exp1 policy heads as a deployable policy initializer or expert teacher**;
+- **do not treat the source value head as a clean actor-visible critic**;
+- source win rates against raw search are context only, because raw search was also clairvoyant;
+- the 512d shared trunk is the only initially worthwhile donor surface, and even that is contaminated because the trunk itself was trained on perfect-information observations.
+
+### Smallest #114 transfer experiment
+
+Use DraftZero only as a frozen representation probe after #77/#72:
+
+1. #113-bind gen33's exact checkpoint digest, feature vocabulary, action vocabulary, MageZero/XMage revisions, FDN deck split and information-boundary provenance.
+2. Reconstruct **only Commander Gym seat-visible Argentum state** into an explicitly documented subset of MageZero features. Never synthesize hidden opponent identities or future library order to match training.
+3. Extract the frozen 512d trunk on a small fixture set; do not run MCTS and do not submit actions.
+4. Compare probes against DraftFM, Talor's 512d encoder, MageZero legacy trunk, and untrained/structured controls on public-state labels and downstream Commander-relevant tasks.
+5. Treat any transfer gain as representation reuse under distribution shift, not evidence that the source agent learned fair Magic.
+6. Do not adapt the 1024-way policy/value heads unless a later experiment demonstrates a seat-safe retraining path; the source heads are privileged-search contaminated.
+
+**Disposition:** high-value obtainable gameplay representation, but only as a frozen 512d transfer control initially. It is stronger artifact provenance than most gameplay candidates and weaker information-boundary provenance than almost all semantic/deck candidates.
+
