@@ -96,6 +96,10 @@ def structured_observation():
             "playerId": "player-1",
             "prompt": "Choose one target",
             "requiresStructuredResponse": True,
+            "responseSpec": {
+                "responseType": "TargetsResponse",
+                "requiredFields": {"selectedTargets": "MAP"},
+            },
         },
         "legalActions": [],
         "terminated": False,
@@ -203,8 +207,8 @@ class OpenAIResponsesPilotTests(unittest.TestCase):
                     {
                         "channel": "decision",
                         "response": {
-                            "type": "ChooseTargetsResponse",
-                            "targets": ["target-1"],
+                            "type": "TargetsResponse",
+                            "selectedTargets": {"0": ["target-1"]},
                         },
                     }
                 )
@@ -218,8 +222,8 @@ class OpenAIResponsesPilotTests(unittest.TestCase):
         self.assertEqual(
             choice.response,
             {
-                "type": "ChooseTargetsResponse",
-                "targets": ["target-1"],
+                "type": "TargetsResponse",
+                "selectedTargets": {"0": ["target-1"]},
                 "decisionId": "routing-live-9",
             },
         )
@@ -230,6 +234,32 @@ class OpenAIResponsesPilotTests(unittest.TestCase):
             "argentum-decision-v1:choose-targets",
         )
         self.assertEqual(choice.metadata["modelIo"]["selectedAttempt"], 0)
+
+    def test_retries_response_that_violates_native_decision_spec(self):
+        observation = structured_observation()
+        observation["pendingDecision"]["kind"] = "SELECT_CARDS"
+        observation["pendingDecision"]["responseSpec"] = {
+            "responseType": "CardsSelectedResponse",
+            "requiredFields": {"selectedCards": "ENTITY_ID_ARRAY"},
+        }
+        client = FakeClient([
+            FakeResponse(json.dumps({
+                "channel": "decision",
+                "response": {"type": "SELECT_CARDS", "cardIds": ["card-1"]},
+            })),
+            FakeResponse(json.dumps({
+                "channel": "decision",
+                "response": {"type": "CardsSelectedResponse", "selectedCards": ["card-1"]},
+            })),
+        ])
+        choice = OpenAIResponsesPilot(client=client, model="gpt-test").choose(observation)
+        self.assertEqual(choice.response, {
+            "type": "CardsSelectedResponse",
+            "selectedCards": ["card-1"],
+            "decisionId": "routing-live-9",
+        })
+        self.assertEqual(choice.metadata["modelIo"]["selectedAttempt"], 1)
+        self.assertIn("CardsSelectedResponse", client.responses.calls[1]["input"])
 
     def test_unknown_semantic_id_fails_closed(self):
         client = FakeClient(
@@ -258,9 +288,9 @@ class OpenAIResponsesPilotTests(unittest.TestCase):
                     {
                         "channel": "decision",
                         "response": {
-                            "type": "ChooseTargetsResponse",
+                            "type": "TargetsResponse",
                             "decisionId": "invented-routing",
-                            "targets": ["target-1"],
+                            "selectedTargets": {"0": ["target-1"]},
                         },
                     }
                 )
