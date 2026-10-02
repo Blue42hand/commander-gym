@@ -200,6 +200,105 @@ class OpenAIResponsesPilotTests(unittest.TestCase):
         )
         self.assertNotIn("validationError", model_io["attempts"][1]["response"])
 
+    def test_engine_action_specs_constrain_each_request_local_choice(self):
+        observation = action_observation()
+        observation["type"] = "GameServerSeat"
+        observation["legalActions"][0]["parameterSpec"] = {"allowedFields": {}}
+        observation["legalActions"][1]["parameterSpec"] = {
+            "allowedFields": {"attackers": "ENTITY_ID_MAP"}
+        }
+        client = FakeClient(FakeResponse(json.dumps({
+            "channel": "action",
+            "choice": {
+                "semanticId": "argentum-action-v1:attack",
+                "params": {"attackers": {"creature-1": "player-2"}},
+            },
+        })))
+
+        choice = OpenAIResponsesPilot(client=client, model="gpt-test").choose(observation)
+
+        self.assertEqual(choice.action_id, 7)
+        self.assertEqual(choice.params, {"attackers": {"creature-1": "player-2"}})
+        schema = client.responses.calls[0]["text"]["format"]["schema"]
+        self.assertEqual(schema["type"], "object")
+        variants = schema["properties"]["choice"]["anyOf"]
+        self.assertEqual(variants[0]["properties"]["params"]["properties"], {})
+        self.assertEqual(
+            set(variants[1]["properties"]["params"]["properties"]), {"attackers"}
+        )
+        self.assertFalse(variants[1]["properties"]["params"]["additionalProperties"])
+
+    def test_engine_spec_rejects_stale_kind_based_params_before_submission(self):
+        observation = action_observation()
+        observation["legalActions"][1]["parameterSpec"] = {"allowedFields": {}}
+        client = FakeClient(FakeResponse(json.dumps({
+            "channel": "action",
+            "semanticId": "argentum-action-v1:attack",
+            "params": {"attackers": {"creature-1": "player-2"}},
+        })))
+
+        with self.assertRaisesRegex(OpenAIResponsesPilotError, "not allowed by native"):
+            OpenAIResponsesPilot(client=client, model="gpt-test", max_attempts=1).choose(
+                observation
+            )
+        self.assertEqual(len(client.responses.calls), 1)
+
+    def test_engine_spec_accepts_declared_field_independent_of_action_kind(self):
+        observation = action_observation()
+        observation["legalActions"][0]["parameterSpec"] = {
+            "allowedFields": {"xValue": "INTEGER"}
+        }
+        client = FakeClient(FakeResponse(json.dumps({
+            "channel": "action",
+            "semanticId": "argentum-action-v1:pass",
+            "params": {"xValue": 2},
+        })))
+
+        choice = OpenAIResponsesPilot(client=client, model="gpt-test").choose(observation)
+
+        self.assertEqual(choice.params, {"xValue": 2})
+
+    def test_engine_spec_rejects_wrong_action_param_wire_type(self):
+        observation = action_observation()
+        observation["legalActions"][1]["parameterSpec"] = {
+            "allowedFields": {"attackers": "ENTITY_ID_MAP"}
+        }
+        client = FakeClient(FakeResponse(json.dumps({
+            "channel": "action",
+            "semanticId": "argentum-action-v1:attack",
+            "params": {"attackers": {"creature-1": ["player-2"]}},
+        })))
+
+        with self.assertRaisesRegex(OpenAIResponsesPilotError, "requires ENTITY_ID_MAP"):
+            OpenAIResponsesPilot(client=client, model="gpt-test", max_attempts=1).choose(
+                observation
+            )
+
+    def test_unknown_native_action_param_kind_fails_before_provider_call(self):
+        observation = action_observation()
+        observation["legalActions"][0]["parameterSpec"] = {
+            "allowedFields": {"futureParam": "FUTURE_KIND"}
+        }
+        client = FakeClient(FakeResponse("{}"))
+
+        with self.assertRaisesRegex(OpenAIResponsesPilotError, "unsupported field"):
+            OpenAIResponsesPilot(client=client, model="gpt-test").choose(observation)
+        self.assertEqual(client.responses.calls, [])
+
+    def test_legacy_game_server_without_parameter_spec_keeps_json_object_contract(self):
+        observation = action_observation()
+        observation["type"] = "GameServerSeat"
+        client = FakeClient(FakeResponse(json.dumps({
+            "channel": "action",
+            "semanticId": "argentum-action-v1:pass",
+            "params": {},
+        })))
+
+        OpenAIResponsesPilot(client=client, model="gpt-test").choose(observation)
+        self.assertEqual(
+            client.responses.calls[0]["text"]["format"], {"type": "json_object"}
+        )
+
     def test_structured_decision_injects_live_routing_id_locally(self):
         client = FakeClient(
             FakeResponse(

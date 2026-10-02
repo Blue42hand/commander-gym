@@ -290,6 +290,120 @@ def _matches_native_field_kind(value: Any, kind: str) -> bool:
     return False
 
 
+_ACTION_PARAM_SCHEMAS: dict[str, dict[str, Any]] = {
+    "ENTITY_ID_MAP": {"type": "object", "additionalProperties": {"type": "string"}},
+    "ENTITY_ID_ARRAY_MAP": {
+        "type": "object",
+        "additionalProperties": {"type": "array", "items": {"type": "string"}},
+    },
+    "ENTITY_ID_ARRAY": {"type": "array", "items": {"type": "string"}},
+    "INTEGER": {"type": "integer"},
+}
+
+
+def _native_action_param_fields(action: Mapping[str, Any]) -> Mapping[str, str] | None:
+    spec = action.get("parameterSpec")
+    if spec is None:
+        return None
+    if not isinstance(spec, Mapping) or not isinstance(spec.get("allowedFields"), Mapping):
+        raise OpenAIResponsesPilotError("native action parameterSpec is malformed")
+    fields = spec["allowedFields"]
+    for name, kind in fields.items():
+        if (
+            not isinstance(name, str)
+            or not name
+            or not isinstance(kind, str)
+            or kind not in _ACTION_PARAM_SCHEMAS
+        ):
+            raise OpenAIResponsesPilotError("native action parameterSpec has an unsupported field")
+    return fields
+
+
+def _native_action_format(observation: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Constrain each semantic action to its own Argentum-authored parameter fields."""
+
+    legal = observation.get("legalActions")
+    if not isinstance(legal, list) or not legal:
+        return None
+    variants: list[dict[str, Any]] = []
+    for action in legal:
+        if not isinstance(action, Mapping):
+            return None
+        fields = _native_action_param_fields(action)
+        if fields is None:
+            return None
+        semantic_id = _require_string(action.get("semanticId"), "legal semanticId")
+        variants.append({
+            "type": "object",
+            "properties": {
+                "semanticId": {"type": "string", "const": semantic_id},
+                "params": {
+                    "type": "object",
+                    "properties": {
+                        name: _ACTION_PARAM_SCHEMAS[kind] for name, kind in fields.items()
+                    },
+                    "additionalProperties": False,
+                },
+            },
+            "required": ["semanticId", "params"],
+            "additionalProperties": False,
+        })
+    return {
+        "type": "json_schema",
+        "name": "commander_gym_native_action",
+        "strict": False,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "channel": {"type": "string", "const": "action"},
+                "choice": {"anyOf": variants},
+            },
+            "required": ["channel", "choice"],
+            "additionalProperties": False,
+        },
+    }
+
+
+def _matches_action_param_kind(value: Any, kind: str) -> bool:
+    if kind == "INTEGER":
+        return type(value) is int
+    if kind == "ENTITY_ID_ARRAY":
+        return isinstance(value, list) and all(isinstance(item, str) for item in value)
+    if kind == "ENTITY_ID_MAP":
+        return isinstance(value, dict) and all(
+            isinstance(key, str) and isinstance(item, str)
+            for key, item in value.items()
+        )
+    if kind == "ENTITY_ID_ARRAY_MAP":
+        return isinstance(value, dict) and all(
+            isinstance(key, str)
+            and isinstance(items, list)
+            and all(isinstance(item, str) for item in items)
+            for key, items in value.items()
+        )
+    return False
+
+
+def _validate_native_action_params(
+    params: Mapping[str, Any], action: Mapping[str, Any]
+) -> dict[str, Any]:
+    fields = _native_action_param_fields(action)
+    if fields is None:
+        if action.get("parameterSpec") is not None:
+            raise OpenAIResponsesPilotError("native action parameterSpec is malformed")
+        return dict(params)
+    unexpected = set(params) - set(fields)
+    if unexpected:
+        raise OpenAIResponsesPilotError(
+            f"ActionParams fields are not allowed by native parameterSpec: {sorted(unexpected)}"
+        )
+    for name, value in params.items():
+        kind = fields[name]
+        if not _matches_action_param_kind(value, kind):
+            raise OpenAIResponsesPilotError(f"ActionParams.{name} requires {kind}")
+    return dict(params)
+
+
 def _with_model_io(choice: PilotChoice, model_io: Mapping[str, Any]) -> PilotChoice:
     """Attach exact provider attempts without changing the chosen Argentum payload."""
 
@@ -342,6 +456,7 @@ class OpenAIResponsesPilot:
             )
 
     def choose(self, observation: Mapping[str, Any]) -> PilotChoice:
+        action_format = _native_action_format(observation)
         model_observation = _without_live_routing(observation)
         base_input = "Return one JSON object for this observation:\n" + json.dumps(
             model_observation,
@@ -355,10 +470,15 @@ class OpenAIResponsesPilot:
             # The Responses JSON-object mode requires the user input itself to name
             # JSON; mentioning it only in instructions is not sufficient.
             "input": base_input,
-            "text": {"format": {"type": "json_object"}},
+            "text": {"format": action_format or {"type": "json_object"}},
             "store": False,
         }
         pending = observation.get("pendingDecision")
+        if action_format is not None:
+            request["instructions"] += (
+                "\n\nReturn channel action with choice containing the exact semanticId "
+                "and only the ActionParams allowed by that action's parameterSpec."
+            )
         if isinstance(pending, Mapping) and pending.get("requiresStructuredResponse") is True:
             request["instructions"] += (
                 "\n\nFor this structured decision, copy the exact responseType from "
@@ -468,7 +588,10 @@ class OpenAIResponsesPilot:
         metadata["retryCount"] = retry_count
         channel = decision.get("channel")
         if channel == "action":
-            return self._action_choice(decision, observation, metadata)
+            action_decision = decision.get("choice") if "choice" in decision else decision
+            if not isinstance(action_decision, Mapping):
+                raise OpenAIResponsesPilotError("OpenAI action choice must be a JSON object")
+            return self._action_choice(action_decision, observation, metadata)
         if channel == "decision":
             return self._decision_choice(decision, observation, metadata)
         raise OpenAIResponsesPilotError(
@@ -506,7 +629,7 @@ class OpenAIResponsesPilot:
             )
         return ArgentumActionChoice(
             action_id=action_id,
-            params=dict(params),
+            params=_validate_native_action_params(params, matches[0]),
             metadata=dict(metadata),
         )
 
