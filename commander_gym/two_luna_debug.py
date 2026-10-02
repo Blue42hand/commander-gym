@@ -306,6 +306,8 @@ def _summarize(
 
 def run(args: argparse.Namespace) -> int:
     run_started = time.monotonic()
+    if args.profile_a == args.profile_b:
+        raise RuntimeError("two-seat qualification requires distinct Binding profiles")
     token = os.environ.get("COMMANDER_GYM_SIDECAR_TOKEN", "")
     if not token:
         raise RuntimeError("COMMANDER_GYM_SIDECAR_TOKEN is required")

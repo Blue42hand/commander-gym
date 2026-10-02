@@ -65,6 +65,8 @@ def main():
     out.mkdir(parents=True, exist_ok=True, mode=0o700)
     if stat.S_IMODE(out.stat().st_mode) & 0o077:
         raise RuntimeError("output directory must be private to the current user")
+    run_dir = out / f"game-{int(time.time())}-{secrets.token_hex(4)}"
+    run_dir.mkdir(mode=0o700)
     sidecar_port, server_port = free_port(), free_port()
     env = dict(os.environ)
     env.update({
@@ -78,7 +80,7 @@ def main():
         "COMMANDER_GYM_OPENAI_MODEL": "gpt-6-luna",
         "COMMANDER_GYM_OPENAI_MAX_ATTEMPTS": "2",
         "COMMANDER_GYM_OPENAI_TIMEOUT": "120",
-        "COMMANDER_GYM_SIDECAR_PROVENANCE": str(out / "policy.jsonl"),
+        "COMMANDER_GYM_SIDECAR_PROVENANCE": str(run_dir / "policy.jsonl"),
         "COMMANDER_GYM_BINDING_CATALOG": str(args.catalog.resolve()),
         "COMMANDER_GYM_INSTANCE_ROOT": str(args.instance_root.resolve()),
         "COMMANDER_GYM_OPENAI_BUDGET_LEDGER": str(out / "openai-budget.json"),
@@ -87,7 +89,7 @@ def main():
     })
     processes, logs = [], []
     try:
-        sidecar_log = (out / "sidecar.log").open("a")
+        sidecar_log = (run_dir / "sidecar.log").open("x")
         logs.append(sidecar_log)
         sidecar = subprocess.Popen([str(gym / ".venv/bin/python"), "-m",
             "commander_gym.game_server_binding_openai_sidecar"], cwd=gym, env=env,
@@ -97,7 +99,7 @@ def main():
             f"http://127.0.0.1:{sidecar_port}/v1/controller-profiles",
             sidecar, 30, env["COMMANDER_GYM_SIDECAR_TOKEN"],
         )
-        server_log = (out / "server.log").open("a")
+        server_log = (run_dir / "server.log").open("x")
         logs.append(server_log)
         server = subprocess.Popen([str(engine / "scripts/gradle-locked"), "-p",
             str(gym / "jvm-adapter"), "runLocalGuiServer"], cwd=engine, env=env,
@@ -112,11 +114,12 @@ def main():
             "--profile-a", args.profile_a, "--profile-b", args.profile_b,
             "--budget-ledger", str(out / "openai-budget.json"),
             "--budget-cap", "0.000000001" if args.dry_run else "5",
-            "--provenance", str(out / "policy.jsonl"),
-            "--server-log", str(out / "server.log"),
+            "--provenance", str(run_dir / "policy.jsonl"),
+            "--server-log", str(run_dir / "server.log"),
             "--timeout", str(min(args.timeout, 30) if args.dry_run else args.timeout)],
             cwd=gym, env=runner_env, check=False)
-        print(f"RUN_ARTIFACTS={out}", flush=True)
+        print(f"RUN_ARTIFACTS={run_dir}", flush=True)
+        print(f"CUMULATIVE_BUDGET_LEDGER={out / 'openai-budget.json'}", flush=True)
         return result.returncode
     finally:
         for process in reversed(processes):
