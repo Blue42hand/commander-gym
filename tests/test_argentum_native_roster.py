@@ -40,7 +40,18 @@ class ArgentumNativeRosterTest(unittest.TestCase):
             for player, seat in zip(game["argentum_config"]["players"], game["seats"]):
                 self.assertEqual(100, sum(player["deck"]["cards"].values()))
                 self.assertEqual(player["name"], seat["player_name"])
+                self.assertEqual("gpt-6-luna", seat["pilot"]["model"])
                 self.assertTrue(seat["pilot"]["strategy"].startswith("# "))
+
+            subprocess.run(
+                [sys.executable, str(ROOT / "scripts" / "build_argentum_roster_game.py"),
+                 str(ROSTER / "manifest.json"), "--model", "explicit-model", "--output", str(output)],
+                check=True,
+            )
+            overridden = json.loads(output.read_text())
+            self.assertTrue(all(
+                seat["pilot"]["model"] == "explicit-model" for seat in overridden["seats"]
+            ))
 
 
 if __name__ == "__main__":

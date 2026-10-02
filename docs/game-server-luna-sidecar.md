@@ -15,7 +15,7 @@ GameServerSeatAdapter
     |
 RoutingPilot
     |
-OpenAIResponsesPilot (default: gpt-5.6-luna)
+OpenAIResponsesPilot (default: gpt-6-luna)
 ```
 
 This is deliberately separate from the scripted sidecar used by the JVM acceptance
@@ -42,7 +42,7 @@ export COMMANDER_GYM_SIDECAR_TOKEN="$(openssl rand -hex 32)"
 
 Defaults:
 
-- `COMMANDER_GYM_OPENAI_MODEL=gpt-5.6-luna`
+- `COMMANDER_GYM_OPENAI_MODEL=gpt-6-luna`
 - `COMMANDER_GYM_SIDECAR_HOST=127.0.0.1`
 - `COMMANDER_GYM_SIDECAR_PORT=8083`
 - `COMMANDER_GYM_OPENAI_TIMEOUT=60`

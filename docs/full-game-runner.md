@@ -55,7 +55,7 @@ manifest shape is:
       "deck_id": "deck-package-id",
       "deck_version": "deck-fingerprint",
       "primer_version": "optional-primer-version",
-      "pilot": {"backend": "openai_responses", "model": "gpt-5.6-luna"}
+      "pilot": {"backend": "openai_responses", "model": "gpt-6-luna"}
     }
   ]
 }

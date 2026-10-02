@@ -30,7 +30,7 @@ from .openai_responses_pilot import OpenAIResponsesPilot
 from .pilot_routing import RoutingPilot
 
 
-DEFAULT_OPENAI_GAME_SERVER_MODEL = "gpt-5.6-luna"
+DEFAULT_OPENAI_GAME_SERVER_MODEL = "gpt-6-luna"
 
 
 class OpenAIGameServerSidecarConfigurationError(RuntimeError):
