@@ -13,6 +13,7 @@ class DummyPilot:
     version = "1"
 
     def choose(self, observation):
+        self.observation = observation
         return ArgentumActionChoice(action_id=0)
 
 
@@ -54,7 +55,7 @@ def artifacts():
 
 
 class BindingResolverTests(unittest.TestCase):
-    def resolver(self, *, bindings=None, decks=None, pilots=None, knowledge=None):
+    def resolver(self, *, bindings=None, decks=None, pilots=None, knowledge=None, knowledge_payload_loader=None, pilot_factory=None):
         deck, deck_knowledge, pilot, binding = artifacts()
         return BindingResolver(
             bindings=list(bindings if bindings is not None else [binding]),
@@ -67,7 +68,8 @@ class BindingResolverTests(unittest.TestCase):
                 "artifact_id": ref.artifact_id,
                 "cards": ["Synthetic Commander", "Forest"],
             },
-            pilot_factory=lambda pilot_manifest, binding_manifest: DummyPilot(),
+            pilot_factory=pilot_factory or (lambda pilot_manifest, binding_manifest: DummyPilot()),
+            knowledge_payload_loader=knowledge_payload_loader,
         )
 
     def test_resolves_exact_binding_components(self):
@@ -130,6 +132,20 @@ class BindingResolverTests(unittest.TestCase):
         resolver = self.resolver()
         with self.assertRaisesRegex(BindingResolutionError, "unknown Binding"):
             resolver.resolve("missing")
+
+    def test_exact_knowledge_content_reaches_bound_pilot(self):
+        delegate = DummyPilot()
+        resolver = self.resolver(
+            knowledge_payload_loader=lambda ref: "exact primer for " + ref.artifact_id,
+            pilot_factory=lambda pilot_manifest, binding_manifest: delegate,
+        )
+        resolved = resolver.resolve("seat-a")
+        self.assertEqual(resolved.deck_knowledge_content, "exact primer for primer-payload")
+        resolved.artificial_player.choose({"seatId": "seat-1"})
+        self.assertEqual(delegate.observation["deckKnowledge"], resolved.deck_knowledge_content)
+        self.assertEqual(delegate.observation["seatId"], "seat-1")
+        with self.assertRaisesRegex(BindingResolutionError, "already contains deckKnowledge"):
+            resolved.artificial_player.choose({"deckKnowledge": "unbound content"})
 
 
 if __name__ == "__main__":

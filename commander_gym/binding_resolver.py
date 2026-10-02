@@ -19,7 +19,27 @@ class BindingResolutionError(IdentityError):
 
 
 DeckPayloadLoader = Callable[[ArtifactRef], Mapping[str, Any]]
+KnowledgePayloadLoader = Callable[[ArtifactRef], str]
 PilotFactory = Callable[[Pilot, Binding], ArtificialPlayer]
+
+
+@dataclass(frozen=True)
+class _KnowledgeBoundPilot:
+    delegate: ArtificialPlayer
+    content: str
+
+    @property
+    def name(self) -> str:
+        return self.delegate.name
+
+    @property
+    def version(self) -> str:
+        return self.delegate.version
+
+    def choose(self, observation: Mapping[str, Any]):
+        if "deckKnowledge" in observation:
+            raise BindingResolutionError("seat observation already contains deckKnowledge")
+        return self.delegate.choose({**observation, "deckKnowledge": self.content})
 
 
 @dataclass(frozen=True)
@@ -30,6 +50,7 @@ class ResolvedSeatBinding:
     deck: IdentityRef
     pilot: IdentityRef
     deck_knowledge: IdentityRef | None
+    deck_knowledge_content: str | None
     exact_deck_payload: Mapping[str, Any]
     format_id: str
     format_metadata: Mapping[str, Any]
@@ -49,6 +70,7 @@ class BindingResolver:
         deck_knowledge: Sequence[DeckKnowledge] = (),
         deck_payload_loader: DeckPayloadLoader,
         pilot_factory: PilotFactory,
+        knowledge_payload_loader: KnowledgePayloadLoader | None = None,
     ) -> None:
         self._bindings = self._index_bindings(bindings)
         self._decks = self._index_exact(decks, "deck", lambda value: value.ref())
@@ -64,6 +86,7 @@ class BindingResolver:
             raise BindingResolutionError("pilot_factory must be callable")
         self._deck_payload_loader = deck_payload_loader
         self._pilot_factory = pilot_factory
+        self._knowledge_payload_loader = knowledge_payload_loader
 
     @staticmethod
     def _index_exact(
@@ -169,6 +192,7 @@ class BindingResolver:
         self._require_exact_ref(binding.pilot, pilot.ref(), "pilot")
 
         knowledge_ref: IdentityRef | None = None
+        knowledge_content: str | None = None
         if binding.deck_knowledge is not None:
             knowledge_key = (
                 binding.deck_knowledge.artifact_id,
@@ -186,6 +210,10 @@ class BindingResolver:
                 "deck_knowledge",
             )
             knowledge_ref = knowledge.ref()
+            if self._knowledge_payload_loader is not None:
+                knowledge_content = self._knowledge_payload_loader(knowledge.content)
+                if not isinstance(knowledge_content, str) or not knowledge_content.strip():
+                    raise BindingResolutionError("DeckKnowledge content must be non-empty text")
 
         payload = self._deck_payload_loader(deck.deck_artifact)
         if not isinstance(payload, Mapping):
@@ -193,6 +221,8 @@ class BindingResolver:
         exact_deck_payload = dict(payload)
 
         artificial_player = self._pilot_factory(pilot, binding)
+        if knowledge_content is not None:
+            artificial_player = _KnowledgeBoundPilot(artificial_player, knowledge_content)
         for field_name in ("name", "version"):
             value = getattr(artificial_player, field_name, None)
             if not isinstance(value, str) or not value:
@@ -213,6 +243,7 @@ class BindingResolver:
             deck=deck.ref(),
             pilot=pilot.ref(),
             deck_knowledge=knowledge_ref,
+            deck_knowledge_content=knowledge_content,
             exact_deck_payload=exact_deck_payload,
             format_id=deck.format_id,
             format_metadata=dict(deck.format_metadata),

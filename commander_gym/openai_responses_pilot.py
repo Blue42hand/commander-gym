@@ -29,7 +29,6 @@ from .pilot import ArgentumActionChoice, ArgentumDecisionChoice, PilotChoice
 
 MODEL_IO_SCHEMA_VERSION = 1
 
-
 class OpenAIResponsesPilotError(RuntimeError):
     """Raised when the provider cannot yield one valid native Argentum choice.
 
@@ -334,6 +333,13 @@ class OpenAIResponsesPilot:
             "text": {"format": {"type": "json_object"}},
             "store": False,
         }
+        pending = observation.get("pendingDecision")
+        if isinstance(pending, Mapping) and pending.get("requiresStructuredResponse") is True:
+            request["instructions"] += (
+                "\n\nFor this structured decision, copy the exact responseType from "
+                "pendingDecision.responseSpec into response.type and provide every "
+                "requiredFields entry with its declared JSON value kind."
+            )
 
         validation_error: OpenAIResponsesPilotError | None = None
         attempts: list[dict[str, Any]] = []
@@ -503,7 +509,41 @@ class OpenAIResponsesPilot:
             raise OpenAIResponsesPilotError(
                 "model-facing structured response must not invent live decisionId routing"
             )
-        _require_string(response.get("type"), "structured response type")
+        response_type = _require_string(response.get("type"), "structured response type")
+        spec = pending.get("responseSpec")
+        if not isinstance(spec, Mapping):
+            raise OpenAIResponsesPilotError(
+                "Argentum structured decision is missing its native responseSpec"
+            )
+        expected_type = _require_string(spec.get("responseType"), "native responseType")
+        if response_type != expected_type:
+            raise OpenAIResponsesPilotError(
+                f"structured decision requires native Argentum response type {expected_type}"
+            )
+        required = spec.get("requiredFields")
+        if not isinstance(required, Mapping):
+            raise OpenAIResponsesPilotError("native responseSpec requiredFields must be an object")
+        expected_python_types = {
+            "BOOLEAN": bool,
+            "INTEGER": int,
+            "STRING": str,
+            "ENTITY_ID_ARRAY": list,
+            "INTEGER_ARRAY": list,
+            "ENTITY_ID_ARRAY_ARRAY": list,
+            "MAP": dict,
+            "DAMAGE_EDGE_AMOUNT_ARRAY": list,
+        }
+        for field, kind in required.items():
+            expected_python_type = expected_python_types.get(kind)
+            if expected_python_type is None:
+                raise OpenAIResponsesPilotError(
+                    f"unsupported native response field kind {kind!r}"
+                )
+            value = response.get(field)
+            if type(value) is not expected_python_type:
+                raise OpenAIResponsesPilotError(
+                    f"native response field {field} requires {kind}"
+                )
 
         submitted = dict(response)
         submitted["decisionId"] = decision_id

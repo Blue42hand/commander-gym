@@ -41,7 +41,14 @@ import java.util.concurrent.CopyOnWriteArrayList
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class GameServerBindingFoundationAcceptanceTest {
     private val token = "commander-gym-binding-foundation-token"
-    private val expectedSpec = AiControllerSpec("commander-gym", "seat-a")
+    private val realInstanceRoot = System.getenv("COMMANDER_GYM_QUALIFICATION_INSTANCE_ROOT")
+        ?.takeIf { it.isNotBlank() }
+    private val expectedBindingId = if (realInstanceRoot == null) "seat-a" else "krenko-foundation-openai"
+    private val expectedSpec = AiControllerSpec("commander-gym", expectedBindingId)
+    private val expectedDeckLabel = if (realInstanceRoot == null) "Synthetic Zetalpa" else "Krenko — Argentum Native"
+    private val expectedPilotId = if (realInstanceRoot == null) "synthetic-binding-pilot" else "foundation-openai"
+    private val expectedPilotRevision = if (realInstanceRoot == null) "r1" else "2026-09-24.1"
+    private val expectedBindingRevision = if (realInstanceRoot == null) "r1" else "2026-10-02.1"
     private val json = Json {
         ignoreUnknownKeys = true
         encodeDefaults = true
@@ -69,18 +76,20 @@ class GameServerBindingFoundationAcceptanceTest {
         val script = File(repoRoot, "scripts/game_server_binding_acceptance_sidecar.py")
         check(script.isFile) { "Binding acceptance sidecar script not found: $script" }
 
-        val builder = ProcessBuilder(
-            python,
-            script.absolutePath,
-            "--port",
-            sidecarPort.toString(),
-            "--token",
-            token,
-            "--root",
-            instanceRoot.toAbsolutePath().toString(),
-            "--evidence",
-            evidenceFile.toAbsolutePath().toString(),
+        val args = mutableListOf(
+            python, script.absolutePath,
+            "--port", sidecarPort.toString(),
+            "--token", token,
+            "--root", instanceRoot.toAbsolutePath().toString(),
+            "--evidence", evidenceFile.toAbsolutePath().toString(),
         )
+        if (realInstanceRoot != null) {
+            args += listOf(
+                "--catalog", "$realInstanceRoot/rosters/foundation-active-four-seat.json",
+                "--instance-root", realInstanceRoot,
+            )
+        }
+        val builder = ProcessBuilder(args)
             .directory(repoRoot)
             .redirectErrorStream(true)
             .redirectOutput(ProcessBuilder.Redirect.INHERIT)
@@ -137,8 +146,11 @@ class GameServerBindingFoundationAcceptanceTest {
             client.send(GetAiControllerCatalog())
             val preLobbyCatalog = awaitCatalog(client, lobbyId = null)
             val advertised = preLobbyCatalog.options.single { it.spec == expectedSpec }
-            assertEquals("Synthetic Binding A", advertised.displayName)
-            assertEquals("Synthetic Zetalpa", advertised.deck?.label)
+            assertEquals(if (realInstanceRoot == null) "Synthetic Binding A" else "Krenko — Argentum Native — Foundation OpenAI", advertised.displayName)
+            assertEquals(expectedDeckLabel, advertised.deck?.label)
+            if (realInstanceRoot != null) {
+                assertEquals(4, preLobbyCatalog.options.count { it.spec.profileId?.endsWith("-foundation-openai") == true })
+            }
 
             client.send(
                 ClientMessage.CreateQuickGameLobby(
@@ -147,7 +159,7 @@ class GameServerBindingFoundationAcceptanceTest {
                     aiControllerSpec = expectedSpec,
                 )
             )
-            val lobbyState = awaitQuickGameState(client) { it.aiDeck?.label == "Synthetic Zetalpa" }
+            val lobbyState = awaitQuickGameState(client) { it.aiDeck?.label == expectedDeckLabel }
             val lobbyId = lobbyState.lobbyId
 
             client.send(GetAiControllerCatalog(lobbyId))
@@ -163,6 +175,18 @@ class GameServerBindingFoundationAcceptanceTest {
             }
             client.send(GetAiControllerCatalog(lobbyId))
             assertEquals(expectedSpec, awaitCatalog(client, lobbyId).seats.single().spec)
+
+            if (realInstanceRoot != null) {
+                val talrandSpec = AiControllerSpec("commander-gym", "talrand-foundation-openai")
+                client.send(SetQuickGameAiController(talrandSpec))
+                awaitQuickGameState(client) { it.aiDeck?.label == "Talrand — Argentum Native" }
+                client.send(GetAiControllerCatalog(lobbyId))
+                assertEquals(talrandSpec, awaitSelectedCatalog(client, lobbyId, talrandSpec).seats.single().spec)
+                client.send(SetQuickGameAiController(expectedSpec))
+                awaitQuickGameState(client) { it.aiDeck?.label == expectedDeckLabel }
+                client.send(GetAiControllerCatalog(lobbyId))
+                assertEquals(expectedSpec, awaitSelectedCatalog(client, lobbyId, expectedSpec).seats.single().spec)
+            }
 
             val errorsBeforeMismatch = client.errors().size
             client.send(
@@ -180,7 +204,7 @@ class GameServerBindingFoundationAcceptanceTest {
                 }
             }
             assertEquals(
-                "Synthetic Zetalpa",
+                expectedDeckLabel,
                 client.messages.filterIsInstance<ServerMessage.QuickGameLobbyState>().last().aiDeck?.label,
             )
 
@@ -189,12 +213,12 @@ class GameServerBindingFoundationAcceptanceTest {
             // running normal Argentum Spring application and calls the production sidecar over HTTP.
             val provider = context.getBeansOfType(AiControllerProvider::class.java).values
                 .single { it.mode == "commander-gym" }
-            val boundDeck = provider.profiles.single { it.id == "seat-a" }.deckSpec as AiDeckSpec.Fixed
+            val boundDeck = provider.profiles.single { it.id == expectedBindingId }.deckSpec as AiDeckSpec.Fixed
             val controller = provider.create(
                 AiControllerContext(
                     playerId = EntityId.of("binding-foundation-ai"),
                     gameSessionId = "binding-foundation-smoke",
-                    profileId = "seat-a",
+                    profileId = expectedBindingId,
                     snapshot = { null },
                 )
             )
@@ -202,12 +226,43 @@ class GameServerBindingFoundationAcceptanceTest {
             assertEquals(true, controller.decideMulligan(MulliganInfo(emptyList(), 0, 0)))
 
             val resolved = awaitEvidence(Duration.ofSeconds(10)) {
-                it["event"] == "binding_seat_resolved" && it["profileId"] == "seat-a"
+                it["event"] == "binding_seat_resolved" && it["profileId"] == expectedBindingId
             }
-            assertEquals("seat-a", resolved["bindingId"])
-            assertEquals("r1", resolved["bindingRevision"])
-            assertEquals("synthetic-binding-pilot", resolved["pilotId"])
-            assertEquals("r1", resolved["pilotRevision"])
+            assertEquals(expectedBindingId, resolved["bindingId"])
+            assertEquals(expectedBindingRevision, resolved["bindingRevision"])
+            assertEquals(expectedPilotId, resolved["pilotId"])
+            assertEquals(expectedPilotRevision, resolved["pilotRevision"])
+            if (realInstanceRoot != null) {
+                val talrandDeck = provider.profiles.single { it.id == "talrand-foundation-openai" }.deckSpec as AiDeckSpec.Fixed
+                val talrand = provider.create(
+                    AiControllerContext(
+                        playerId = EntityId.of("binding-foundation-talrand-ai"),
+                        gameSessionId = "binding-foundation-smoke",
+                        profileId = "talrand-foundation-openai",
+                        snapshot = { null },
+                    )
+                )
+                talrand.setDeckList(talrandDeck.deckList, talrandDeck.commander)
+                assertEquals(true, talrand.decideMulligan(MulliganInfo(emptyList(), 0, 0)))
+                val talrandResolved = awaitEvidence(Duration.ofSeconds(10)) {
+                    it["event"] == "binding_seat_resolved" && it["profileId"] == "talrand-foundation-openai"
+                }
+                assertEquals("foundation-openai", talrandResolved["pilotId"])
+                assertEquals("2026-09-24.1", talrandResolved["pilotRevision"])
+                assertEquals("Krenko, Mob Boss", boundDeck.commander)
+                assertEquals("Talrand, Sky Summoner", talrandDeck.commander)
+                assertEquals(false, boundDeck.deckList == talrandDeck.deckList)
+                assertEquals(64, resolved["bindingFingerprint"]?.length)
+                assertEquals(64, talrandResolved["bindingFingerprint"]?.length)
+                assertEquals(false, resolved["deckFingerprint"] == talrandResolved["deckFingerprint"])
+                assertEquals(resolved["pilotFingerprint"], talrandResolved["pilotFingerprint"])
+                println("REAL_BINDING_PROFILE_PROOF " + mapOf(
+                    "krenko" to resolved,
+                    "talrand" to talrandResolved,
+                    "krenkoDeckCards" to boundDeck.deckList.values.sum().toString(),
+                    "talrandDeckCards" to talrandDeck.deckList.values.sum().toString(),
+                ))
+            }
         } finally {
             client.close()
         }
@@ -218,6 +273,20 @@ class GameServerBindingFoundationAcceptanceTest {
         await(Duration.ofSeconds(10), "AI controller catalog") {
             result = client.messages.filterIsInstance<AiControllerCatalog>()
                 .lastOrNull { it.lobbyId == lobbyId }
+            result != null
+        }
+        return result!!
+    }
+
+    private fun awaitSelectedCatalog(
+        client: HumanClient,
+        lobbyId: String,
+        expected: AiControllerSpec,
+    ): AiControllerCatalog {
+        var result: AiControllerCatalog? = null
+        await(Duration.ofSeconds(10), "selected AI controller catalog") {
+            result = client.messages.filterIsInstance<AiControllerCatalog>()
+                .lastOrNull { it.lobbyId == lobbyId && it.seats.singleOrNull()?.spec == expected }
             result != null
         }
         return result!!

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import hashlib
 import threading
 from pathlib import Path
 from types import MethodType
@@ -43,11 +44,17 @@ def write_json(path: Path, value) -> None:
 
 
 def synthetic_catalog(root: Path) -> Path:
+    payload = {
+        "commander": "Zetalpa, Primal Dawn",
+        "cards": {"Zetalpa, Primal Dawn": 1, "Plains": 99},
+    }
     deck_artifact = ArtifactRef(
         kind="decklist",
         artifact_id="synthetic-binding-decklist",
         version="r1",
-        digest="sha256:synthetic-binding-decklist",
+        digest="sha256:" + hashlib.sha256(
+            json.dumps(payload, sort_keys=True).encode("utf-8")
+        ).hexdigest(),
     )
     deck = Deck(
         deck_id="synthetic-binding-deck",
@@ -78,13 +85,7 @@ def synthetic_catalog(root: Path) -> Path:
 
     write_json(root / "bindings" / "seat-a.json", binding.to_dict())
     write_json(root / "decks" / "deck.json", deck.to_dict())
-    write_json(
-        root / "decks" / "payload.json",
-        {
-            "commander": "Zetalpa, Primal Dawn",
-            "cards": {"Zetalpa, Primal Dawn": 1, "Plains": 99},
-        },
-    )
+    write_json(root / "decks" / "payload.json", payload)
     write_json(root / "pilots" / "pilot.json", pilot.to_dict())
     catalog = root / "instance" / "bindings.json"
     write_json(
@@ -119,6 +120,8 @@ def main() -> int:
     parser.add_argument("--token", required=True)
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--evidence", type=Path, required=True)
+    parser.add_argument("--catalog", type=Path)
+    parser.add_argument("--instance-root", type=Path)
     args = parser.parse_args()
 
     root = args.root.resolve()
@@ -126,7 +129,8 @@ def main() -> int:
     evidence = args.evidence.resolve()
     evidence.parent.mkdir(parents=True, exist_ok=True)
     evidence.write_text("", encoding="utf-8")
-    catalog = synthetic_catalog(root)
+    catalog = args.catalog.resolve() if args.catalog else synthetic_catalog(root)
+    instance_root = args.instance_root.resolve() if args.instance_root else root
 
     config = BindingOpenAIGameServerConfig(
         sidecar=OpenAIGameServerSidecarConfig(
@@ -135,7 +139,7 @@ def main() -> int:
             port=args.port,
         ),
         catalog_path=catalog,
-        instance_root=root,
+        instance_root=instance_root,
     )
     server = build_binding_openai_game_server_sidecar(config, client=NoModelClient())
 
@@ -149,6 +153,8 @@ def main() -> int:
     def traced_factory(player_id: str, profile_id: str):
         adapter = original_factory(player_id, profile_id)
         canonical = adapter._pilot
+        if not hasattr(canonical, "binding"):
+            canonical = canonical.delegate
         with lock:
             append_event(
                 evidence,
@@ -158,8 +164,25 @@ def main() -> int:
                     "profileId": profile_id,
                     "bindingId": canonical.binding.binding_id,
                     "bindingRevision": canonical.binding.revision,
+                    "bindingFingerprint": canonical.binding.fingerprint(),
+                    "deckId": canonical.binding.deck.artifact_id,
+                    "deckRevision": canonical.binding.deck.revision,
+                    "deckFingerprint": canonical.binding.deck.fingerprint,
+                    "knowledgeId": (
+                        canonical.binding.deck_knowledge.artifact_id
+                        if canonical.binding.deck_knowledge else None
+                    ),
+                    "knowledgeRevision": (
+                        canonical.binding.deck_knowledge.revision
+                        if canonical.binding.deck_knowledge else None
+                    ),
+                    "knowledgeFingerprint": (
+                        canonical.binding.deck_knowledge.fingerprint
+                        if canonical.binding.deck_knowledge else None
+                    ),
                     "pilotId": canonical.pilot.pilot_id,
                     "pilotRevision": canonical.pilot.revision,
+                    "pilotFingerprint": canonical.pilot.fingerprint(),
                 },
             )
         adapter.decide_mulligan = MethodType(lambda _self, _message: True, adapter)
