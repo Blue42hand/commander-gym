@@ -159,6 +159,23 @@ def _skill_review_flags(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return flags
 
 
+def _natural_terminal_game(finished: Any) -> dict[str, Any] | None:
+    """Require one played native terminal match, not bracket completion alone."""
+
+    if not isinstance(finished, list) or len(finished) != 1:
+        return None
+    game = finished[0]
+    if not isinstance(game, Mapping):
+        return None
+    if not isinstance(game.get("gameSessionId"), str) or not game["gameSessionId"]:
+        return None
+    if game.get("nativeGameOver") is not True or game.get("isSimulated") is not False:
+        return None
+    if not (isinstance(game.get("winnerId"), str) or game.get("isDraw") is True):
+        return None
+    return dict(game)
+
+
 def _summarize(
     records: list[dict[str, Any]],
     *,
@@ -353,6 +370,7 @@ def run(args: argparse.Namespace) -> int:
     max_turn = 0
     last_signature: tuple[Any, ...] | None = None
     completed = False
+    terminal_evidence: dict[str, Any] | None = None
 
     while time.monotonic() < deadline:
         status = _request_json(f"{base}/api/dev/ai-tournament/{lobby_id}")
@@ -368,6 +386,18 @@ def run(args: argparse.Namespace) -> int:
             turn = game.get("turnNumber")
             if type(turn) is int:
                 max_turn = max(max_turn, turn)
+        finished = status.get("completedGames")
+        if isinstance(finished, list):
+            for game in finished:
+                if not isinstance(game, Mapping):
+                    continue
+                game_id = game.get("gameSessionId")
+                if isinstance(game_id, str) and game_id not in game_ids:
+                    game_ids.append(game_id)
+                final_turn = game.get("finalTurnNumber")
+                if type(final_turn) is int:
+                    max_turn = max(max_turn, final_turn)
+            terminal_evidence = _natural_terminal_game(finished)
         signature = (
             status.get("state"),
             status.get("round"),
@@ -381,7 +411,7 @@ def run(args: argparse.Namespace) -> int:
             print("TWO_LUNA_STATUS=" + json.dumps(dict(status), sort_keys=True), flush=True)
             last_signature = signature
         if status.get("complete") is True:
-            completed = True
+            completed = terminal_evidence is not None
             break
         time.sleep(args.poll_seconds)
 
@@ -397,6 +427,7 @@ def run(args: argparse.Namespace) -> int:
         log_path=Path(args.server_log) if args.server_log else None,
         wall_time_seconds=time.monotonic() - run_started,
     )
+    result["terminalEvidence"] = terminal_evidence
     after = budget.snapshot()
     result["budget"] = {
         "capUsd": after["capUsd"],

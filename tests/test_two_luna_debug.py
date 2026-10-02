@@ -2,10 +2,32 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from commander_gym.two_luna_debug import _summarize
+from commander_gym.two_luna_debug import _natural_terminal_game, _summarize
 
 
 class TwoLunaDebugReportTests(unittest.TestCase):
+    def test_requires_one_played_native_terminal_match(self):
+        played = {
+            "gameSessionId": "game-1",
+            "winnerId": "ai-a",
+            "isDraw": False,
+            "isSimulated": False,
+            "nativeGameOver": True,
+            "finalTurnNumber": 8,
+        }
+        self.assertEqual(_natural_terminal_game([played]), played)
+        self.assertIsNone(_natural_terminal_game([]))
+        self.assertIsNone(_natural_terminal_game([played, played]))
+        for change in (
+            {"gameSessionId": None},
+            {"nativeGameOver": False},
+            {"isSimulated": True},
+            {"winnerId": None},
+        ):
+            with self.subTest(change=change):
+                self.assertIsNone(_natural_terminal_game([{**played, **change}]))
+        self.assertIsNotNone(_natural_terminal_game([{**played, "winnerId": None, "isDraw": True}]))
+
     def test_reports_mechanical_wakes_provider_usage_and_clean_qualification(self):
         records = [
             {
