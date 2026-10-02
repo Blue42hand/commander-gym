@@ -291,11 +291,10 @@ def _matches_native_field_kind(value: Any, kind: str) -> bool:
 
 
 _ACTION_PARAM_SCHEMAS: dict[str, dict[str, Any]] = {
-    "ENTITY_ID_MAP": {"type": "object", "additionalProperties": {"type": "string"}},
-    "ENTITY_ID_ARRAY_MAP": {
-        "type": "object",
-        "additionalProperties": {"type": "array", "items": {"type": "string"}},
-    },
+    # Arbitrary entity-ID keys are checked locally; the provider schema only needs
+    # to constrain the named ActionParams fields to Argentum's declared wire kinds.
+    "ENTITY_ID_MAP": {"type": "object"},
+    "ENTITY_ID_ARRAY_MAP": {"type": "object"},
     "ENTITY_ID_ARRAY": {"type": "array", "items": {"type": "string"}},
     "INTEGER": {"type": "integer"},
 }
