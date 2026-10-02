@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import socket
 import tempfile
 import unittest
@@ -48,11 +49,17 @@ def synthetic_catalog(
     active_binding: str = "seat-a",
     pilot: Pilot | None = None,
 ) -> Path:
+    payload = {
+        "commander": "Synthetic Commander",
+        "cards": {"Synthetic Commander": 1, "Forest": 99},
+    }
     deck_artifact = ArtifactRef(
         kind="decklist",
         artifact_id="synthetic-decklist",
         version="r1",
-        digest="sha256:synthetic-decklist",
+        digest="sha256:" + hashlib.sha256(
+            json.dumps(payload, sort_keys=True).encode("utf-8")
+        ).hexdigest(),
     )
     deck = Deck(
         deck_id="synthetic-deck",
@@ -83,16 +90,7 @@ def synthetic_catalog(
 
     write_json(root / "bindings" / "seat-a.json", binding.to_dict())
     write_json(root / "decks" / "deck.json", deck.to_dict())
-    write_json(
-        root / "decks" / "payload.json",
-        {
-            "commander": "Synthetic Commander",
-            "cards": {
-                "Synthetic Commander": 1,
-                "Forest": 99,
-            },
-        },
-    )
+    write_json(root / "decks" / "payload.json", payload)
     write_json(root / "pilots" / "pilot.json", pilot.to_dict())
     catalog = root / "instance" / "bindings.json"
     write_json(

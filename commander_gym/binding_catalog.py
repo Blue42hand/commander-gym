@@ -10,6 +10,7 @@ public repository.
 from __future__ import annotations
 
 import json
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -96,6 +97,25 @@ def _artifact_key(ref: ArtifactRef) -> tuple[str, str, str, str | None]:
     return (ref.kind, ref.artifact_id, ref.version, ref.digest)
 
 
+def _read_verified_artifact(path: Path, ref: ArtifactRef, label: str) -> bytes:
+    try:
+        content = path.read_bytes()
+    except OSError as exc:
+        raise BindingCatalogError(f"cannot read {label}: {path}") from exc
+    digest = ref.digest or ""
+    if digest.startswith("sha256:"):
+        actual = "sha256:" + hashlib.sha256(content).hexdigest()
+    elif digest.startswith("git-sha1:"):
+        actual = "git-sha1:" + hashlib.sha1(
+            b"blob " + str(len(content)).encode("ascii") + b"\0" + content
+        ).hexdigest()
+    else:
+        raise BindingCatalogError(f"{label} requires a supported content digest")
+    if actual != digest:
+        raise BindingCatalogError(f"{label} digest does not match: {path}")
+    return content
+
+
 def load_binding_catalog(
     catalog_path: str | Path,
     *,
@@ -116,7 +136,12 @@ def load_binding_catalog(
             }
           ],
           "pilots": ["pilots/a/pilot.json"],
-          "deck_knowledge": ["decks/a/knowledge/knowledge.json"],
+          "deck_knowledge": [
+            {
+              "manifest": "decks/a/knowledge/knowledge.json",
+              "payload": "decks/a/knowledge/primer.md"
+            }
+          ],
           "active_bindings": ["seat-a"]
         }
 
@@ -164,12 +189,36 @@ def load_binding_catalog(
         label="pilots",
         loader=Pilot.from_dict,
     )
-    knowledge = _load_manifests(
-        root,
-        raw.get("deck_knowledge", ()),
-        label="deck_knowledge",
-        loader=DeckKnowledge.from_dict,
-    )
+    knowledge: list[DeckKnowledge] = []
+    knowledge_payloads: dict[tuple[str, str, str, str | None], str] = {}
+    for index, entry in enumerate(
+        _require_sequence(raw.get("deck_knowledge", ()), "deck_knowledge")
+    ):
+        item = _require_mapping(entry, f"deck_knowledge[{index}]")
+        manifest_path = _inside_root(
+            root, item.get("manifest"), f"deck_knowledge[{index}].manifest"
+        )
+        payload_path = _inside_root(
+            root, item.get("payload"), f"deck_knowledge[{index}].payload"
+        )
+        try:
+            artifact = DeckKnowledge.from_dict(
+                _read_json(manifest_path, f"deck_knowledge[{index}].manifest")
+            )
+        except (IdentityError, ValueError) as exc:
+            raise BindingCatalogError(f"invalid deck_knowledge[{index}]: {exc}") from exc
+        content = _read_verified_artifact(
+            payload_path, artifact.content, f"deck_knowledge[{index}].payload"
+        )
+        try:
+            decoded = content.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise BindingCatalogError("DeckKnowledge content must be UTF-8") from exc
+        key = _artifact_key(artifact.content)
+        if key in knowledge_payloads:
+            raise BindingCatalogError("duplicate DeckKnowledge content artifact")
+        knowledge.append(artifact)
+        knowledge_payloads[key] = decoded
 
     deck_entries = _require_sequence(raw.get("decks", ()), "decks")
     decks: list[Deck] = []
@@ -191,6 +240,7 @@ def load_binding_catalog(
         except (IdentityError, ValueError) as exc:
             raise BindingCatalogError(f"invalid decks[{index}].manifest: {exc}") from exc
         payload = _read_json(payload_path, f"decks[{index}].payload")
+        _read_verified_artifact(payload_path, deck.deck_artifact, f"decks[{index}].payload")
         key = _artifact_key(deck.deck_artifact)
         if key in payloads:
             raise BindingCatalogError(
@@ -221,6 +271,12 @@ def load_binding_catalog(
                 f"{ref.artifact_id!r}@{ref.version!r}"
             ) from exc
 
+    def knowledge_payload_loader(ref: ArtifactRef) -> str:
+        try:
+            return knowledge_payloads[_artifact_key(ref)]
+        except KeyError as exc:
+            raise BindingCatalogError("catalog is missing exact DeckKnowledge content") from exc
+
     resolver = BindingResolver(
         bindings=bindings,
         decks=decks,
@@ -228,6 +284,7 @@ def load_binding_catalog(
         deck_knowledge=knowledge,
         deck_payload_loader=deck_payload_loader,
         pilot_factory=pilot_factory,
+        knowledge_payload_loader=knowledge_payload_loader,
     )
 
     # Resolve advertised Bindings eagerly. Startup must fail rather than publish a

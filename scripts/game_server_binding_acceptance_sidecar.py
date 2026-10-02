@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import hashlib
 import threading
 from pathlib import Path
 from types import MethodType
@@ -43,11 +44,17 @@ def write_json(path: Path, value) -> None:
 
 
 def synthetic_catalog(root: Path) -> Path:
+    payload = {
+        "commander": "Zetalpa, Primal Dawn",
+        "cards": {"Zetalpa, Primal Dawn": 1, "Plains": 99},
+    }
     deck_artifact = ArtifactRef(
         kind="decklist",
         artifact_id="synthetic-binding-decklist",
         version="r1",
-        digest="sha256:synthetic-binding-decklist",
+        digest="sha256:" + hashlib.sha256(
+            json.dumps(payload, sort_keys=True).encode("utf-8")
+        ).hexdigest(),
     )
     deck = Deck(
         deck_id="synthetic-binding-deck",
@@ -78,13 +85,7 @@ def synthetic_catalog(root: Path) -> Path:
 
     write_json(root / "bindings" / "seat-a.json", binding.to_dict())
     write_json(root / "decks" / "deck.json", deck.to_dict())
-    write_json(
-        root / "decks" / "payload.json",
-        {
-            "commander": "Zetalpa, Primal Dawn",
-            "cards": {"Zetalpa, Primal Dawn": 1, "Plains": 99},
-        },
-    )
+    write_json(root / "decks" / "payload.json", payload)
     write_json(root / "pilots" / "pilot.json", pilot.to_dict())
     catalog = root / "instance" / "bindings.json"
     write_json(
