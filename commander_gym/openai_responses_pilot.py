@@ -476,8 +476,10 @@ class OpenAIResponsesPilot:
         pending = observation.get("pendingDecision")
         if action_format is not None:
             request["instructions"] += (
-                "\n\nReturn channel action with choice containing the exact semanticId "
-                "and only the ActionParams allowed by that action's parameterSpec."
+                "\n\nFor this request, use the request-local schema's nested choice object "
+                "instead of top-level semanticId/params. Return channel action with "
+                "choice containing the exact semanticId and only the ActionParams "
+                "allowed by that action's parameterSpec."
             )
         if isinstance(pending, Mapping) and pending.get("requiresStructuredResponse") is True:
             request["instructions"] += (
