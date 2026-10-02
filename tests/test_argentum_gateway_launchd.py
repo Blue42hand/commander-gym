@@ -1,10 +1,15 @@
 import plistlib
 import stat
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.argentum_gateway_launchd import ensure_token, render_plist
+from scripts.argentum_gateway_launchd import (
+    ensure_token,
+    installed_checkout_status,
+    render_plist,
+)
 
 
 class ArgentumGatewayLaunchdTests(unittest.TestCase):
@@ -37,6 +42,39 @@ class ArgentumGatewayLaunchdTests(unittest.TestCase):
             ensure_token(path)
             second = path.read_text(encoding="utf-8").strip()
             self.assertEqual(first, second)
+
+    def test_installed_checkout_status_detects_revision_drift(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = root / "repo"
+            repo.mkdir()
+            subprocess.run(["git", "init", "-q", str(repo)], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.email", "test@example.invalid"], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.name", "Test"], check=True)
+            (repo / "file.txt").write_text("first\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "add", "file.txt"], check=True)
+            subprocess.run(["git", "-C", str(repo), "commit", "-qm", "first"], check=True)
+            pinned = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
+            plist = root / "gateway.plist"
+            plist.write_bytes(render_plist(
+                repo_root=repo,
+                revision=pinned,
+                stdout_path=root / "stdout.log",
+                stderr_path=root / "stderr.log",
+                token_path=root / "token",
+            ))
+
+            healthy = installed_checkout_status(plist)
+            self.assertTrue(healthy["matchesPinnedRevision"])
+            self.assertEqual(pinned, healthy["checkoutRevision"])
+
+            (repo / "file.txt").write_text("second\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "commit", "-qam", "second"], check=True)
+            drifted = installed_checkout_status(plist)
+            self.assertFalse(drifted["matchesPinnedRevision"])
+            self.assertEqual(pinned, drifted["pinnedRevision"])
+            self.assertNotEqual(pinned, drifted["checkoutRevision"])
+            self.assertIn("revision differs", drifted["error"])
 
 
 if __name__ == "__main__":

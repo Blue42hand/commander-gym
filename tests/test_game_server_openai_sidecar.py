@@ -65,11 +65,17 @@ class OpenAIGameServerSidecarTests(unittest.TestCase):
     def test_environment_defaults_to_luna_and_loopback(self):
         config = openai_game_server_sidecar_from_environment(self.environment())
 
-        self.assertEqual(config.model, "gpt-5.6-luna")
+        self.assertEqual(config.model, "gpt-6-luna")
         self.assertEqual(config.bind_host, "127.0.0.1")
         self.assertEqual(config.port, 8083)
         self.assertEqual(config.timeout, 60.0)
         self.assertEqual(config.max_attempts, 2)
+
+    def test_explicit_model_override_is_preserved(self):
+        config = openai_game_server_sidecar_from_environment(
+            self.environment(COMMANDER_GYM_OPENAI_MODEL="example-model")
+        )
+        self.assertEqual(config.model, "example-model")
 
     def test_requires_secrets_and_keeps_them_out_of_repr(self):
         with self.assertRaisesRegex(

@@ -222,6 +222,38 @@ def fetch_status(token_path: Path) -> tuple[int, str]:
         return 0, str(exc)
 
 
+def installed_checkout_status(plist_path: Path) -> dict[str, Any]:
+    """Compare the installed launch agent pin with its current source checkout."""
+
+    result: dict[str, Any] = {
+        "matchesPinnedRevision": False,
+        "repository": None,
+        "pinnedRevision": None,
+        "checkoutRevision": None,
+    }
+    try:
+        with plist_path.open("rb") as source:
+            arguments = plistlib.load(source)["ProgramArguments"]
+        if (
+            len(arguments) != 5
+            or Path(arguments[1]).name != "run_argentum_gateway_service.sh"
+        ):
+            raise ValueError("installed launch agent has unexpected program arguments")
+        repository = Path(arguments[2])
+        result["repository"] = str(repository)
+        result["pinnedRevision"] = arguments[3]
+        revision = run("git", "rev-parse", "HEAD", cwd=repository)
+        result["checkoutRevision"] = revision.stdout.strip()
+        result["matchesPinnedRevision"] = (
+            result["checkoutRevision"] == result["pinnedRevision"]
+        )
+        if not result["matchesPinnedRevision"]:
+            result["error"] = "installed gateway revision differs from checkout HEAD"
+    except (OSError, KeyError, ValueError, TypeError, subprocess.CalledProcessError) as exc:
+        result["error"] = str(exc)
+    return result
+
+
 def status(_args: argparse.Namespace) -> int:
     if sys.platform != "darwin":
         raise RuntimeError("status is supported only on macOS")
@@ -230,15 +262,17 @@ def status(_args: argparse.Namespace) -> int:
     token_path = paths["state_dir"] / "bearer-token"
     launch = run("launchctl", "print", launchd_target(), check=False)
     http_status, body = fetch_status(token_path)
+    checkout = installed_checkout_status(paths["plist"])
     payload = {
         "launchdLoaded": launch.returncode == 0,
         "launchd": launch.stdout if launch.returncode == 0 else launch.stderr,
         "httpStatus": http_status,
         "serviceStatus": body,
+        "checkout": checkout,
         "tokenFile": str(token_path),
     }
     print(json.dumps(payload, indent=2, sort_keys=True))
-    return 0 if launch.returncode == 0 and http_status == 200 else 1
+    return 0 if launch.returncode == 0 and http_status == 200 and checkout["matchesPinnedRevision"] else 1
 
 
 def print_token(_args: argparse.Namespace) -> int:
