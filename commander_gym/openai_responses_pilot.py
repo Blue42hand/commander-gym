@@ -265,6 +265,31 @@ def _require_string(value: Any, label: str) -> str:
     return value
 
 
+def _matches_native_field_kind(value: Any, kind: str) -> bool:
+    """Check the machine-readable Argentum wire kind before native submission."""
+
+    if kind == "BOOLEAN":
+        return type(value) is bool
+    if kind == "INTEGER":
+        return type(value) is int
+    if kind == "STRING":
+        return isinstance(value, str)
+    if kind == "ENTITY_ID_ARRAY":
+        return isinstance(value, list) and all(isinstance(item, str) for item in value)
+    if kind == "INTEGER_ARRAY":
+        return isinstance(value, list) and all(type(item) is int for item in value)
+    if kind == "ENTITY_ID_ARRAY_ARRAY":
+        return isinstance(value, list) and all(
+            isinstance(group, list) and all(isinstance(item, str) for item in group)
+            for group in value
+        )
+    if kind == "MAP":
+        return isinstance(value, dict)
+    if kind == "DAMAGE_EDGE_AMOUNT_ARRAY":
+        return isinstance(value, list)
+    return False
+
+
 def _with_model_io(choice: PilotChoice, model_io: Mapping[str, Any]) -> PilotChoice:
     """Attach exact provider attempts without changing the chosen Argentum payload."""
 
@@ -523,24 +548,24 @@ class OpenAIResponsesPilot:
         required = spec.get("requiredFields")
         if not isinstance(required, Mapping):
             raise OpenAIResponsesPilotError("native responseSpec requiredFields must be an object")
-        expected_python_types = {
-            "BOOLEAN": bool,
-            "INTEGER": int,
-            "STRING": str,
-            "ENTITY_ID_ARRAY": list,
-            "INTEGER_ARRAY": list,
-            "ENTITY_ID_ARRAY_ARRAY": list,
-            "MAP": dict,
-            "DAMAGE_EDGE_AMOUNT_ARRAY": list,
-        }
+        if any(not isinstance(field, str) for field in required):
+            raise OpenAIResponsesPilotError("native responseSpec field names must be strings")
+        allowed_fields = {"type", *required}
+        unexpected = set(response) - allowed_fields
+        if unexpected:
+            raise OpenAIResponsesPilotError(
+                f"native response has unsupported fields: {sorted(unexpected)}"
+            )
         for field, kind in required.items():
-            expected_python_type = expected_python_types.get(kind)
-            if expected_python_type is None:
+            if kind not in {
+                "BOOLEAN", "INTEGER", "STRING", "ENTITY_ID_ARRAY", "INTEGER_ARRAY",
+                "ENTITY_ID_ARRAY_ARRAY", "MAP", "DAMAGE_EDGE_AMOUNT_ARRAY",
+            }:
                 raise OpenAIResponsesPilotError(
                     f"unsupported native response field kind {kind!r}"
                 )
             value = response.get(field)
-            if type(value) is not expected_python_type:
+            if not _matches_native_field_kind(value, kind):
                 raise OpenAIResponsesPilotError(
                     f"native response field {field} requires {kind}"
                 )

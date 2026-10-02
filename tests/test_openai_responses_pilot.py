@@ -261,6 +261,37 @@ class OpenAIResponsesPilotTests(unittest.TestCase):
         self.assertEqual(choice.metadata["modelIo"]["selectedAttempt"], 1)
         self.assertIn("CardsSelectedResponse", client.responses.calls[1]["input"])
 
+    def test_rejects_extra_native_decision_fields_before_submission(self):
+        client = FakeClient(FakeResponse(json.dumps({
+            "channel": "decision",
+            "response": {
+                "type": "TargetsResponse",
+                "selectedTargets": {"0": ["target-1"]},
+                "selectedCards": ["card-1"],
+            },
+        })))
+        pilot = OpenAIResponsesPilot(client=client, model="gpt-test", max_attempts=1)
+
+        with self.assertRaisesRegex(OpenAIResponsesPilotError, "unsupported fields"):
+            pilot.choose(structured_observation())
+        self.assertEqual(len(client.responses.calls), 1)
+
+    def test_rejects_wrong_native_array_element_kind_before_submission(self):
+        observation = structured_observation()
+        observation["pendingDecision"]["responseSpec"] = {
+            "responseType": "ModesChosenResponse",
+            "requiredFields": {"selectedModes": "INTEGER_ARRAY"},
+        }
+        client = FakeClient(FakeResponse(json.dumps({
+            "channel": "decision",
+            "response": {"type": "ModesChosenResponse", "selectedModes": [True]},
+        })))
+        pilot = OpenAIResponsesPilot(client=client, model="gpt-test", max_attempts=1)
+
+        with self.assertRaisesRegex(OpenAIResponsesPilotError, "requires INTEGER_ARRAY"):
+            pilot.choose(observation)
+        self.assertEqual(len(client.responses.calls), 1)
+
     def test_unknown_semantic_id_fails_closed(self):
         client = FakeClient(
             FakeResponse(
