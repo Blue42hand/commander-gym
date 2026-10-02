@@ -144,11 +144,15 @@ class GameServerBindingRegistry:
             resolved = self._resolver.resolve(binding_id)
         except BindingResolutionError as exc:
             raise GameServerBindingError(str(exc)) from exc
-        return GameServerSeatAdapter(
+        seat = GameServerSeatAdapter(
             resolved.artificial_player,
             player_id,
             provenance_sink=provenance_sink,
         )
+        # The canonical Binding already owns the exact library composition. The
+        # JVM edge checks Argentum's delivered list against the same profile.
+        seat.set_deck_list(self._profiles[binding_id].deck_list)
+        return seat
 
 
 def build_binding_game_server_sidecar(

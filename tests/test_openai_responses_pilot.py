@@ -1,4 +1,6 @@
 import json
+from pathlib import Path
+from tempfile import TemporaryDirectory
 import unittest
 
 from commander_gym.openai_responses_pilot import (
@@ -11,6 +13,7 @@ from commander_gym.pilot import (
     ArgentumDecisionChoice,
     choose_for_observation,
 )
+from commander_gym.openai_run_budget import OpenAIRunBudget
 
 
 class FakeResponse:
@@ -107,6 +110,25 @@ def structured_observation():
 
 
 class OpenAIResponsesPilotTests(unittest.TestCase):
+    def test_bounded_provider_request_is_recorded_in_exact_model_io(self):
+        with TemporaryDirectory() as temporary:
+            budget = OpenAIRunBudget(Path(temporary) / "budget.json", 5)
+            client = FakeClient(FakeResponse(json.dumps({
+                "channel": "action", "semanticId": "argentum-action-v1:pass", "params": {},
+            })))
+            choice = OpenAIResponsesPilot(
+                client=client, model="gpt-6-luna", budget=budget,
+            ).choose(action_observation())
+
+            self.assertEqual(client.responses.calls[0]["max_output_tokens"], 2048)
+            self.assertEqual(
+                choice.metadata["modelIo"]["attempts"][0]["request"],
+                client.responses.calls[0],
+            )
+            self.assertEqual(budget.snapshot()["requests"], 1)
+            self.assertEqual(budget.snapshot()["inputTokens"], 100)
+            self.assertEqual(budget.snapshot()["outputTokens"], 20)
+
     def test_selects_by_semantic_id_and_hides_live_action_ids_from_model(self):
         raw_output = json.dumps(
             {

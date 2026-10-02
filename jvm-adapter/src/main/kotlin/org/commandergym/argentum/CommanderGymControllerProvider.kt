@@ -6,8 +6,13 @@ import com.wingedsheep.ai.llm.BottomCardsInfo
 import com.wingedsheep.ai.llm.CardSummary
 import com.wingedsheep.ai.llm.MulliganInfo
 import com.wingedsheep.engine.core.DecisionResponse
+import com.wingedsheep.engine.core.GameAction
 import com.wingedsheep.engine.core.PendingDecision
+import com.wingedsheep.engine.core.ActionParameterizer
+import com.wingedsheep.engine.core.ActionParams
+import com.wingedsheep.engine.core.responseSpec
 import com.wingedsheep.engine.core.engineSerializersModule
+import com.wingedsheep.engine.provenance.SemanticFingerprint
 import com.wingedsheep.engine.view.ClientGameState
 import com.wingedsheep.engine.view.LegalActionInfo
 import com.wingedsheep.gameserver.ai.AiControllerContext
@@ -22,6 +27,8 @@ import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.time.Duration
+
+private const val POLICY_SCHEMA_SCOPE = "commander-gym-game-server-policy-v1"
 
 private data class BindingProfileConfig(
     val id: String,
@@ -84,9 +91,17 @@ class CommanderGymControllerProvider(
             timeout = timeout,
             profileId = selected?.id,
             expectedDeck = selected?.deckList,
+            expectedCommander = selected?.commander,
+            parameterize = { action, params ->
+                if (params.isEmpty) action else {
+                    val snapshot = context.snapshot()
+                        ?: error("Commander Gym action params require a live Argentum runtime snapshot")
+                    ActionParameterizer.apply(action, params, snapshot.state)
+                }
+            },
             http = http,
         )
-        // Deliberately do not retain context or call context.snapshot().
+        // Only the native edge can obtain the trusted snapshot. It never crosses HTTP.
     }
 
     private fun fetchProfiles(): List<BindingProfileConfig> {
@@ -133,6 +148,11 @@ class CommanderGymPlayerController(
     timeout: Duration,
     private val profileId: String? = null,
     private val expectedDeck: Map<String, Int>? = null,
+    private val expectedCommander: String? = null,
+    private val parameterize: (GameAction, ActionParams) -> GameAction = { action, params ->
+        require(params.isEmpty) { "Native action parameters require Argentum runtime context" }
+        action
+    },
     private val http: HttpClient = HttpClient.newBuilder().connectTimeout(timeout).build(),
 ) : AiPlayerController {
     private val base = endpoint.toString().trimEnd('/')
@@ -151,11 +171,29 @@ class CommanderGymPlayerController(
         pendingDecision: PendingDecision?,
         recentGameLog: List<String>,
     ): ActionResponse {
+        val policyActions = JsonArray(legalActions.map { legal ->
+            val encoded = json.encodeToJsonElement(legal).jsonObject
+            buildJsonObject {
+                encoded.forEach { (key, value) -> put(key, value) }
+                put("semanticId", SemanticFingerprint.forGameAction(
+                    legal.actionType, legal.action, POLICY_SCHEMA_SCOPE,
+                ))
+                put("parameterSpec", json.encodeToJsonElement(ActionParameterizer.spec(legal.action)))
+            }
+        })
+        val policyDecision = pendingDecision?.let { pending ->
+            val encoded = json.encodeToJsonElement(pending).jsonObject
+            buildJsonObject {
+                encoded.forEach { (key, value) -> put(key, value) }
+                put("semanticId", SemanticFingerprint.forPendingDecision(pending, POLICY_SCHEMA_SCOPE))
+                put("responseSpec", json.encodeToJsonElement(pending.responseSpec()))
+            }
+        } ?: JsonNull
         val body = buildJsonObject {
             putIdentity()
             put("state", json.encodeToJsonElement(state))
-            put("legalActions", json.encodeToJsonElement(legalActions))
-            put("pendingDecision", pendingDecision?.let(json::encodeToJsonElement) ?: JsonNull)
+            put("legalActions", policyActions)
+            put("pendingDecision", policyDecision)
             put("recentGameLog", json.encodeToJsonElement(recentGameLog))
         }
         val response = post("choose-action", body)
@@ -164,7 +202,8 @@ class CommanderGymPlayerController(
                 val index = response.requiredInt("actionId")
                 val native = legalActions.getOrNull(index)
                     ?: error("Commander Gym returned a stale legal action index")
-                ActionResponse.SubmitAction(native.action)
+                val params = json.decodeFromJsonElement<ActionParams>(response.requiredObject("params"))
+                ActionResponse.SubmitAction(parameterize(native.action, params))
             }
             "decision" -> {
                 require(response.requiredString("playerId") == playerId.value) {
@@ -200,7 +239,10 @@ class CommanderGymPlayerController(
 
     override fun setDeckList(deckList: Map<String, Int>, archetype: String?) {
         val expected = expectedDeck ?: return
-        require(deckList == expected) {
+        val submitted = expectedCommander?.let { commander ->
+            expected + (commander to (expected[commander] ?: 0) + 1)
+        }
+        require(deckList == expected || deckList == submitted) {
             "Argentum delivered a deck that does not match Commander Gym Binding profile '$profileId'"
         }
     }
@@ -226,7 +268,18 @@ class CommanderGymPlayerController(
             .build()
         val response = http.send(request, HttpResponse.BodyHandlers.ofString())
         require(response.statusCode() == 200) {
-            "Commander Gym policy callback failed with HTTP ${response.statusCode()}"
+            val detail = runCatching {
+                json.parseToJsonElement(response.body()).jsonObject["detail"]
+                    ?.jsonPrimitive?.contentOrNull
+            }.getOrNull()
+            buildString {
+                append("Commander Gym policy callback failed with HTTP ")
+                append(response.statusCode())
+                if (!detail.isNullOrBlank()) {
+                    append(": ")
+                    append(detail.take(1200))
+                }
+            }
         }
         return json.parseToJsonElement(response.body()).jsonObject
     }

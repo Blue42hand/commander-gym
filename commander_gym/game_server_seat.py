@@ -36,6 +36,7 @@ class NativeActionResponse:
     action_id: int
     action: Mapping[str, Any]
     metadata: Mapping[str, Any]
+    params: Mapping[str, Any]
 
 
 @dataclass(frozen=True)
@@ -67,10 +68,10 @@ class GameServerSeatAdapter:
     parameter for ``AiControllerContext.snapshot``; trusted authoritative state
     therefore cannot accidentally enter policy input.
 
-    For the first bounded adapter, ordinary action choices return an exact native
-    action supplied in ``legal_actions``.  Non-empty ``ActionParams`` fail closed:
-    completing native action templates belongs in the Kotlin/native edge and must not
-    be reimplemented as a second rules layer in Python.
+    Ordinary action choices return the exact native action template supplied in
+    ``legal_actions`` plus the pilot's native ``ActionParams``. Python does not apply
+    those params: completion happens at the Kotlin/native edge through Argentum's
+    authoritative parameterizer, so Commander Gym does not grow a second rules layer.
     """
 
     def __init__(
@@ -85,6 +86,33 @@ class GameServerSeatAdapter:
         self._pilot = pilot
         self._player_id = player_id
         self._provenance_sink = provenance_sink
+        self._known_deck: dict[str, int] | None = None
+        self._deck_archetype: str | None = None
+
+    def set_deck_list(
+        self,
+        deck_list: Mapping[str, Any],
+        archetype: str | None = None,
+    ) -> None:
+        """Retain the deck composition Argentum explicitly gives this AI seat.
+
+        The list is card-name -> count only; it contains no library order and therefore adds
+        strategic deck knowledge without exposing hidden runtime state.
+        """
+
+        if not isinstance(deck_list, Mapping):
+            raise GameServerSeatError("deck list must be an object")
+        normalized: dict[str, int] = {}
+        for name, count in deck_list.items():
+            if not isinstance(name, str) or not name:
+                raise GameServerSeatError("deck-list card names must be non-empty strings")
+            if type(count) is not int or count <= 0:
+                raise GameServerSeatError("deck-list counts must be positive integers")
+            normalized[name] = count
+        if archetype is not None and (not isinstance(archetype, str) or not archetype.strip()):
+            raise GameServerSeatError("deck archetype must be a non-empty string when supplied")
+        self._known_deck = normalized
+        self._deck_archetype = archetype.strip() if isinstance(archetype, str) else None
 
     def choose_action(
         self,
@@ -102,10 +130,6 @@ class GameServerSeatAdapter:
         choice = choose_for_observation(self._pilot, observation)
 
         if isinstance(choice, ArgentumActionChoice):
-            if choice.params:
-                raise GameServerSeatError(
-                    "game-server seat adapter does not silently parameterize native actions"
-                )
             try:
                 native = legal_actions[choice.action_id]
             except (IndexError, TypeError) as exc:
@@ -114,11 +138,17 @@ class GameServerSeatAdapter:
                 action_id=choice.action_id,
                 action=deepcopy(dict(native["action"])),
                 metadata=deepcopy(dict(choice.metadata)),
+                params=deepcopy(dict(choice.params)),
             )
             self._record(
                 "chooseAction",
                 observation,
-                {"channel": "action", "actionId": choice.action_id, "metadata": choice.metadata},
+                {
+                    "channel": "action",
+                    "actionId": choice.action_id,
+                    "params": choice.params,
+                    "metadata": choice.metadata,
+                },
             )
             return response
 
@@ -139,8 +169,22 @@ class GameServerSeatAdapter:
 
     def decide_mulligan(self, mulligan: Mapping[str, Any]) -> bool:
         actions = [
-            {"action": {"type": "KeepHand", "playerId": self._player_id}, "actionType": "KeepHand"},
-            {"action": {"type": "TakeMulligan", "playerId": self._player_id}, "actionType": "TakeMulligan"},
+            {
+                "action": {"type": "KeepHand", "playerId": self._player_id},
+                "actionType": "KeepHand",
+                "kind": "KeepHand",
+                "description": "Keep this opening hand",
+                "semanticId": "commander-gym-callback-v1:mulligan:keep",
+                "affordable": True,
+            },
+            {
+                "action": {"type": "TakeMulligan", "playerId": self._player_id},
+                "actionType": "TakeMulligan",
+                "kind": "TakeMulligan",
+                "description": "Take a mulligan",
+                "semanticId": "commander-gym-callback-v1:mulligan:take",
+                "affordable": True,
+            },
         ]
         observation = self._observation(
             {"mulligan": deepcopy(dict(mulligan))}, actions, None, ()
@@ -158,8 +202,16 @@ class GameServerSeatAdapter:
             raise GameServerSeatError("bottom-cards callback decisionId must be a string when supplied")
         pending = {
             "decisionId": decision_id,
+            "semanticId": "commander-gym-callback-v1:bottom-cards",
             "kind": "BottomCards",
+            "prompt": "Choose cards to put on the bottom of your library",
             "requiresStructuredResponse": True,
+            # BottomCardsInfo is a separate AiPlayerController callback rather than
+            # PendingDecision; this callback's return contract is a list of card ids.
+            "responseSpec": {
+                "responseType": "CardsSelectedResponse",
+                "requiredFields": {"selectedCards": "ENTITY_ID_ARRAY"},
+            },
             "cardsToPutOnBottom": bottom.get("cardsToPutOnBottom"),
             "hand": deepcopy(bottom.get("hand")),
             "cards": deepcopy(bottom.get("cards", {})),
@@ -203,6 +255,13 @@ class GameServerSeatAdapter:
                 raise GameServerSeatError("each native legal action must contain an action object")
             item = deepcopy(dict(raw))
             item["actionId"] = action_id
+            # Keep the ArtificialPlayer observation vocabulary aligned with the Gym path while
+            # preserving the native game-server fields verbatim. These are aliases only: no
+            # legality or strategic meaning is inferred in Python.
+            if "kind" not in item and isinstance(item.get("actionType"), str):
+                item["kind"] = item["actionType"]
+            if "affordable" not in item and isinstance(item.get("isAffordable"), bool):
+                item["affordable"] = item["isAffordable"]
             actions.append(item)
 
         if pending_decision is not None and not isinstance(pending_decision, Mapping):
@@ -210,16 +269,41 @@ class GameServerSeatAdapter:
         if any(not isinstance(entry, str) for entry in recent_game_log):
             raise GameServerSeatError("recent game log entries must be strings")
 
-        return {
+        pending = None
+        if pending_decision is not None:
+            pending = deepcopy(dict(pending_decision))
+            # AiPlayerController receives Argentum's native PendingDecision JSON, while the
+            # core ArtificialPlayer contract follows the Gym observation vocabulary. Keep the
+            # native fields for model context, but add the stable aliases/routing metadata the
+            # strategic pilot validates before it will return a DecisionResponse.
+            if "decisionId" not in pending:
+                native_id = pending.get("id")
+                if isinstance(native_id, str) and native_id:
+                    pending["decisionId"] = native_id
+            if "kind" not in pending:
+                native_type = pending.get("type")
+                if isinstance(native_type, str) and native_type:
+                    pending["kind"] = native_type
+            # On the game-server seam a non-null PendingDecision is not folded into synthetic
+            # legal actions; AiPlayerController must answer it with a native DecisionResponse.
+            pending["requiresStructuredResponse"] = True
+
+        observation = {
             "type": "GameServerSeat",
             "state": deepcopy(dict(state)),
             "legalActions": actions,
-            "pendingDecision": deepcopy(dict(pending_decision)) if pending_decision else None,
+            "pendingDecision": pending,
             "recentGameLog": list(recent_game_log),
             "perspectivePlayerId": self._player_id,
             "agentToAct": self._player_id,
             "terminated": False,
         }
+        if self._known_deck is not None:
+            observation["knownDeck"] = {
+                "cards": deepcopy(self._known_deck),
+                **({"archetype": self._deck_archetype} if self._deck_archetype else {}),
+            }
+        return observation
 
     def _record(
         self,

@@ -20,6 +20,7 @@ dependencies {
     // plugin into this standalone build. Import the same Boot BOM so versionless runtime
     // dependencies declared by game-server (Flyway/Postgres, etc.) resolve exactly as upstream.
     testImplementation(platform("org.springframework.boot:spring-boot-dependencies:4.1.0"))
+    testImplementation("com.wingedsheep:argentum-ai")
     // Acceptance tests boot the actual Argentum game-server from the composite build and exercise
     // AiPlayerController directly. Keep those host modules test-only so the adapter artifact itself
     // still does not own Argentum runtime dependencies.
@@ -32,3 +33,12 @@ dependencies {
 
 kotlin { jvmToolchain(21) }
 tasks.test { useJUnitPlatform() }
+
+tasks.register<JavaExec>("runLocalGuiServer") {
+    group = "application"
+    description = "Run the normal Argentum game server with the Commander Gym provider loaded"
+    dependsOn(tasks.named("testClasses"))
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("org.commandergym.argentum.LocalGuiGameServerKt")
+    standardInput = System.`in`
+}
