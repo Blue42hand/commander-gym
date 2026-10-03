@@ -11,7 +11,7 @@ from collections import defaultdict
 import json
 from pathlib import Path
 
-from commander_gym.pilot_routing import NativeNoChoiceHandler
+from commander_gym.pilot_routing import NativeNoChoiceHandler, StandingManaOnlyPassHandler
 from commander_gym.delegated_autopass import DelegatedAutopassPilot
 from commander_gym.pilot import ArgentumActionChoice
 
@@ -40,8 +40,8 @@ class _RecordedStrategicPilot:
         return ArgentumActionChoice(action_id=action_id, metadata=metadata)
 
 
-def analyze(paths: list[Path], through_turn: int) -> dict:
-    handler = NativeNoChoiceHandler()
+def analyze(paths: list[Path], through_turn: int, *, standing_mana_only: bool = False) -> dict:
+    handler = StandingManaOnlyPassHandler() if standing_mana_only else NativeNoChoiceHandler()
     games = []
     for path in paths:
         replay = _RecordedStrategicPilot()
@@ -152,10 +152,17 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("policy_jsonl", nargs="+", type=Path)
     parser.add_argument("--through-turn", type=int, default=12)
+    parser.add_argument(
+        "--standing-mana-only", action="store_true",
+        help="counterfactually replay the opt-in standing mana-only pass policy",
+    )
     args = parser.parse_args()
     if args.through_turn < 1:
         parser.error("--through-turn must be positive")
-    print(json.dumps(analyze(args.policy_jsonl, args.through_turn), indent=2))
+    print(json.dumps(analyze(
+        args.policy_jsonl, args.through_turn,
+        standing_mana_only=args.standing_mana_only,
+    ), indent=2))
 
 
 if __name__ == "__main__":

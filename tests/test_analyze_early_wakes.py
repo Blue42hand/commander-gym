@@ -9,6 +9,36 @@ from scripts.analyze_early_wakes import analyze
 
 
 class EarlyWakeAnalysisTests(unittest.TestCase):
+    def test_standing_pass_replay_is_labeled_counterfactual(self):
+        passed = {
+            "actionId": 0, "semanticId": "native-pass", "kind": "PassPriority",
+            "isManaAbility": False, "affordable": True,
+            "action": {"type": "PassPriority", "playerId": "seat-a"},
+        }
+        mana = {
+            "actionId": 1, "semanticId": "native-mana", "kind": "ActivateAbility",
+            "isManaAbility": True, "affordable": False,
+            "action": {"type": "ActivateAbility", "playerId": "seat-a"},
+        }
+        record = {
+            "observation": {
+                "state": {"turnNumber": 1, "stack": ["new-spell"]},
+                "agentToAct": "seat-a", "perspectivePlayerId": "seat-a",
+                "terminated": False, "pendingDecision": None,
+                "legalActions": [passed, mana],
+            },
+            "choice": {"actionId": 0, "metadata": {"modelIo": {"attempts": [{}]}}},
+        }
+        with tempfile.TemporaryDirectory() as folder:
+            trace = Path(folder) / "policy.jsonl"
+            trace.write_text(json.dumps(record) + "\n")
+            baseline = analyze([trace], through_turn=8)["games"][0]
+            experiment = analyze([trace], through_turn=8, standing_mana_only=True)["games"][0]
+        self.assertEqual(baseline["total"]["eligible"], 0)
+        self.assertEqual(experiment["total"]["eligible"], 1)
+        self.assertEqual(experiment["total"]["matched"], 1)
+        self.assertEqual(experiment["observed"]["total"]["modelAttempts"], 1)
+
     def test_reports_observed_provider_and_pass_menu_counts(self):
         def row(turn, legal, action_id, metadata):
             return {

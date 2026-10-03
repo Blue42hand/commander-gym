@@ -8,9 +8,8 @@ in public Commander Gym.
 A selected Binding's canonical Pilot is authoritative for runtime composition. The
 production launcher resolves that Pilot's exact component graph through the #73
 composition contract instead of attaching canonical identity to a process-global
-fallback policy. Public built-ins are intentionally narrow: the certified forced-choice
-handler and the OpenAI Responses frontier adapter. Any other declared component must be
-provided by an explicit component resolver and otherwise fails closed at startup.
+fallback policy. Each built-in policy has an exact component reference; any other
+declared component requires an explicit resolver and otherwise fails closed at startup.
 """
 
 from __future__ import annotations
@@ -49,7 +48,9 @@ from .pilot_composition import (
     PilotSubsystemSpec,
     compose_pilot_runtime,
 )
-from .pilot_routing import ForcedParameterlessChoiceHandler, NativeNoChoiceHandler
+from .pilot_routing import (
+    ForcedParameterlessChoiceHandler, NativeNoChoiceHandler, StandingManaOnlyPassHandler,
+)
 
 
 # These refs identify the public executable adapter contracts, not a particular model
@@ -67,6 +68,12 @@ BUILTIN_NATIVE_NO_CHOICE_COMPONENT_REF = ArtifactRef(
     artifact_id="native-no-choice",
     version="3",
     digest="sha256:16580bbe6cf9b073f02083a5480bf3f376d1250f438ab02ed0414ca5d70a272a",
+)
+BUILTIN_STANDING_MANA_ONLY_PASS_COMPONENT_REF = ArtifactRef(
+    kind="deterministic-policy",
+    artifact_id="standing-mana-only-pass",
+    version="1",
+    digest="sha256:727132e3a10fd28a551f62324f96e0d0d943560bdb7933c9d6edf9afa4e5c2bd",
 )
 BUILTIN_OPENAI_RESPONSES_COMPONENT_REF = ArtifactRef(
     kind="provider",
@@ -209,6 +216,11 @@ class OpenAIBindingPilotComponentResolver:
             and key == _component_key(BUILTIN_NATIVE_NO_CHOICE_COMPONENT_REF)
         ):
             return MechanicalHandlerSubsystem(NativeNoChoiceHandler())
+        if (
+            spec.role == "deterministic"
+            and key == _component_key(BUILTIN_STANDING_MANA_ONLY_PASS_COMPONENT_REF)
+        ):
+            return MechanicalHandlerSubsystem(StandingManaOnlyPassHandler())
         if (
             spec.role == "frontier_escalation"
             and key == _component_key(BUILTIN_OPENAI_RESPONSES_COMPONENT_REF)
