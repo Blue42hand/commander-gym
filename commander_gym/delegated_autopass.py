@@ -95,9 +95,23 @@ def _visible_checkpoint(
             if not isinstance(ids, list):
                 return None
             stack.extend(ids)
-        if (kind == "Battlefield" and (owner == seat or watch_opponents)) or (
-            owner == seat and kind in {"Graveyard", "Exile", "Command"}
-        ):
+        if kind == "Battlefield":
+            ids = zone.get("cardIds")
+            if not isinstance(ids, list):
+                return None
+            if owner != seat and not watch_opponents:
+                controlled_ids = []
+                for card_id in ids:
+                    card = cards.get(card_id) if isinstance(card_id, str) else None
+                    if not isinstance(card, Mapping) or not isinstance(card.get("controllerId"), str):
+                        return None
+                    if card["controllerId"] == seat:
+                        controlled_ids.append(card_id)
+                ids = controlled_ids
+            if owner == seat or watch_opponents or ids:
+                observed_zones.append({"owner": owner, "kind": kind, "ids": ids})
+                public_ids.update(x for x in ids if isinstance(x, str))
+        elif owner == seat and kind in {"Graveyard", "Exile", "Command"}:
             ids = zone.get("cardIds")
             if not isinstance(ids, list):
                 return None
@@ -226,8 +240,9 @@ class DelegatedAutopassPilot:
             return False
         if lease.until == "phase_end" and (now["turn"], now["phase"]) != (start["turn"], start["phase"]):
             return False
-        if lease.until == "next_own_main" and now["turn"] > start["turn"] and (
+        if lease.until == "next_own_main" and (
             now["active"] == now["seat"] and now["step"] == "PRECOMBAT_MAIN"
+            and (now["turn"] > start["turn"] or start["step"] != "PRECOMBAT_MAIN")
         ):
             return False
         for key in ("hand", "zones", "cards", "stack", "mana", "life"):

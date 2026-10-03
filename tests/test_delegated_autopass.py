@@ -165,6 +165,9 @@ class DelegatedAutopassTests(unittest.TestCase):
         opponent_turn["state"]["activePlayerId"] = "p2"
         opponent_turn["state"]["gameLog"] = [{"type": "turnChanged"}]
         opponent_turn["state"]["zones"][2]["cardIds"] = ["opponent-land"]
+        opponent_turn["state"]["cards"]["opponent-land"] = {
+            "name": "Opponent Land", "controllerId": "p2",
+        }
         self.assertEqual(pilot.choose(opponent_turn).metadata["delegatedPass"]["ordinal"], 1)
         own_main = observation(turn=3)
         own_main["state"]["gameLog"] = [{"type": "turnChanged"}, {"type": "turnChanged"}]
@@ -179,6 +182,51 @@ class DelegatedAutopassTests(unittest.TestCase):
         opponent_land["state"]["gameLog"] = [{"type": "permanentEntered"}]
         pilot.choose(opponent_land)
         self.assertEqual(strategic.calls, 2)
+
+    def test_next_own_main_wakes_from_own_upkeep_or_draw_on_same_turn(self):
+        for start_step in ("UPKEEP", "DRAW"):
+            with self.subTest(start_step=start_step):
+                strategic = ScriptedPilot(until="next_own_main")
+                pilot = DelegatedAutopassPilot(strategic)
+                start = observation(step=start_step)
+                # The exact native step identifies the boundary even if a
+                # broader phase label is shared across both observations.
+                start["state"]["currentPhase"] = "MAIN"
+                pilot.choose(start)
+                same_step = copy.deepcopy(start)
+                self.assertIn("delegatedPass", pilot.choose(same_step).metadata)
+                own_main = observation(step="PRECOMBAT_MAIN")
+                own_main["state"]["currentPhase"] = "MAIN"
+                self.assertNotIn("delegatedPass", pilot.choose(own_main).metadata)
+                self.assertEqual(strategic.calls, 2)
+
+    def test_next_own_main_does_not_expire_within_starting_main(self):
+        strategic = ScriptedPilot(until="next_own_main")
+        pilot = DelegatedAutopassPilot(strategic)
+        first = observation(step="PRECOMBAT_MAIN")
+        pilot.choose(first)
+        self.assertIn("delegatedPass", pilot.choose(copy.deepcopy(first)).metadata)
+        self.assertEqual(strategic.calls, 1)
+
+    def test_borrowed_permanent_change_wakes_without_opponent_watch(self):
+        for change in ("damage", "control"):
+            with self.subTest(change=change):
+                strategic = ScriptedPilot()
+                pilot = DelegatedAutopassPilot(strategic)
+                start = observation(step="DECLARE_ATTACKERS")
+                start["state"]["zones"][2]["cardIds"] = ["borrowed"]
+                start["state"]["cards"]["borrowed"] = {
+                    "name": "Borrowed Creature", "controllerId": "p1", "damage": 0,
+                }
+                pilot.choose(start)
+                later = copy.deepcopy(start)
+                if change == "damage":
+                    later["state"]["cards"]["borrowed"]["damage"] = 2
+                    later["state"]["gameLog"].append({"type": "damageDealt"})
+                else:
+                    later["state"]["cards"]["borrowed"]["controllerId"] = "p2"
+                self.assertNotIn("delegatedPass", pilot.choose(later).metadata)
+                self.assertEqual(strategic.calls, 2)
 
     def test_pass_limit_expires_lease(self):
         strategic = ScriptedPilot(until="next_own_main")
