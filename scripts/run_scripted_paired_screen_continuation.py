@@ -1,11 +1,14 @@
 """Continue only positions 3–7 of the reviewed scripted screen; dry-run by default.
 
 Requires the exact six-call stop receipt and the same source/request hashes. A new
-invalid result or semantic divergence stops execution. This never advances a game.
+invalid result stops execution; legal semantic differences are recorded for review.
+This never advances a game.
 """
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
+import fcntl
 import hashlib
 import json
 import os
@@ -14,6 +17,8 @@ import sys
 from time import monotonic
 
 from commander_gym.openai_run_budget import OpenAIRunBudget
+from commander_gym.observation_projection import compact_seat_observation, expand_seat_observation
+from commander_gym.openai_responses_pilot import _without_live_routing
 from scripts.run_scripted_paired_screen import (
     MANIFEST as BASE_MANIFEST, REVIEWED_SOURCE, _load_reviewed, _private_directory, _sha,
 )
@@ -24,7 +29,7 @@ from scripts.run_paired_view_screen import (
 
 
 MANIFEST = Path(__file__).with_name("scripted_paired_screen_continuation_manifest.json")
-REVIEWED_MANIFEST_SHA256 = "59b7ad7965b5c9b8a78af113cdbe8f0970fbb95ae79d69e26795747b55ec65b6"
+REVIEWED_MANIFEST_SHA256 = "bca70eeacf7300a48df62cd30628c675d010453593b8d89f4f1276bd49de7655"
 
 
 def _manifest() -> dict:
@@ -43,6 +48,7 @@ def _manifest() -> dict:
             or m.get("absoluteLedgerRequestLimit") != 610
             or m.get("authorizedCapUsd") != 6 or m.get("wallSeconds") != 360
             or m.get("model") != "gpt-6-luna" or m.get("maxOutputTokens") != 2048
+            or m.get("semanticDivergencePolicy") != "record_and_continue"
             or len(m.get("priorModelIoSha256", [])) != 6):
         raise ValueError("continuation violates approved remaining-position bounds")
     return m
@@ -102,13 +108,27 @@ def _verify_ledger(path: Path, manifest: dict) -> dict:
     return ledger
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    for name in ("capture-dir", "corpus-dir", "instance-root", "catalog", "ledger", "prior-results", "output"):
-        parser.add_argument("--" + name, type=Path, required=True)
-    parser.add_argument("--execute", action="store_true")
-    parser.add_argument("--approved-source-set-sha256", default="")
-    args = parser.parse_args()
+def _pair_review_flag(full_choice: dict, compact_choice: dict) -> bool:
+    """Legal disagreement is review evidence, never a continuation stop by itself."""
+    return full_choice != compact_choice
+
+
+@contextmanager
+def _exclusive_screen_lock(ledger_path: Path):
+    """Hold a private whole-screen lock, beyond the ledger's per-request lock."""
+    lock_path = ledger_path.with_name(ledger_path.name + ".scripted-screen.lock")
+    fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise ValueError("another scripted paired screen is using this ledger") from exc
+        yield
+    finally:
+        os.close(fd)
+
+
+def _run(args) -> int:
     paths = (args.capture_dir, args.corpus_dir, args.instance_root, args.catalog,
              args.ledger, args.prior_results, args.output)
     if not all(path.is_absolute() for path in paths):
@@ -127,6 +147,10 @@ def main() -> int:
     rows = all_rows[3:8]
     if len(rows) != 5 or [index for index, _ in rows] != list(range(3, 8)):
         raise ValueError("continuation may run only the five unplayed positions")
+    for _, observation in rows:
+        full = _without_live_routing(observation)
+        if expand_seat_observation(compact_seat_observation(full)) != full:
+            raise ValueError("compact provider input loses native observation information")
     reservations = sum(OpenAIRunBudget._cost(
         len(json.dumps(_captured_request(observation, compact), ensure_ascii=False).encode()) + 4096,
         2048,
@@ -178,6 +202,9 @@ def main() -> int:
             _append_result(args.output, {
                 "sampleIndex": index, "view": view, "valid": worker["error"] is None,
                 "error": worker["error"], "choice": worker["choice"], "semanticChoice": semantic,
+                "pairReviewRequired": (
+                    _pair_review_flag(pair[0], semantic) if compact and semantic is not None else None
+                ),
                 "usage": worker["usage"], "providerWallMs": worker["providerWallMs"],
                 "modelIoArtifact": worker["modelIoArtifact"],
                 "harnessWallMs": round((monotonic() - started) * 1000, 3),
@@ -190,11 +217,24 @@ def main() -> int:
                 return 2
             pair.append(semantic)
         if pair[0] != pair[1]:
-            print(f"Stopped on new semantic divergence at position {index}", file=sys.stderr)
-            return 2
+            print(f"Recorded legal semantic divergence at position {index} for later Pilot review",
+                  file=sys.stderr)
     print(json.dumps({"completedAdditionalPairs": len(rows), "newRequests": attempts,
                       "estimatedCumulativeUsd": budget.snapshot()["estimatedUsd"]}))
     return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    for name in ("capture-dir", "corpus-dir", "instance-root", "catalog", "ledger", "prior-results", "output"):
+        parser.add_argument("--" + name, type=Path, required=True)
+    parser.add_argument("--execute", action="store_true")
+    parser.add_argument("--approved-source-set-sha256", default="")
+    args = parser.parse_args()
+    if args.execute:
+        with _exclusive_screen_lock(args.ledger):
+            return _run(args)
+    return _run(args)
 
 
 if __name__ == "__main__":

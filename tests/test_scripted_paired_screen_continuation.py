@@ -11,6 +11,17 @@ from scripts import run_scripted_paired_screen_continuation as continuation
 
 
 class ScriptedPairedContinuationTests(unittest.TestCase):
+    def test_legal_semantic_difference_is_flagged_for_review(self):
+        self.assertEqual(continuation._manifest()["semanticDivergencePolicy"], "record_and_continue")
+        self.assertFalse(continuation._pair_review_flag(
+            {"channel": "action", "semanticId": "same"},
+            {"channel": "action", "semanticId": "same"},
+        ))
+        self.assertTrue(continuation._pair_review_flag(
+            {"channel": "decision", "response": {"selectedCards": ["a"]}},
+            {"channel": "decision", "response": {"selectedCards": ["b"]}},
+        ))
+
     def test_reviewed_manifest_rejects_changed_source_or_bounds(self):
         with TemporaryDirectory() as temporary:
             path = Path(temporary) / "continuation.json"
@@ -59,6 +70,16 @@ class ScriptedPairedContinuationTests(unittest.TestCase):
             path.write_text("altered\n")
             with self.assertRaisesRegex(ValueError, "six-call receipt changed"):
                 continuation._verify_prior(path, continuation._manifest(), {})
+
+    def test_whole_screen_lock_refuses_simultaneous_continuation(self):
+        with TemporaryDirectory() as temporary:
+            ledger = Path(temporary) / "budget.json"
+            with continuation._exclusive_screen_lock(ledger):
+                with self.assertRaisesRegex(ValueError, "another scripted paired screen"):
+                    with continuation._exclusive_screen_lock(ledger):
+                        pass
+            with continuation._exclusive_screen_lock(ledger):
+                pass
 
 
 if __name__ == "__main__":

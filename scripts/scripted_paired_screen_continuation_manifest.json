@@ -26,5 +26,6 @@
   "authorizedCapUsd": 6,
   "wallSeconds": 360,
   "model": "gpt-6-luna",
-  "maxOutputTokens": 2048
+  "maxOutputTokens": 2048,
+  "semanticDivergencePolicy": "record_and_continue"
 }
