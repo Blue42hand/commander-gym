@@ -168,9 +168,6 @@ class GameServerAcceptanceTest {
             // Assert the exact sidecar callback shape, including opaque library slots.
             assertOpponentLibraryMasked(policyObservation, seatId)
             assertEquals("false", context.environment.getProperty("game.debug-mode"))
-            System.getenv("COMMANDER_GYM_NATIVE_FIXTURE_PATH")?.let { fixturePath ->
-                Files.writeString(Path.of(fixturePath), policyObservation)
-            }
 
             val fullStatesBefore = client.fullStateCount()
             client.send(ClientMessage.RequestResync)
