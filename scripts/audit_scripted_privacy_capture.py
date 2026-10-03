@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import subprocess
 
 from commander_gym.binding_catalog import load_binding_catalog
 from commander_gym.game_server_bindings import GameServerBindingRegistry
@@ -60,6 +61,10 @@ def main() -> int:
     files = sorted(capture.glob("*.json"), key=lambda p: (p.stat().st_mtime_ns, p.name))
     if not files:
         raise RuntimeError("no native HTTP callback bodies found")
+    summary_path = capture.parent / "summary.json"
+    summary = json.loads(summary_path.read_text())
+    if summary.get("providerCalls") != 0 or summary.get("httpCallbacks") != len(files):
+        raise RuntimeError("capture summary and settled HTTP callback set disagree")
     rows = []
     candidates = []
     for source in files:
@@ -182,6 +187,13 @@ def main() -> int:
                               "structuredDecision": row["structuredDecision"],
                               "combatPresent": row["combatPresent"], "hashes": hashes})
     audit = {"evidenceClass": "actual normal GameServer HTTP callbacks, canonical Binding deck metadata and production Gym model input projection; zero provider dispatch",
+             "engineCommit": summary["engineCommit"], "captureGymCommit": summary["gymCommit"],
+             "auditGymCommit": subprocess.check_output(
+                 ["git", "rev-parse", "HEAD"], cwd=Path(__file__).resolve().parents[1], text=True,
+             ).strip(),
+             "catalogSha256": _sha(args.catalog.read_bytes()),
+             "captureSummarySha256": _sha(summary_path.read_bytes()),
+             "profiles": summary["profiles"], "stopReason": summary["stopReason"],
              "capturedCallbacks": len(files), "actionCallbacks": len(candidates),
              "sourceSetSha256": _sha("\n".join(sorted(row["httpSha256"] for row in rows)).encode()),
              "rows": rows, "selected": selected_meta,
