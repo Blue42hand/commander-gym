@@ -93,14 +93,24 @@ class DelegatedAutopassTests(unittest.TestCase):
         self.assertEqual(result.metadata["forgeThenCast"]["cardId"], "h2")
         self.assertEqual(strategic.calls, 1)
 
-        # A new stack object means a real decision happened between the steps.
-        strategic = LandPilot()
-        pilot = DelegatedAutopassPilot(strategic, allow_named_deferrals=True)
-        pilot.choose(start)
-        interrupted = copy.deepcopy(later)
-        interrupted["state"]["zones"][-1]["cardIds"] = ["new-spell"]
-        pilot.choose(interrupted)
-        self.assertEqual(strategic.calls, 2)
+        for change in ("stack", "opponent", "unaffordable", "ambiguous"):
+            with self.subTest(change=change):
+                strategic = LandPilot()
+                pilot = DelegatedAutopassPilot(strategic, allow_named_deferrals=True)
+                pilot.choose(start)
+                interrupted = copy.deepcopy(later)
+                if change == "stack":
+                    interrupted["state"]["zones"][-1]["cardIds"] = ["new-spell"]
+                elif change == "opponent":
+                    interrupted["state"]["zones"][2]["cardIds"] = ["new-permanent"]
+                    interrupted["state"]["cards"]["new-permanent"] = {"controllerId": "p2"}
+                elif change == "unaffordable":
+                    interrupted["legalActions"][0]["affordable"] = False
+                else:
+                    interrupted["legalActions"].append({**interrupted["legalActions"][0],
+                                                        "actionId": 8})
+                pilot.choose(interrupted)
+                self.assertEqual(strategic.calls, 2)
 
     def test_named_forge_wait_crosses_phase_then_wakes_at_turn_end(self):
         class NamedPilot:
