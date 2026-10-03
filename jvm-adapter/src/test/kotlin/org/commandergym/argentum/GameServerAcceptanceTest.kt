@@ -13,6 +13,7 @@ import com.wingedsheep.sdk.core.Zone
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.jupiter.api.AfterAll
@@ -98,14 +99,13 @@ class GameServerAcceptanceTest {
 
         context = SpringApplicationBuilder(GameServerApplication::class.java)
             .run(
-                "--server.port=" + serverPort,
+                *localGuiServerArgs(
+                    serverPort,
+                    "http://127.0.0.1:$sidecarPort",
+                    token,
+                    2000,
+                ),
                 "--spring.main.banner-mode=off",
-                "--game.ai.enabled=true",
-                "--game.ai.mode=commander-gym",
-                "--game.ai.thinking-delay-ms=0",
-                "--commander-gym.sidecar.url=http://127.0.0.1:" + sidecarPort,
-                "--commander-gym.sidecar.token=" + token,
-                "--commander-gym.sidecar.timeout-ms=2000",
                 "--logging.level.com.wingedsheep.gameserver=INFO",
                 "--logging.level.org.springframework.web.socket=WARN",
             )
@@ -157,6 +157,15 @@ class GameServerAcceptanceTest {
                         evidenceField(line, "actionType") == "PlayLand"
                 }
             }
+
+            val policyObservation = evidenceLines().drop(evidenceOffset).first { line ->
+                evidenceField(line, "event") == "provenance" &&
+                    evidenceField(line, "callback") == "chooseAction" &&
+                    json.parseToJsonElement(line).jsonObject["observation"]!!
+                        .jsonObject["agentToAct"]!!.jsonPrimitive.contentOrNull == seatId
+            }
+            assertOpponentHandMasked(policyObservation, seatId)
+            assertEquals("false", context.environment.getProperty("game.debug-mode"))
 
             val fullStatesBefore = client.fullStateCount()
             client.send(ClientMessage.RequestResync)
@@ -342,6 +351,27 @@ class GameServerAcceptanceTest {
         runCatching {
             json.parseToJsonElement(line).jsonObject[name]?.jsonPrimitive?.contentOrNull
         }.getOrNull()
+
+    private fun assertOpponentHandMasked(evidence: String, aiSeatId: String) {
+        val state = json.parseToJsonElement(evidence).jsonObject["observation"]!!
+            .jsonObject["state"]!!.jsonObject
+        val opponentHands = state["zones"]!!.jsonArray.map { it.jsonObject }.filter { zone ->
+            val zoneId = zone["zoneId"]!!.jsonObject
+            zoneId["zoneType"]!!.jsonPrimitive.contentOrNull == "Hand" &&
+                zoneId["ownerId"]!!.jsonPrimitive.contentOrNull != aiSeatId
+        }
+        assertEquals(1, opponentHands.size, "expected one opponent Hand in the AI callback")
+        val hand = opponentHands.single()
+        assertEquals("false", hand["isVisible"]!!.jsonPrimitive.contentOrNull)
+        assertTrue(hand["cardIds"]!!.jsonArray.isEmpty(), "AI callback exposed opponent hand IDs")
+        assertFalse(state["cards"]!!.jsonObject.values.any { value ->
+            val card = value.jsonObject
+            val zone = card["zone"]?.jsonObject ?: return@any false
+            zone["zoneType"]?.jsonPrimitive?.contentOrNull == "Hand" &&
+                zone["ownerId"]?.jsonPrimitive?.contentOrNull != aiSeatId &&
+                card["name"]?.jsonPrimitive?.contentOrNull != null
+        }, "AI callback exposed an opponent hand card name")
+    }
 
     private fun await(timeout: Duration, description: String, predicate: () -> Boolean) {
         val deadline = System.nanoTime() + timeout.toNanos()
