@@ -103,6 +103,7 @@ def structured_observation():
                 "responseType": "TargetsResponse",
                 "requiredFields": {"selectedTargets": "MAP"},
             },
+            "legalTargets": {"0": ["target-1"]},
         },
         "legalActions": [],
         "terminated": False,
@@ -403,6 +404,44 @@ class OpenAIResponsesPilotTests(unittest.TestCase):
             "argentum-decision-v1:choose-targets",
         )
         self.assertEqual(choice.metadata["modelIo"]["selectedAttempt"], 0)
+        selected_schema = client.responses.calls[0]["text"]["format"]["schema"]
+        self.assertEqual(
+            selected_schema["properties"]["response"]["properties"]
+            ["selectedTargets"]["properties"]["0"]["items"]["enum"],
+            ["target-1"],
+        )
+
+    def test_retries_target_map_scalar_from_native_snapcaster_decision(self):
+        observation = structured_observation()
+        client = FakeClient([
+            FakeResponse(json.dumps({
+                "channel": "decision", "response": {
+                    "type": "TargetsResponse", "selectedTargets": {"0": "target-1"},
+                },
+            })),
+            FakeResponse(json.dumps({
+                "channel": "decision", "response": {
+                    "type": "TargetsResponse", "selectedTargets": {"0": ["target-1"]},
+                },
+            })),
+        ])
+        choice = OpenAIResponsesPilot(client=client, model="gpt-test").choose(observation)
+        self.assertEqual(choice.response["selectedTargets"], {"0": ["target-1"]})
+        self.assertEqual(choice.metadata["modelIo"]["selectedAttempt"], 1)
+        self.assertIn("arrays of offered target IDs", client.responses.calls[1]["input"])
+
+    def test_rejects_unoffered_target_or_requirement_index(self):
+        for selected in ({"0": ["invented"]}, {"1": ["target-1"]}):
+            with self.subTest(selected=selected):
+                client = FakeClient(FakeResponse(json.dumps({
+                    "channel": "decision", "response": {
+                        "type": "TargetsResponse", "selectedTargets": selected,
+                    },
+                })))
+                with self.assertRaisesRegex(OpenAIResponsesPilotError, "offered target IDs"):
+                    OpenAIResponsesPilot(
+                        client=client, model="gpt-test", max_attempts=1,
+                    ).choose(structured_observation())
 
     def test_retries_response_that_violates_native_decision_spec(self):
         observation = structured_observation()

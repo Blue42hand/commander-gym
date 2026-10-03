@@ -441,6 +441,54 @@ def _native_mana_source_format(observation: Mapping[str, Any]) -> dict[str, Any]
     }
 
 
+def _native_targets_format(observation: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Constrain a target response to Argentum's current requirement indices and IDs."""
+
+    pending = observation.get("pendingDecision")
+    if not isinstance(pending, Mapping) or pending.get("requiresStructuredResponse") is not True:
+        return None
+    spec = pending.get("responseSpec")
+    if not isinstance(spec, Mapping) or spec.get("responseType") != "TargetsResponse":
+        return None
+    if spec.get("requiredFields") != {"selectedTargets": "MAP"}:
+        return None
+    legal_targets = pending.get("legalTargets")
+    if not isinstance(legal_targets, Mapping) or any(
+        not isinstance(index, str)
+        or not index.isdecimal()
+        or not _matches_native_field_kind(ids, "ENTITY_ID_ARRAY")
+        for index, ids in legal_targets.items()
+    ):
+        return None
+    return {
+        "type": "json_schema", "name": "commander_gym_native_targets", "strict": False,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "channel": {"type": "string", "const": "decision"},
+                "response": {
+                    "type": "object",
+                    "properties": {
+                        "type": {"type": "string", "const": "TargetsResponse"},
+                        "selectedTargets": {
+                            "type": "object",
+                            "properties": {
+                                index: {"type": "array", "items": {"type": "string", "enum": list(dict.fromkeys(ids))}}
+                                for index, ids in legal_targets.items()
+                            },
+                            "additionalProperties": False,
+                        },
+                    },
+                    "required": ["type", "selectedTargets"],
+                    "additionalProperties": False,
+                },
+            },
+            "required": ["channel", "response"],
+            "additionalProperties": False,
+        },
+    }
+
+
 def _matches_action_param_kind(value: Any, kind: str) -> bool:
     if kind == "INTEGER":
         return type(value) is int
@@ -507,8 +555,8 @@ class OpenAIResponsesPilot:
     """Concrete strategic ``ArtificialPlayer`` backed by OpenAI Responses.
 
     ``client`` must expose ``client.responses.create(**kwargs)``.  The adapter uses
-    Responses JSON mode for most native structured decisions; a mana-source
-    decision uses a request-local schema constrained to Argentum's offered IDs.
+    Responses JSON mode for most native structured decisions; mana-source and
+    target decisions use request-local schemas constrained to Argentum's offered IDs.
     Commander Gym parses and validates the returned channel locally, then the existing
     pilot/execution validators and Argentum perform authoritative validation.
     """
@@ -538,8 +586,8 @@ class OpenAIResponsesPilot:
             )
 
     def choose(self, observation: Mapping[str, Any]) -> PilotChoice:
-        mana_source_format = _native_mana_source_format(observation)
-        action_format = None if mana_source_format is not None else _native_action_format(
+        decision_format = _native_mana_source_format(observation) or _native_targets_format(observation)
+        action_format = None if decision_format is not None else _native_action_format(
             observation, allow_priority_delegation=self.allow_priority_delegation,
         )
         model_observation = _without_live_routing(observation)
@@ -555,7 +603,7 @@ class OpenAIResponsesPilot:
             # The Responses JSON-object mode requires the user input itself to name
             # JSON; mentioning it only in instructions is not sufficient.
             "input": base_input,
-            "text": {"format": mana_source_format or action_format or {"type": "json_object"}},
+            "text": {"format": decision_format or action_format or {"type": "json_object"}},
             "store": False,
         }
         if self.budget is not None:
@@ -869,6 +917,24 @@ class OpenAIResponsesPilot:
                 raise OpenAIResponsesPilotError(
                     "native response selectedSources must be offered in availableSources"
                 )
+        if response_type == "TargetsResponse":
+            legal_targets = pending.get("legalTargets")
+            selected_targets = response.get("selectedTargets")
+            if not isinstance(legal_targets, Mapping) or not isinstance(selected_targets, Mapping):
+                raise OpenAIResponsesPilotError(
+                    "native target decision requires exact legalTargets and selectedTargets"
+                )
+            for index, ids in selected_targets.items():
+                offered = legal_targets.get(index)
+                if (
+                    not isinstance(index, str) or not index.isdecimal()
+                    or not _matches_native_field_kind(offered, "ENTITY_ID_ARRAY")
+                    or not _matches_native_field_kind(ids, "ENTITY_ID_ARRAY")
+                    or any(target_id not in offered for target_id in ids)
+                ):
+                    raise OpenAIResponsesPilotError(
+                        "native response selectedTargets requires arrays of offered target IDs"
+                    )
 
         submitted = dict(response)
         submitted["decisionId"] = decision_id
