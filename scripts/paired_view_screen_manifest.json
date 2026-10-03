@@ -1,6 +1,7 @@
 {
   "schemaVersion": 1,
   "sourceTrace": "game-1791048234-ad5a21e5/policy.jsonl",
+  "sourceSha256": "f77cb63314714b13100e7ef3aa64cfc86edf4c37cbc030fde5fde0592952e184",
   "traceIndices": [2, 13, 31, 76, 114, 192, 7, 20, 44, 65, 93, 174],
   "maxNewRequests": 24,
   "wallSeconds": 360,
