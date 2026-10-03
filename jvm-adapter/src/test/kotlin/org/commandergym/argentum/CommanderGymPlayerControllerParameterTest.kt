@@ -8,6 +8,8 @@ import com.wingedsheep.engine.core.DecisionContext
 import com.wingedsheep.engine.view.ClientGameState
 import com.wingedsheep.engine.view.LegalActionInfo
 import com.wingedsheep.engine.core.ActionParams
+import com.wingedsheep.engine.core.ActionParameterFieldKind
+import com.wingedsheep.engine.core.ActionParameterSpec
 import com.wingedsheep.engine.provenance.SemanticFingerprint
 import com.wingedsheep.sdk.core.Phase
 import com.wingedsheep.sdk.core.Step
@@ -56,6 +58,7 @@ class CommanderGymPlayerControllerParameterTest {
             action = template,
             validAttackers = listOf(attacker),
             validAttackTargets = listOf(defender),
+            parameterSpec = ActionParameterSpec(mapOf("attackers" to ActionParameterFieldKind.ENTITY_ID_MAP)),
         )
 
         var requestBody: String? = null
@@ -83,9 +86,9 @@ class CommanderGymPlayerControllerParameterTest {
                 endpoint = URI.create("http://127.0.0.1:${server.address.port}"),
                 token = "test-token",
                 timeout = Duration.ofSeconds(2),
-                parameterize = { action, params ->
+                parameterize = { offered, params ->
                     seenParams = params
-                    val attack = action as DeclareAttackers
+                    val attack = offered.action as DeclareAttackers
                     attack.copy(attackers = params.attackers)
                 },
             )
@@ -156,7 +159,7 @@ class CommanderGymPlayerControllerParameterTest {
                 endpoint = URI.create("http://127.0.0.1:${server.address.port}"),
                 token = "test-token",
                 timeout = Duration.ofSeconds(2),
-                parameterize = { action, _ -> action },
+                parameterize = { offered, _ -> offered.action },
             )
 
             val response = controller.chooseAction(

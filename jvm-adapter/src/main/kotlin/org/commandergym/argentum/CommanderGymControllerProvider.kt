@@ -92,11 +92,11 @@ class CommanderGymControllerProvider(
             profileId = selected?.id,
             expectedDeck = selected?.deckList,
             expectedCommander = selected?.commander,
-            parameterize = { action, params ->
-                if (params.isEmpty) action else {
+            parameterize = { offered, params ->
+                if (params.isEmpty) offered.action else {
                     val snapshot = context.snapshot()
                         ?: error("Commander Gym action params require a live Argentum runtime snapshot")
-                    ActionParameterizer.apply(action, params, snapshot.state)
+                    ActionParameterizer.apply(offered, params, snapshot.state)
                 }
             },
             http = http,
@@ -149,9 +149,9 @@ class CommanderGymPlayerController(
     private val profileId: String? = null,
     private val expectedDeck: Map<String, Int>? = null,
     private val expectedCommander: String? = null,
-    private val parameterize: (GameAction, ActionParams) -> GameAction = { action, params ->
+    private val parameterize: (LegalActionInfo, ActionParams) -> GameAction = { offered, params ->
         require(params.isEmpty) { "Native action parameters require Argentum runtime context" }
-        action
+        offered.action
     },
     private val http: HttpClient = HttpClient.newBuilder().connectTimeout(timeout).build(),
 ) : AiPlayerController {
@@ -178,7 +178,6 @@ class CommanderGymPlayerController(
                 put("semanticId", SemanticFingerprint.forGameAction(
                     legal.actionType, legal.action, POLICY_SCHEMA_SCOPE,
                 ))
-                put("parameterSpec", json.encodeToJsonElement(ActionParameterizer.spec(legal.action)))
             }
         })
         val policyDecision = pendingDecision?.let { pending ->
@@ -203,7 +202,7 @@ class CommanderGymPlayerController(
                 val native = legalActions.getOrNull(index)
                     ?: error("Commander Gym returned a stale legal action index")
                 val params = json.decodeFromJsonElement<ActionParams>(response.requiredObject("params"))
-                ActionResponse.SubmitAction(parameterize(native.action, params))
+                ActionResponse.SubmitAction(parameterize(native, params))
             }
             "decision" -> {
                 require(response.requiredString("playerId") == playerId.value) {
