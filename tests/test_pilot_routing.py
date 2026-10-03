@@ -81,6 +81,20 @@ class RoutingPilotTests(unittest.TestCase):
             ignore_unaffordable_abilities=True,
         ).choose(current))
 
+        mana = {**ability, "actionId": 4, "semanticId": "native-mana",
+                "affordable": True, "isAffordable": True}
+        standing = {**current, "legalActions": [passed, mana]}
+        self.assertEqual(handler.choose(standing).action_id, 0)
+        for changed in (
+            {**standing, "state": {"priorityPlayerId": "other"}},
+            {**standing, "legalActions": [passed, {**mana, "semanticId": passed["semanticId"]}]},
+            {**standing, "legalActions": [{**passed, "isAffordable": False}, mana]},
+            {**standing, "legalActions": [passed, {**mana, "actionType": "CastSpell"}]},
+            {**standing, "legalActions": [passed, {**mana, "isAffordable": None}]},
+        ):
+            with self.subTest(inherited_fast_path=changed):
+                self.assertIsNone(handler.choose(changed))
+
         for key, value in (("affordable", True), ("affordable", None),
                            ("isAffordable", True), ("isAffordable", None),
                            ("isDecisionOption", None), ("kind", "Unknown"),

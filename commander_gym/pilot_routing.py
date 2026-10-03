@@ -230,19 +230,14 @@ class StandingManaOnlyPassHandler:
 class AllUnaffordablePassHandler:
     """Opt-in pass when every other native offer is explicitly unaffordable.
 
-    Retain the prior standing pass behavior, then handle only a fully certified
-    no-action menu. Unknown or incomplete offers always wake the strategic pilot.
+    Validate the complete native menu before retaining the prior standing pass
+    behavior or handling a fully unaffordable menu. Unknown offers wake the pilot.
     """
 
     name: str = "native-all-unaffordable-pass"
     version: str = "1"
 
     def choose(self, observation: Mapping[str, Any]) -> PilotChoice | None:
-        previous = StandingManaOnlyPassHandler(
-            name=self.name, version=self.version, ignore_unaffordable_abilities=True,
-        ).choose(observation)
-        if previous is not None:
-            return previous
         seat = observation.get("agentToAct")
         state = observation.get("state")
         legal = observation.get("legalActions")
@@ -252,7 +247,7 @@ class AllUnaffordablePassHandler:
             or not isinstance(seat, str) or not seat
             or observation.get("perspectivePlayerId") != seat
             or not isinstance(state, Mapping) or state.get("priorityPlayerId") != seat
-            or not isinstance(legal, list) or len(legal) < 2
+            or not isinstance(legal, list) or not legal
         ):
             return None
         passes: list[Mapping[str, Any]] = []
@@ -262,6 +257,8 @@ class AllUnaffordablePassHandler:
             "ActivateAbility": "ActivateAbility",
             "CastSpell": "CastSpell",
             "CastWithKicker": "CastSpell",
+            "DeclareAttackers": "DeclareAttackers",
+            "DeclareBlockers": "DeclareBlockers",
         }
         for offer in legal:
             if not isinstance(offer, Mapping):
@@ -295,12 +292,25 @@ class AllUnaffordablePassHandler:
             elif (
                 kind not in native_types
                 or action.get("type") != native_types[kind]
-                or offer.get("affordable") is not False
-                or offer.get("isAffordable") is not False
                 or type(offer.get("isManaAbility")) is not bool
             ):
                 return None
-        return ArgentumActionChoice(action_id=passes[0]["actionId"]) if len(passes) == 1 else None
+        previous = StandingManaOnlyPassHandler(
+            name=self.name, version=self.version, ignore_unaffordable_abilities=True,
+        ).choose(observation)
+        if previous is not None:
+            return previous
+        if len(legal) < 2 or len(passes) != 1:
+            return None
+        if any(
+            offer.get("kind") != "PassPriority" and (
+                offer.get("affordable") is not False
+                or offer.get("isAffordable") is not False
+            )
+            for offer in legal
+        ):
+            return None
+        return ArgentumActionChoice(action_id=passes[0]["actionId"])
 
 
 def _annotate(choice: PilotChoice, routing: Mapping[str, Any]) -> PilotChoice:

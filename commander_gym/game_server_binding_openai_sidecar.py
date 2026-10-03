@@ -86,7 +86,7 @@ BUILTIN_ALL_UNAFFORDABLE_PASS_COMPONENT_REF = ArtifactRef(
     kind="deterministic-policy",
     artifact_id="native-all-unaffordable-pass",
     version="1",
-    digest="sha256:120a1bcb22ad1d2e919a3d10e3cdf25c086e5ff6abe6e95c48aaa7833a1475a4",
+    digest="sha256:9e54a77e5614f433be4feaa62fba42dca8e886f762303a69c15b69df50c896eb",
 )
 BUILTIN_OPENAI_RESPONSES_COMPONENT_REF = ArtifactRef(
     kind="provider",
