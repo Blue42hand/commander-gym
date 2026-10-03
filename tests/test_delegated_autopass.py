@@ -105,7 +105,7 @@ class DelegatedAutopassTests(unittest.TestCase):
         legal = [{"actionId": 0, "kind": "PassPriority"},
                  {"actionId": 1, "kind": "ActivateAbility", "isManaAbility": False,
                   "action": {"sourceId": "stone", "abilityId": "draw"}}]
-        for change in ("spell", "ability", "opponent", "stack", "decision"):
+        for change in ("spell", "ability", "parameters", "opponent", "stack", "decision"):
             with self.subTest(change=change):
                 strategic = NamedPilot()
                 pilot = DelegatedAutopassPilot(strategic, allow_named_deferrals=True)
@@ -116,6 +116,8 @@ class DelegatedAutopassTests(unittest.TestCase):
                     later["legalActions"].append({"actionId": 2, "kind": "CastSpell"})
                 elif change == "ability":
                     later["legalActions"][1]["action"]["abilityId"] = "different"
+                elif change == "parameters":
+                    later["legalActions"][1]["parameterSpec"] = {"allowedFields": {"targets": "LIST"}}
                 elif change == "opponent":
                     later["state"]["zones"][2]["cardIds"] = ["new"]
                     later["state"]["cards"]["new"] = {"controllerId": "p2"}

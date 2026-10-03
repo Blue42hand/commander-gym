@@ -76,6 +76,7 @@ def _nonmana_ability_keys(observation: Mapping[str, Any]) -> tuple[tuple[str, st
         action = offered.get("action")
         if (
             offered.get("kind") != "ActivateAbility" or not isinstance(action, Mapping)
+            or offered.get("isManaAbility") is not False
             or offered.get("isDecisionOption") is True
         ):
             return None
@@ -84,6 +85,26 @@ def _nonmana_ability_keys(observation: Mapping[str, Any]) -> tuple[tuple[str, st
             return None
         keys.append((source, ability))
     return tuple(sorted(set(keys)))
+
+
+def _nonmana_ability_menu_digest(observation: Mapping[str, Any]) -> str | None:
+    keys = _nonmana_ability_keys(observation)
+    if keys is None:
+        return None
+    visible = []
+    for offered in observation["legalActions"]:
+        if offered.get("kind") != "ActivateAbility" or offered.get("isManaAbility") is not False:
+            continue
+        if offered.get("affordable") is False and offered.get("isAffordable") is False:
+            continue
+        # actionId is only a live routing handle. Everything else in the
+        # Argentum-authored offer, including parameterSpec, must remain equal.
+        visible.append({key: value for key, value in offered.items() if key != "actionId"})
+    try:
+        encoded = json.dumps(visible, sort_keys=True)
+    except (TypeError, ValueError):
+        return None
+    return hashlib.sha256(encoded.encode()).hexdigest()
 
 
 def _visible_checkpoint(
@@ -180,6 +201,7 @@ class _Lease:
     watch_opponents: bool = False
     passes: int = 0
     deferred_abilities: tuple[tuple[str, str], ...] | None = None
+    deferred_menu_digest: str | None = None
 
 
 @dataclass
@@ -276,6 +298,7 @@ class DelegatedAutopassPilot:
                 until=directive["until"], reason=directive["reason"],
                 lease_id=lease_id, watch_opponents=(True if named else directive.get("watchOpponents", False)),
                 deferred_abilities=offered if named else None,
+                deferred_menu_digest=_nonmana_ability_menu_digest(observation) if named else None,
             )
         return choice
 
@@ -285,7 +308,11 @@ class DelegatedAutopassPilot:
         if lease.passes >= self.max_passes:
             return False
         if lease.deferred_abilities is not None:
-            if now["turn"] != lease.start["turn"] or _nonmana_ability_keys(observation) != lease.deferred_abilities:
+            if (
+                now["turn"] != lease.start["turn"]
+                or _nonmana_ability_keys(observation) != lease.deferred_abilities
+                or _nonmana_ability_menu_digest(observation) != lease.deferred_menu_digest
+            ):
                 return False
         elif _pass_and_mana_only(observation) is None:
             return False
