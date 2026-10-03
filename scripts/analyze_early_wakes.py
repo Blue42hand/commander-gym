@@ -50,6 +50,7 @@ def analyze(paths: list[Path], through_turn: int) -> dict:
         turns: dict[int, dict[str, int]] = defaultdict(
             lambda: {"callbacks": 0, "eligible": 0, "matched": 0, "diverged": 0}
         )
+        observed = defaultdict(lambda: defaultdict(int))
         with path.open(encoding="utf-8") as source:
             for line in source:
                 record = json.loads(line)
@@ -61,6 +62,41 @@ def analyze(paths: list[Path], through_turn: int) -> dict:
                     continue
                 row = turns[turn]
                 row["callbacks"] += 1
+                choice = record.get("choice")
+                metadata = choice.get("metadata") if isinstance(choice, dict) else None
+                if isinstance(metadata, dict):
+                    route = metadata.get("routing")
+                    handled_by = route.get("handledBy") if isinstance(route, dict) else None
+                    implementation = handled_by.get("implementation") if isinstance(handled_by, dict) else None
+                    if implementation == "native-no-choice":
+                        observed[turn]["nativeNoChoice"] += 1
+                    model_io = metadata.get("modelIo")
+                    if isinstance(model_io, dict) and isinstance(model_io.get("attempts"), list):
+                        observed[turn]["modelAttempts"] += len(model_io["attempts"])
+                    if isinstance(metadata.get("priorityDelegation"), dict):
+                        observed[turn]["leaseRequests"] += 1
+                    if metadata.get("priorityDelegationRejected") is not None:
+                        observed[turn]["leaseRejected"] += 1
+                    if isinstance(metadata.get("delegatedPass"), dict):
+                        observed[turn]["delegatedPasses"] += 1
+                legal = observation.get("legalActions")
+                if isinstance(choice, dict) and isinstance(legal, list):
+                    selected = next((
+                        action for action in legal if isinstance(action, dict)
+                        and action.get("actionId") == choice.get("actionId")
+                    ), None)
+                    if isinstance(selected, dict) and selected.get("kind") == "PassPriority":
+                        observed[turn]["selectedPasses"] += 1
+                        if all(
+                            action is selected or (
+                                isinstance(action, dict)
+                                and action.get("kind") == "ActivateAbility"
+                                and action.get("isManaAbility") is True
+                            ) for action in legal
+                        ):
+                            observed[turn]["passPlusManaOnly"] += 1
+                        else:
+                            observed[turn]["passWithNonmanaChoice"] += 1
                 if type(record.get("choice", {}).get("actionId")) is int:
                     replay.record = record
                     replayed = delegation.choose(observation)
@@ -88,12 +124,27 @@ def analyze(paths: list[Path], through_turn: int) -> dict:
                 "matchedRecordedChoice": matched_delegated,
                 "rejectedProposals": rejected_delegation,
             },
+            "observed": {
+                "turns": {str(turn): dict(observed[turn]) for turn in sorted(turns)},
+                "total": {
+                    key: sum(observed[turn][key] for turn in turns)
+                    for key in (
+                        "modelAttempts", "nativeNoChoice", "leaseRequests",
+                        "leaseRejected", "delegatedPasses", "selectedPasses",
+                        "passPlusManaOnly", "passWithNonmanaChoice",
+                    )
+                },
+            },
         })
     return {
         "route": f"{handler.name}/v{handler.version}",
         "throughTurn": through_turn,
         "games": games,
-        "interpretation": "all counts are counterfactual wake opportunities, not observed API savings; delegation assumes model approval at each recorded pass",
+        "interpretation": (
+            "observed counts are from recorded policy provenance; eligible/matched/diverged "
+            "and hypotheticalDelegation are counterfactual opportunities, not measured savings "
+            "from a changed game; hypothetical delegation assumes approval at each recorded pass"
+        ),
     }
 
 
