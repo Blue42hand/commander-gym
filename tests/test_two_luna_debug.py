@@ -1,11 +1,31 @@
 from pathlib import Path
+from argparse import Namespace
 import tempfile
 import unittest
 
-from commander_gym.two_luna_debug import _ProgressGuard, _natural_terminal_game, _provenance_size, _summarize
+from commander_gym.openai_run_budget import OpenAIRunBudget, OpenAIRunBudgetError
+from commander_gym.two_luna_debug import (
+    _ProgressGuard, _natural_terminal_game, _provenance_size, _run_budget, _summarize,
+)
 
 
 class TwoLunaDebugReportTests(unittest.TestCase):
+    def test_existing_elevated_cumulative_budget_is_read_without_reset(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "ledger.json"
+            original = OpenAIRunBudget(path, 5, authorized_max_usd=8,
+                                       max_requests=610, initialize_new_ledger=True)
+            original.snapshot()
+            original.set_request_limit(906)
+            original.increase_cap(8)
+            args = Namespace(budget_ledger=str(path), budget_cap=8,
+                             budget_authorized_max=8, budget_max_requests=906)
+            self.assertEqual(_run_budget(args).snapshot()["maxRequests"], 906)
+            self.assertEqual(_run_budget(args).snapshot()["requests"], 0)
+            args.budget_max_requests = 907
+            with self.assertRaises(OpenAIRunBudgetError):
+                _run_budget(args).snapshot()
+
     def test_progress_guard_counts_callbacks_and_api_reservations_but_expires_old_inflight(self):
         guard = _ProgressGuard(stall_seconds=300, last_change=0)
         # The third field is the cumulative reservation count. A request that

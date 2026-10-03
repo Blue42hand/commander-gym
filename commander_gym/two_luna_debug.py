@@ -351,6 +351,14 @@ def _summarize(
     }
 
 
+def _run_budget(args: argparse.Namespace) -> OpenAIRunBudget:
+    return OpenAIRunBudget(
+        Path(args.budget_ledger).resolve(), args.budget_cap,
+        authorized_max_usd=args.budget_authorized_max,
+        max_requests=args.budget_max_requests,
+    )
+
+
 def run(args: argparse.Namespace) -> int:
     run_started = time.monotonic()
     if args.profile_a == args.profile_b:
@@ -375,7 +383,7 @@ def run(args: argparse.Namespace) -> int:
         if not isinstance(deck.get("commander"), str):
             raise RuntimeError(f"Binding profile {binding_id!r} has no designated commander")
         selected.append(dict(deck["cards"]))
-    budget = OpenAIRunBudget(Path(args.budget_ledger).resolve(), args.budget_cap)
+    budget = _run_budget(args)
     before = budget.snapshot()
     base = args.server_url.rstrip("/")
 
@@ -501,6 +509,8 @@ def main() -> int:
     parser.add_argument("--profile-b", required=True)
     parser.add_argument("--budget-ledger", required=True)
     parser.add_argument("--budget-cap", type=float, default=5.0)
+    parser.add_argument("--budget-authorized-max", type=float, default=5.0)
+    parser.add_argument("--budget-max-requests", type=int)
     parser.add_argument("--timeout", type=float, default=3600,
                         help="emergency wall-time ceiling; natural completion remains the goal")
     parser.add_argument("--stall-seconds", type=float, default=600,
