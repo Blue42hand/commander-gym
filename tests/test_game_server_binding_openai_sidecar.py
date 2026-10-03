@@ -11,6 +11,7 @@ from commander_gym.deck_package import ArtifactRef
 from commander_gym.game_server_binding_openai_sidecar import (
     BUILTIN_DELEGATED_AUTOPASS_COMPONENT_REF,
     BUILTIN_FORGE_CONDITIONAL_WAIT_COMPONENT_REF,
+    BUILTIN_FORGE_CONDITIONAL_WAIT_V3_COMPONENT_REF,
     BUILTIN_FORCED_PARAMETERLESS_COMPONENT_REF,
     BUILTIN_NATIVE_NO_CHOICE_COMPONENT_REF,
     BUILTIN_NATIVE_UNAFFORDABLE_PASS_COMPONENT_REF,
@@ -193,6 +194,24 @@ class BindingOpenAIGameServerSidecarTests(unittest.TestCase):
             ref=BUILTIN_NATIVE_UNAFFORDABLE_PASS_COMPONENT_REF,
         ))
         self.assertTrue(mechanical.handler.ignore_unaffordable_abilities)
+
+    def test_forge_wait_v3_has_separate_identity_and_nonempty_protocol(self):
+        config = OpenAIGameServerSidecarConfig(
+            token="sidecar-secret", api_key="sk-test-secret", port=12345,
+        )
+        resolver = OpenAIBindingPilotComponentResolver(config=config, client=FakeClient())
+        v2 = resolver.resolve(PilotSubsystemSpec(
+            role="frontier_escalation", ordinal=0,
+            ref=BUILTIN_FORGE_CONDITIONAL_WAIT_COMPONENT_REF,
+        ))
+        v3 = resolver.resolve(PilotSubsystemSpec(
+            role="frontier_escalation", ordinal=0,
+            ref=BUILTIN_FORGE_CONDITIONAL_WAIT_V3_COMPONENT_REF,
+        ))
+        self.assertEqual(v2.player.version, "2")
+        self.assertFalse(v2.player.strategic_pilot.require_nonempty_named_deferrals)
+        self.assertEqual(v3.player.version, "3")
+        self.assertTrue(v3.player.strategic_pilot.require_nonempty_named_deferrals)
 
     def test_versioned_native_no_choice_component_avoids_model_for_empty_combat(self):
         with tempfile.TemporaryDirectory() as directory:

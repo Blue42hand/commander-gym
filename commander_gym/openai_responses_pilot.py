@@ -398,6 +398,7 @@ def _native_action_param_fields(action: Mapping[str, Any]) -> Mapping[str, str] 
 def _native_action_format(
     observation: Mapping[str, Any], *, allow_priority_delegation: bool = False,
     allow_named_deferrals: bool = False,
+    require_nonempty_named_deferrals: bool = False,
 ) -> dict[str, Any] | None:
     """Constrain each semantic action to its own Argentum-authored parameter fields."""
 
@@ -441,7 +442,7 @@ def _native_action_format(
                 "until": {"type": "string", "enum": ["phase_end", "next_own_main", "turn_end"] if allow_named_deferrals else ["phase_end", "next_own_main"]},
                 "reason": {"type": "string"},
                 "watchOpponents": {"type": "boolean"},
-                **({"deferAbilities": {"type": "array", "items": {
+                **({"deferAbilities": {"type": "array", **({"minItems": 1} if require_nonempty_named_deferrals else {}), "items": {
                     "type": "object", "properties": {
                         "sourceId": {"type": "string"}, "abilityId": {"type": "string"},
                     }, "required": ["sourceId", "abilityId"], "additionalProperties": False,
@@ -717,12 +718,19 @@ class OpenAIResponsesPilot:
     budget: OpenAIRunBudget | None = None
     allow_priority_delegation: bool = False
     allow_named_deferrals: bool = False
+    require_nonempty_named_deferrals: bool = False
     name: str = "openai-responses"
     version: str = "1"
 
     def __post_init__(self) -> None:
         _require_string(self.model, "OpenAI model")
         _require_string(self.instructions, "OpenAI pilot instructions")
+        if self.require_nonempty_named_deferrals and not (
+            self.allow_priority_delegation and self.allow_named_deferrals
+        ):
+            raise OpenAIResponsesPilotError(
+                "nonempty named deferrals require the named-deferral Pilot"
+            )
         if self.strategy is not None:
             _require_string(self.strategy, "OpenAI pilot strategy")
         if type(self.max_attempts) is not int or self.max_attempts < 1:
@@ -739,6 +747,7 @@ class OpenAIResponsesPilot:
         action_format = None if decision_format is not None else _native_action_format(
             observation, allow_priority_delegation=self.allow_priority_delegation,
             allow_named_deferrals=self.allow_named_deferrals,
+            require_nonempty_named_deferrals=self.require_nonempty_named_deferrals,
         )
         model_observation = _without_live_routing(observation)
         base_input = "Return one JSON object for this observation:\n" + json.dumps(
@@ -791,6 +800,22 @@ class OpenAIResponsesPilot:
                     "Argentum then offers one affordable CastSpell for that card. "
                     "A changed state or unavailable cast wakes you instead."
                 )
+                if self.require_nonempty_named_deferrals:
+                    request["instructions"] += (
+                        "\n\nFor turn_end only: deferAbilities must contain at least one "
+                        "exact affordable nonmana ability from the current legalActions. "
+                        "Never send an empty deferAbilities array. If no such ability "
+                        "is offered, choose a shorter lease or plain PassPriority. "
+                        "If one is offered, include every currently affordable "
+                        "nonmana ability in the offer, with "
+                        "its exact action.sourceId and action.abilityId. "
+                        "For a native additional cost, use only the ActionParams "
+                        "field named in that offered action's parameterSpec: "
+                        "tappedPermanents, sacrificedPermanents, discardedCards, "
+                        "or exiledCards. Select entity IDs from the corresponding "
+                        "additionalCostInfo valid candidates. The targets field "
+                        "selects spell or ability targets, not cost payments."
+                    )
             else:
                 request["instructions"] += (
                     "\n\nYou may optionally include priorityDelegation only when choosing "

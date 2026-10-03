@@ -413,6 +413,63 @@ class OpenAIResponsesPilotTests(unittest.TestCase):
                         observation
                     )
 
+    def test_native_additional_cost_fields_follow_each_offered_action_spec(self):
+        # These are the four ActionParams fields on Argentum's native cost-choice
+        # contract. The provider receives only fields declared for this offer.
+        for field, candidate in (
+            ("tappedPermanents", "creature-1"),
+            ("sacrificedPermanents", "permanent-1"),
+            ("discardedCards", "hand-card-1"),
+            ("exiledCards", "graveyard-card-1"),
+        ):
+            with self.subTest(field=field):
+                observation = action_observation()
+                observation["type"] = "GameServerSeat"
+                observation["legalActions"][0]["parameterSpec"] = {"allowedFields": {}}
+                observation["legalActions"][1]["parameterSpec"] = {
+                    "allowedFields": {field: "ENTITY_ID_ARRAY"}
+                }
+                params = {field: [candidate]}
+                client = FakeClient(FakeResponse(json.dumps({
+                    "channel": "action", "choice": {
+                        "semanticId": "argentum-action-v1:attack", "params": params,
+                    },
+                })))
+
+                choice = OpenAIResponsesPilot(client=client, model="gpt-test").choose(observation)
+
+                self.assertEqual(choice.params, params)
+                variants = client.responses.calls[0]["text"]["format"]["schema"]["properties"]["choice"]["anyOf"]
+                self.assertEqual(variants[1]["properties"]["params"]["properties"], {
+                    field: {"type": "array", "items": {"type": "string"}},
+                })
+                self.assertEqual(variants[0]["properties"]["params"]["properties"], {})
+
+    def test_v3_named_wait_schema_and_prompt_exclude_empty_deferrals(self):
+        observation = action_observation()
+        observation["legalActions"][0]["parameterSpec"] = {"allowedFields": {}}
+        observation["legalActions"][1]["parameterSpec"] = {"allowedFields": {}}
+        client = FakeClient(FakeResponse(json.dumps({
+            "channel": "action", "choice": {
+                "semanticId": "argentum-action-v1:pass", "params": {},
+            },
+        })))
+        pilot = OpenAIResponsesPilot(
+            client=client, model="gpt-test", allow_priority_delegation=True,
+            allow_named_deferrals=True, require_nonempty_named_deferrals=True,
+        )
+
+        pilot.choose(observation)
+
+        call = client.responses.calls[0]
+        self.assertIn("Never send an empty deferAbilities array", call["instructions"])
+        self.assertIn("targets field selects spell or ability targets", call["instructions"])
+        self.assertEqual(
+            call["text"]["format"]["schema"]["properties"]
+                ["priorityDelegation"]["properties"]["deferAbilities"]["minItems"],
+            1,
+        )
+
     def test_engine_spec_rejects_wrong_action_param_wire_type(self):
         observation = action_observation()
         observation["legalActions"][1]["parameterSpec"] = {
