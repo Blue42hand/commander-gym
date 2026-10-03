@@ -220,7 +220,7 @@ class OpenAIResponsesPilotTests(unittest.TestCase):
 
     def test_bounded_provider_request_is_recorded_in_exact_model_io(self):
         with TemporaryDirectory() as temporary:
-            budget = OpenAIRunBudget(Path(temporary) / "budget.json", 5)
+            budget = OpenAIRunBudget(Path(temporary) / "budget.json", 5, initialize_new_ledger=True)
             client = FakeClient(FakeResponse(json.dumps({
                 "channel": "action", "semanticId": "argentum-action-v1:pass", "params": {},
             })))

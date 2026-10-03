@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "sourceTrace": "game-1791048234-ad5a21e5/policy.jsonl",
+  "traceIndices": [2, 13, 31, 76, 114, 192, 7, 20, 44, 65, 93, 174],
+  "maxNewRequests": 24,
+  "wallSeconds": 360,
+  "model": "gpt-6-luna",
+  "maxOutputTokens": 2048,
+  "expectedLedgerRequests": 586,
+  "absoluteLedgerRequestLimit": 610,
+  "startingCapUsd": 5,
+  "authorizedCapUsd": 6
+}

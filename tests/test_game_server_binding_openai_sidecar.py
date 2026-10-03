@@ -296,7 +296,7 @@ class BindingOpenAIGameServerSidecarTests(unittest.TestCase):
             root = Path(directory)
             catalog = synthetic_catalog(root)
             ledger = root / "budget.json"
-            OpenAIRunBudget(ledger, 5).snapshot()
+            OpenAIRunBudget(ledger, 5, initialize_new_ledger=True).snapshot()
             base = {
                 "COMMANDER_GYM_SIDECAR_TOKEN": "sidecar-secret",
                 "OPENAI_API_KEY": "sk-test-secret",
