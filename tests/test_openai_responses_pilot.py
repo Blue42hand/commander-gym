@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -111,6 +112,13 @@ def structured_observation():
 
 
 class OpenAIResponsesPilotTests(unittest.TestCase):
+    def test_default_prompt_retains_qualified_provider_identity(self):
+        pilot = OpenAIResponsesPilot(client=FakeClient(), model="gpt-test")
+        self.assertEqual(
+            hashlib.sha256(pilot.instructions.encode()).hexdigest(),
+            "7222009a07b4509944793052c74beba9d1bdb7f5b80c4ab710238a7cdc0b640c",
+        )
+
     def test_priority_delegation_requires_opt_in_and_exact_pass(self):
         directive = {"until": "phase_end", "reason": "Reviewed this main phase"}
         output = json.dumps({
@@ -328,6 +336,54 @@ class OpenAIResponsesPilotTests(unittest.TestCase):
         choice = OpenAIResponsesPilot(client=client, model="gpt-test").choose(observation)
 
         self.assertEqual(choice.params, {"xValue": 2})
+
+    def test_engine_spec_offered_exiled_cards_flows_through_request_and_choice(self):
+        observation = action_observation()
+        observation["type"] = "GameServerSeat"
+        observation["legalActions"][0]["parameterSpec"] = {"allowedFields": {}}
+        observation["legalActions"][1]["parameterSpec"] = {
+            "allowedFields": {"targets": "ENTITY_ID_ARRAY", "exiledCards": "ENTITY_ID_ARRAY"}
+        }
+        params = {"targets": ["spell-1"], "exiledCards": ["blue-card-1"]}
+        client = FakeClient(FakeResponse(json.dumps({
+            "channel": "action", "choice": {
+                "semanticId": "argentum-action-v1:attack", "params": params,
+            },
+        })))
+
+        choice = OpenAIResponsesPilot(client=client, model="gpt-test").choose(observation)
+
+        self.assertEqual(choice.action_id, 7)
+        self.assertEqual(choice.params, params)
+        variants = client.responses.calls[0]["text"]["format"]["schema"]["properties"]["choice"]["anyOf"]
+        self.assertEqual(variants[1]["properties"]["params"]["properties"]["exiledCards"], {
+            "type": "array", "items": {"type": "string"},
+        })
+        self.assertNotIn("exiledCards", variants[0]["properties"]["params"]["properties"])
+
+    def test_exiled_cards_requires_native_offer_and_entity_id_array(self):
+        for offered, value, error in (
+            (False, ["blue-card-1"], "not allowed by native"),
+            (True, "blue-card-1", "requires ENTITY_ID_ARRAY"),
+            (True, [1], "requires ENTITY_ID_ARRAY"),
+        ):
+            with self.subTest(offered=offered, value=value):
+                observation = action_observation()
+                observation["type"] = "GameServerSeat"
+                observation["legalActions"][0]["parameterSpec"] = {"allowedFields": {}}
+                observation["legalActions"][1]["parameterSpec"] = {
+                    "allowedFields": {"exiledCards": "ENTITY_ID_ARRAY"} if offered else {}
+                }
+                client = FakeClient(FakeResponse(json.dumps({
+                    "channel": "action", "choice": {
+                        "semanticId": "argentum-action-v1:attack",
+                        "params": {"exiledCards": value},
+                    },
+                })))
+                with self.assertRaisesRegex(OpenAIResponsesPilotError, error):
+                    OpenAIResponsesPilot(client=client, model="gpt-test", max_attempts=1).choose(
+                        observation
+                    )
 
     def test_engine_spec_rejects_wrong_action_param_wire_type(self):
         observation = action_observation()
