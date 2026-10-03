@@ -16,14 +16,31 @@ from commander_gym.binding_catalog import load_binding_catalog
 from commander_gym.game_server_bindings import GameServerBindingRegistry
 from commander_gym.observation_projection import compact_seat_observation, expand_seat_observation
 from commander_gym.openai_responses_pilot import _without_live_routing
+from scripts.run_paired_view_screen import _captured_request
+
+
+class _CapturedObservation(Exception):
+    def __init__(self, observation):
+        self.observation = observation
 
 
 class _NeverRunPilot:
     name = "offline-audit-only"
     version = "1"
 
-    def choose(self, _observation):
-        raise AssertionError("audit must never choose an action")
+    def choose(self, observation):
+        raise _CapturedObservation(dict(observation))
+
+
+def _bound_observation(adapter, observation):
+    try:
+        adapter._pilot.choose(observation)
+    except _CapturedObservation as captured:
+        bound = captured.observation
+    else:
+        raise AssertionError("audit Pilot unexpectedly returned a choice")
+    assert isinstance(bound.get("deckKnowledge"), str) and bound["deckKnowledge"].strip()
+    return bound
 
 
 def _sha(data: bytes) -> str:
@@ -32,10 +49,31 @@ def _sha(data: bytes) -> str:
 
 def _count_exact(value, ids: set[str]) -> int:
     if isinstance(value, dict):
-        return sum(_count_exact(v, ids) for v in value.values())
+        return sum(int(isinstance(k, str) and k in ids) + _count_exact(v, ids)
+                   for k, v in value.items())
     if isinstance(value, list):
         return sum(_count_exact(v, ids) for v in value)
     return int(isinstance(value, str) and value in ids)
+
+
+def _assert_library_visibility(state, viewer: str) -> tuple[set[str], set[str]]:
+    """Use native zone visibility, not the presence of a named card, as authority."""
+    opaque: set[str] = set()
+    visible: set[str] = set()
+    for zone in state["zones"]:
+        if zone["zoneId"]["zoneType"] != "Library":
+            continue
+        own = zone["zoneId"]["ownerId"] == viewer
+        for card_id in zone["cardIds"]:
+            if card_id.startswith("client-hidden-library-slot:"):
+                assert card_id not in state["cards"]
+                opaque.add(card_id)
+            else:
+                assert own and zone["isVisible"] is True, "unrevealed library identity escaped"
+                assert card_id in state["cards"]
+                assert state["cards"][card_id]["name"] != "Face-down card"
+                visible.add(card_id)
+    return opaque, visible
 
 
 def main() -> int:
@@ -84,6 +122,7 @@ def main() -> int:
                                            body["pendingDecision"], body["recentGameLog"])
         assert viewer == observation["agentToAct"] == observation["perspectivePlayerId"]
         assert observation["knownDeck"]["cards"]
+        observation = _bound_observation(adapter, observation)
         opponents = {p["playerId"] for p in state["players"] if p["playerId"] != viewer}
         hands = [z for z in state["zones"] if z["zoneId"]["ownerId"] in opponents and z["zoneId"]["zoneType"] == "Hand"]
         libraries = [z for z in state["zones"] if z["zoneId"]["ownerId"] in opponents and z["zoneId"]["zoneType"] == "Library"]
@@ -91,12 +130,7 @@ def main() -> int:
         assert hands and libraries and all_libraries
         assert all(not z["isVisible"] and not z["cardIds"] for z in hands)
         assert all(len(z["cardIds"]) == z["size"] for z in all_libraries)
-        opaque = {card_id for z in all_libraries for card_id in z["cardIds"]
-                  if card_id.startswith("client-hidden-library-slot:")}
-        visible = {card_id for z in all_libraries for card_id in z["cardIds"] if card_id not in opaque}
-        assert all(card_id not in state["cards"] for card_id in opaque)
-        assert all(card_id in state["cards"] and state["cards"][card_id]["name"] != "Face-down card"
-                   for card_id in visible)
+        opaque, visible = _assert_library_visibility(state, viewer)
         for key in ("legalActions", "pendingDecision", "recentGameLog"):
             assert _count_exact(body[key], opaque) == 0
         for key in ("cards", "players", "deck", "gameLog", "combat", "activeYields"):
@@ -108,6 +142,15 @@ def main() -> int:
         assert expand_seat_observation(compact) == full
         for payload in (full, compact):
             assert _count_exact(payload, opaque) == len(opaque)
+        requests = {
+            "full": _captured_request(observation, False),
+            "compact": _captured_request(observation, True),
+        }
+        for label, payload in (("full", full), ("compact", compact)):
+            expected_input = "Return one JSON object for this observation:\n" + json.dumps(
+                payload, sort_keys=True, separators=(",", ":"),
+            )
+            assert requests[label]["input"] == expected_input
         pending = body["pendingDecision"]
         row.update({"profileId": profile, "viewerId": viewer, "turn": state["turnNumber"],
                     "step": state["currentStep"], "opponentHandSizes": [z["size"] for z in hands],
@@ -122,7 +165,7 @@ def main() -> int:
                     "faceDownCardCount": sum(card.get("isFaceDown") is True for card in state["cards"].values()),
                     "fullCompactRoundtrip": True})
         rows.append(row)
-        candidates.append((row, raw, full, compact))
+        candidates.append((row, raw, full, compact, requests))
     # Pick earliest per seat plus every new observed category, then balance seats/turns.
     selected = []
     seen = set()
@@ -157,7 +200,7 @@ def main() -> int:
                     row["turn"], candidates.index(candidate))
         selected.append(min(remaining, key=balance_key))
     reconcealment = []
-    for index, (prior_row, prior_raw, _, _) in enumerate(candidates):
+    for index, (prior_row, prior_raw, _, _, _) in enumerate(candidates):
         prior = json.loads(prior_raw)
         prior_visible = {
             card_id for zone in prior["state"]["zones"]
@@ -167,7 +210,7 @@ def main() -> int:
         }
         if not prior_visible:
             continue
-        for later_row, later_raw, _, _ in candidates[index + 1:]:
+        for later_row, later_raw, _, _, _ in candidates[index + 1:]:
             later = json.loads(later_raw)
             if later["playerId"] != prior["playerId"]:
                 continue
@@ -183,8 +226,17 @@ def main() -> int:
                                       "previouslyKnownIds": len(prior_visible),
                                       "idsLinkedToLaterLibrarySlots": 0})
             break
+    assert reconcealment and any(row["previouslyKnownIds"] > 0 for row in reconcealment)
+    assert {row["structuredDecision"] for row in rows if row.get("structuredDecision")} >= {
+        "SelectCardsDecision", "YesNoDecision",
+    }
+    assert any(row.get("combatPresent") for row in rows)
+    assert any(row.get("visibleOwnLibraryIds", 0) > 0 for row in rows)
+    assert len(selected) == args.max_selected
+    assert sorted(sum(item[0]["profileId"] == profile for item in selected)
+                  for profile in summary["profiles"]) == [args.max_selected // 2] * 2
     selected_meta = []
-    for index, (row, raw, full, compact) in enumerate(selected):
+    for index, (row, raw, full, compact, requests) in enumerate(selected):
         stem = f"sample-{index:02d}"
         (output / f"{stem}-http.json").write_bytes(raw)
         hashes = {"http": _sha(raw)}
@@ -193,6 +245,9 @@ def main() -> int:
             data = text.encode()
             (output / f"{stem}-{label}-input.txt").write_bytes(data)
             hashes[label] = _sha(data)
+            request_bytes = json.dumps(requests[label], sort_keys=True, separators=(",", ":")).encode()
+            (output / f"{stem}-{label}-request.json").write_bytes(request_bytes)
+            hashes[label + "Request"] = _sha(request_bytes)
         selected_meta.append({"index": index, "sourceHttpSha256": row["httpSha256"],
                               "turn": row["turn"], "profileId": row["profileId"],
                               "structuredDecision": row["structuredDecision"],
@@ -209,7 +264,7 @@ def main() -> int:
              "sourceSetSha256": _sha("\n".join(sorted(row["httpSha256"] for row in rows)).encode()),
              "rows": rows, "selected": selected_meta,
              "libraryReconcealment": reconcealment, "paidCalls": 0,
-             "limit": "Scripted fixture Pilot, not canonical foundation Pilot strategy. Model input strings are constructed offline by the production formatter; no provider request was sent."}
+             "limit": "Scripted fixture Pilot, not canonical foundation Pilot strategy. Full and compact request objects, including Binding DeckKnowledge and request-local schema, were constructed offline by the production formatter; no provider request was sent."}
     (output / "corpus-audit.json").write_text(json.dumps(audit, indent=2) + "\n")
     print(json.dumps({"callbacks": len(files), "actions": len(candidates),
                       "selected": len(selected),
