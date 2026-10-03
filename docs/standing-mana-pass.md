@@ -5,7 +5,8 @@ Pilot component. Selecting it requires a new exact Pilot and Binding revision. T
 qualified Foundation Pilot, its `native-no-choice` component, and existing Bindings
 retain their identities and behavior.
 
-The handler first applies the existing native no-choice path. Otherwise, it passes
+The handler validates the acting seat and native action metadata, then reuses the
+existing sole-pass and empty-combat no-choice paths. Otherwise, it passes
 priority only when the current Argentum legal menu contains exactly one affordable
 `PassPriority` and every other action is an `ActivateAbility` marked as a mana
 ability. It checks the acting seat, perspective, action IDs, native action types,

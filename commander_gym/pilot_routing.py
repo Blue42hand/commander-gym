@@ -152,17 +152,15 @@ class StandingManaOnlyPassHandler:
 
     This is a player-behavior policy, not a claim that passing is forced. It is
     deliberately stateless: a changed stack does not wake the provider if the
-    current native menu still has only PassPriority and mana abilities. Its
-    separate component identity leaves the qualified no-choice handler intact.
+    current native menu still has only PassPriority and mana abilities. Sole
+    no-choice actions pass strict wire checks before reuse of the qualified
+    handler; its separate component identity and behavior remain intact.
     """
 
     name: str = "standing-mana-only-pass"
     version: str = "1"
 
     def choose(self, observation: Mapping[str, Any]) -> PilotChoice | None:
-        previous = NativeNoChoiceHandler().choose(observation)
-        if previous is not None:
-            return previous
         if (
             observation.get("terminated") is not False
             or observation.get("pendingDecision") is not None
@@ -171,7 +169,7 @@ class StandingManaOnlyPassHandler:
         ):
             return None
         legal = observation.get("legalActions")
-        if not isinstance(legal, list) or len(legal) < 2:
+        if not isinstance(legal, list) or not legal:
             return None
         seat = observation["agentToAct"]
         ids: set[int] = set()
@@ -200,8 +198,17 @@ class StandingManaOnlyPassHandler:
                 if action.get("affordable") is not True or action.get("isManaAbility") is not False:
                     return None
                 passes.append(action)
+            elif len(legal) == 1 and kind in {"DeclareAttackers", "DeclareBlockers"}:
+                # Retain the certified empty-combat path after validating its
+                # seat and native wire metadata above.
+                continue
             elif kind != "ActivateAbility" or action.get("isManaAbility") is not True:
                 return None
+        previous = NativeNoChoiceHandler().choose(observation)
+        if previous is not None:
+            return previous
+        if len(legal) < 2:
+            return None
         if len(passes) != 1:
             return None
         return ArgentumActionChoice(action_id=passes[0]["actionId"])
