@@ -159,6 +159,7 @@ class StandingManaOnlyPassHandler:
 
     name: str = "standing-mana-only-pass"
     version: str = "1"
+    ignore_unaffordable_abilities: bool = False
 
     def choose(self, observation: Mapping[str, Any]) -> PilotChoice | None:
         if (
@@ -201,6 +202,17 @@ class StandingManaOnlyPassHandler:
             elif len(legal) == 1 and kind in {"DeclareAttackers", "DeclareBlockers"}:
                 # Retain the certified empty-combat path after validating its
                 # seat and native wire metadata above.
+                continue
+            elif (
+                self.ignore_unaffordable_abilities
+                and kind == "ActivateAbility"
+                and action.get("isManaAbility") is False
+                and action.get("affordable") is False
+                and action.get("isAffordable") is False
+            ):
+                # Forge's actionability path ignored actions certified unavailable.
+                # If Argentum later marks this ability affordable, this handler
+                # escalates; this component never infers affordability itself.
                 continue
             elif kind != "ActivateAbility" or action.get("isManaAbility") is not True:
                 return None

@@ -150,6 +150,34 @@ class OpenAIResponsesPilotTests(unittest.TestCase):
         with self.assertRaisesRegex(OpenAIResponsesPilotError, "requires an exact current PassPriority"):
             rejected.choose(action_observation())
 
+    def test_named_forge_wait_requires_versioned_opt_in(self):
+        directive = {"until": "turn_end", "reason": "Defer draw ability this turn",
+                     "deferAbilities": [{"sourceId": "stone", "abilityId": "draw"}]}
+        output = json.dumps({"channel": "action", "semanticId": "argentum-action-v1:pass",
+                             "params": {}, "priorityDelegation": directive})
+        client = FakeClient(FakeResponse(output))
+        pilot = OpenAIResponsesPilot(client=client, model="gpt-test",
+                                    allow_priority_delegation=True, allow_named_deferrals=True)
+        self.assertEqual(pilot.choose(action_observation()).metadata["priorityDelegation"], directive)
+        self.assertIn("deferAbilities", client.responses.calls[0]["instructions"])
+        legacy = OpenAIResponsesPilot(client=FakeClient(FakeResponse(output)), model="gpt-test",
+                                      max_attempts=1, allow_priority_delegation=True)
+        with self.assertRaises(OpenAIResponsesPilotError):
+            legacy.choose(action_observation())
+
+    def test_forge_then_cast_requires_exact_land_selection(self):
+        obs = action_observation()
+        obs["legalActions"][0]["kind"] = "PlayLand"
+        for action in obs["legalActions"]:
+            action["parameterSpec"] = {"allowedFields": {}}
+        output = json.dumps({"channel": "action", "semanticId": "argentum-action-v1:pass",
+                             "params": {}, "thenCast": {"cardId": "hand-2", "reason": "Cast after land"}})
+        client = FakeClient(FakeResponse(output))
+        pilot = OpenAIResponsesPilot(client=client, model="gpt-test",
+                                    allow_priority_delegation=True, allow_named_deferrals=True)
+        self.assertEqual(pilot.choose(obs).metadata["thenCast"]["cardId"], "hand-2")
+        self.assertIn("thenCast", client.responses.calls[0]["text"]["format"]["schema"]["properties"])
+
     def test_native_action_schema_exposes_delegation_only_for_opt_in(self):
         obs = action_observation()
         for action in obs["legalActions"]:

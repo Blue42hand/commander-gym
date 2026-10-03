@@ -168,6 +168,31 @@ class RoutingPilotTests(unittest.TestCase):
             with self.subTest(altered=altered):
                 self.assertIsNone(handler.choose(altered))
 
+    def test_versioned_forge_actionability_skips_only_native_unaffordable_ability(self):
+        passed = {**pass_action(), "isManaAbility": False,
+                  "action": {"type": "PassPriority", "playerId": "player-1"}}
+        ability = {"actionId": 1, "semanticId": "native-ability", "kind": "ActivateAbility",
+                   "isManaAbility": False, "affordable": False, "isAffordable": False,
+                   "action": {"type": "ActivateAbility", "playerId": "player-1"}}
+        current = observation(passed)
+        current["legalActions"] = [passed, ability]
+        old = StandingManaOnlyPassHandler()
+        new = StandingManaOnlyPassHandler(
+            name="native-unaffordable-ability-pass", version="2",
+            ignore_unaffordable_abilities=True,
+        )
+        self.assertIsNone(old.choose(current))
+        self.assertEqual(new.choose(current).action_id, passed["actionId"])
+        for changed in (
+            {**ability, "affordable": True},
+            {**ability, "isAffordable": True},
+            {**ability, "affordable": None},
+            {**ability, "kind": "CastSpell", "action": {"type": "CastSpell", "playerId": "player-1"}},
+        ):
+            with self.subTest(changed=changed):
+                current["legalActions"] = [passed, changed]
+                self.assertIsNone(new.choose(current))
+
     def test_native_no_choice_never_suppresses_a_mana_choice(self):
         handler = NativeNoChoiceHandler()
         pass_only = observation(pass_action())

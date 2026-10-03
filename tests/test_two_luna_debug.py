@@ -2,10 +2,30 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from commander_gym.two_luna_debug import _natural_terminal_game, _summarize
+from commander_gym.two_luna_debug import _ProgressGuard, _natural_terminal_game, _provenance_size, _summarize
 
 
 class TwoLunaDebugReportTests(unittest.TestCase):
+    def test_progress_guard_counts_callbacks_and_api_reservations_but_expires_old_inflight(self):
+        guard = _ProgressGuard(stall_seconds=300, last_change=0)
+        # The third field is the cumulative reservation count. A request that
+        # takes two minutes is activity even before provenance is written.
+        self.assertFalse(guard.observe(("turn-4", 100, 10), 0))
+        self.assertFalse(guard.observe(("turn-4", 100, 10), 250))
+        self.assertFalse(guard.observe(("turn-4", 100, 11), 251))
+        self.assertFalse(guard.observe(("turn-4", 150, 11), 500))
+        self.assertTrue(guard.observe(("turn-4", 150, 11), 800))
+        # Unsettled counts are deliberately absent: three pre-existing
+        # reservations cannot keep a stalled game alive indefinitely.
+
+    def test_provenance_size_reports_missing_and_written_callbacks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "policy.jsonl"
+            self.assertEqual(_provenance_size(path), 0)
+            path.write_text("{}\n")
+            self.assertEqual(_provenance_size(path), 3)
+            self.assertIsNone(_provenance_size(None))
+
     def test_requires_one_played_native_terminal_match(self):
         played = {
             "gameSessionId": "game-1",

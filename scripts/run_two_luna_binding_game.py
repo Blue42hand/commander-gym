@@ -55,7 +55,10 @@ def main():
     parser.add_argument("--profile-b", required=True)
     parser.add_argument("--dry-run", action="store_true", help="reject model dispatch before spend")
     parser.add_argument("--timeout", type=float, default=3600)
+    parser.add_argument("--stall-seconds", type=float, default=600)
     args = parser.parse_args()
+    if args.timeout <= 0 or args.stall_seconds <= 0:
+        parser.error("timeout and stall-seconds must be positive")
     if not args.dry_run and args.api_key_file is None:
         parser.error("--api-key-file is required for a paid game")
     gym = Path(__file__).resolve().parent.parent
@@ -116,7 +119,8 @@ def main():
             "--budget-cap", "0.000000001" if args.dry_run else "5",
             "--provenance", str(run_dir / "policy.jsonl"),
             "--server-log", str(run_dir / "server.log"),
-            "--timeout", str(min(args.timeout, 30) if args.dry_run else args.timeout)],
+            "--timeout", str(min(args.timeout, 30) if args.dry_run else args.timeout),
+            "--stall-seconds", str(min(args.stall_seconds, 30) if args.dry_run else args.stall_seconds)],
             cwd=gym, env=runner_env, check=False)
         print(f"RUN_ARTIFACTS={run_dir}", flush=True)
         print(f"CUMULATIVE_BUDGET_LEDGER={out / 'openai-budget.json'}", flush=True)

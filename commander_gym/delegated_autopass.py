@@ -50,6 +50,63 @@ def _pass_and_mana_only(observation: Mapping[str, Any]) -> Mapping[str, Any] | N
     return None
 
 
+def _nonmana_ability_keys(observation: Mapping[str, Any]) -> tuple[tuple[str, str], ...] | None:
+    """Exact currently executable alternatives; unknown action shapes fail closed."""
+    if _native_pass(observation) is None:
+        return None
+    keys = []
+    for offered in observation["legalActions"]:
+        if not isinstance(offered, Mapping):
+            return None
+        if offered.get("kind") == "PassPriority" or (
+            offered.get("kind") == "ActivateAbility" and offered.get("isManaAbility") is True
+        ):
+            continue
+        # Argentum exposes some currently unaffordable abilities for inspection.
+        # Like Forge's actionability certificate, they need no strategic deferral;
+        # becoming affordable changes this exact executable set and wakes the pilot.
+        if (
+            offered.get("kind") == "ActivateAbility"
+            and offered.get("isManaAbility") is False
+            and offered.get("affordable") is False
+            and offered.get("isAffordable") is False
+            and offered.get("isDecisionOption") is not True
+        ):
+            continue
+        action = offered.get("action")
+        if (
+            offered.get("kind") != "ActivateAbility" or not isinstance(action, Mapping)
+            or offered.get("isManaAbility") is not False
+            or offered.get("isDecisionOption") is True
+        ):
+            return None
+        source, ability = action.get("sourceId"), action.get("abilityId")
+        if not isinstance(source, str) or not source or not isinstance(ability, str) or not ability:
+            return None
+        keys.append((source, ability))
+    return tuple(sorted(set(keys)))
+
+
+def _nonmana_ability_menu_digest(observation: Mapping[str, Any]) -> str | None:
+    keys = _nonmana_ability_keys(observation)
+    if keys is None:
+        return None
+    visible = []
+    for offered in observation["legalActions"]:
+        if offered.get("kind") != "ActivateAbility" or offered.get("isManaAbility") is not False:
+            continue
+        if offered.get("affordable") is False and offered.get("isAffordable") is False:
+            continue
+        # actionId is only a live routing handle. Everything else in the
+        # Argentum-authored offer, including parameterSpec, must remain equal.
+        visible.append({key: value for key, value in offered.items() if key != "actionId"})
+    try:
+        encoded = json.dumps(visible, sort_keys=True)
+    except (TypeError, ValueError):
+        return None
+    return hashlib.sha256(encoded.encode()).hexdigest()
+
+
 def _visible_checkpoint(
     observation: Mapping[str, Any], *, watch_opponents: bool = False,
 ) -> dict[str, Any] | None:
@@ -143,6 +200,109 @@ class _Lease:
     lease_id: str
     watch_opponents: bool = False
     passes: int = 0
+    deferred_abilities: tuple[tuple[str, str], ...] | None = None
+    deferred_menu_digest: str | None = None
+
+
+@dataclass
+class _PendingCast:
+    before: dict[str, Any]
+    land_id: str
+    cast_id: str
+    reason: str
+
+
+def _own_battlefield(checkpoint: Mapping[str, Any]) -> list[str] | None:
+    zones = [zone for zone in checkpoint["zones"]
+             if zone["owner"] == checkpoint["seat"] and zone["kind"] == "Battlefield"]
+    return zones[0]["ids"] if len(zones) == 1 else None
+
+
+def _parameterless_native_cast(offered: Mapping[str, Any]) -> bool:
+    """Require an explicit native no-ActionParams certificate and default cast shape."""
+    spec = offered.get("parameterSpec")
+    action = offered.get("action")
+    if (
+        not isinstance(spec, Mapping) or set(spec) != {"allowedFields"}
+        or spec.get("allowedFields") != {}
+        or not isinstance(action, Mapping) or action.get("type") != "CastSpell"
+        or offered.get("hasXCost") is not False
+        or offered.get("additionalCostInfo") is not None
+        or offered.get("isDecisionOption") is True
+    ):
+        return False
+    defaults = {
+        "additionalCostPayment": None, "alternativeCostType": None,
+        "alternativePayment": None, "castFaceDown": False,
+        "casualtyCreature": None, "chosenModes": [], "conspiredCreatures": [],
+        "damageDistribution": None, "declaredCostSlot": None,
+        "faceIndex": None, "giftRecipient": None,
+        "graveyardCastRider": None, "graveyardLifeCost": 0,
+        "modeDamageDistribution": {}, "modeTargetsOrdered": [],
+        "splicedCardIds": [], "targets": [], "useAlternativeCost": False,
+        "useWithoutPayingManaCost": False, "wasWaterbendPaid": False,
+        "xValue": None,
+    }
+    if any(action.get(field) != value for field, value in defaults.items()):
+        return False
+    return (
+        action.get("paymentStrategy") == {"type": "AutoPay"}
+        and isinstance(action.get("cardId"), str)
+        and isinstance(action.get("playerId"), str)
+        and set(action) == set(defaults) | {"type", "cardId", "playerId", "paymentStrategy"}
+    )
+
+
+def _ready_followup_cast(
+    pending: _PendingCast, now: dict[str, Any] | None, observation: Mapping[str, Any],
+) -> Mapping[str, Any] | None:
+    if now is None or observation.get("pendingDecision") is not None:
+        return None
+    before = pending.before
+    if (
+        now["seat"] != before["seat"] or now["turn"] != before["turn"]
+        or now["phase"] != before["phase"] or now["active"] != now["seat"]
+        or now["stack"] != before["stack"] or now["mana"] != before["mana"]
+        or now["life"] != before["life"] or pending.cast_id not in now["hand"]
+    ):
+        return None
+    old_hand = list(before["hand"])
+    if pending.land_id not in old_hand:
+        return None
+    old_hand.remove(pending.land_id)
+    old_board, new_board = _own_battlefield(before), _own_battlefield(now)
+    if old_board is None or new_board is None or pending.land_id in old_board:
+        return None
+    added = list(new_board)
+    if pending.land_id not in added:
+        return None
+    added.remove(pending.land_id)
+    if now["hand"] != old_hand or added != old_board:
+        return None
+    if [z for z in now["zones"] if z["kind"] != "Battlefield" or z["owner"] != now["seat"]] != [
+        z for z in before["zones"] if z["kind"] != "Battlefield" or z["owner"] != before["seat"]
+    ]:
+        return None
+    if any(now["cards"].get(key) != value for key, value in before["cards"].items()):
+        return None
+    old_log, new_log = before["log"], now["log"]
+    if new_log[:len(old_log)] != old_log or len(new_log) != len(old_log) + 1:
+        return None
+    if not isinstance(new_log[-1], Mapping) or new_log[-1].get("type") != "permanentEntered":
+        return None
+    legal = observation.get("legalActions")
+    if not isinstance(legal, list):
+        return None
+    casts = [action for action in legal if isinstance(action, Mapping)
+             and action.get("kind") == "CastSpell"
+             and isinstance(action.get("action"), Mapping)
+             and action["action"].get("cardId") == pending.cast_id
+             and action["action"].get("playerId") == now["seat"]
+             and action.get("affordable") is True
+             and action.get("isAffordable") is True
+             and _parameterless_native_cast(action)
+             and type(action.get("actionId")) is int]
+    return casts[0] if len(casts) == 1 else None
 
 
 @dataclass
@@ -153,21 +313,35 @@ class DelegatedAutopassPilot:
     name: str = "delegated-autopass"
     version: str = "1"
     max_passes: int = 16
+    allow_named_deferrals: bool = False
     _leases: dict[str, _Lease] = field(default_factory=dict, init=False, repr=False)
+    _pending_casts: dict[str, _PendingCast] = field(default_factory=dict, init=False, repr=False)
     _lock: Lock = field(default_factory=Lock, init=False, repr=False)
 
     def choose(self, observation: Mapping[str, Any]) -> PilotChoice:
         seat = observation.get("agentToAct")
         lease = None
+        pending_cast = None
         if isinstance(seat, str):
             with self._lock:
                 lease = self._leases.pop(seat, None)
+                pending_cast = self._pending_casts.pop(seat, None)
+        if pending_cast is not None:
+            now = _visible_checkpoint(observation, watch_opponents=True)
+            followup = _ready_followup_cast(pending_cast, now, observation)
+            if followup is not None:
+                return ArgentumActionChoice(
+                    action_id=followup["actionId"],
+                    metadata={"forgeThenCast": {"cardId": pending_cast.cast_id,
+                                                "reason": pending_cast.reason,
+                                                "version": self.version}},
+                )
         checkpoint = _visible_checkpoint(
             observation, watch_opponents=lease.watch_opponents if lease else False,
         )
         if isinstance(seat, str):
             if lease is not None and checkpoint is not None and self._continues(lease, checkpoint, observation):
-                passed = _pass_and_mana_only(observation)
+                passed = _native_pass(observation) if lease.deferred_abilities is not None else _pass_and_mana_only(observation)
                 assert passed is not None
                 lease.previous = checkpoint
                 lease.passes += 1
@@ -183,6 +357,35 @@ class DelegatedAutopassPilot:
                 )
 
         choice = self.strategic_pilot.choose(observation)
+        then_cast = choice.metadata.get("thenCast") if isinstance(choice, ArgentumActionChoice) else None
+        if then_cast is not None:
+            current = _visible_checkpoint(observation, watch_opponents=True)
+            legal = observation.get("legalActions")
+            action = next((item for item in legal if isinstance(item, Mapping)
+                           and item.get("actionId") == choice.action_id), None) if isinstance(legal, list) else None
+            land_id = action.get("action", {}).get("cardId") if isinstance(action, Mapping) and isinstance(action.get("action"), Mapping) else None
+            valid = (
+                self.allow_named_deferrals and current is not None
+                and isinstance(then_cast, Mapping) and set(then_cast) == {"cardId", "reason"}
+                and isinstance(then_cast.get("cardId"), str) and then_cast["cardId"]
+                and isinstance(then_cast.get("reason"), str) and then_cast["reason"].strip()
+                and isinstance(action, Mapping) and action.get("kind") == "PlayLand"
+                and isinstance(land_id, str) and land_id in current["hand"]
+                and then_cast["cardId"] in current["hand"] and then_cast["cardId"] != land_id
+                and current["active"] == seat and not current["stack"]
+                and choice.params == {}
+            )
+            if not valid:
+                return ArgentumActionChoice(
+                    action_id=choice.action_id, params=choice.params,
+                    metadata={**dict(choice.metadata), "thenCastRejected": "invalid exact land-to-cast intent"},
+                )
+            with self._lock:
+                self._pending_casts[seat] = _PendingCast(
+                    before=current, land_id=land_id, cast_id=then_cast["cardId"],
+                    reason=then_cast["reason"],
+                )
+            return choice
         # A wake discards the old lease. A new lease needs a fresh checkpoint
         # using the strategic choice's own opponent-watch setting.
         directive = choice.metadata.get("priorityDelegation") if isinstance(choice, ArgentumActionChoice) else None
@@ -190,18 +393,32 @@ class DelegatedAutopassPilot:
             return choice
         if isinstance(directive, Mapping):
             checkpoint = _visible_checkpoint(
-                observation, watch_opponents=directive.get("watchOpponents", False) is True,
+                observation, watch_opponents=(
+                    self.allow_named_deferrals or directive.get("watchOpponents", False) is True
+                ),
             )
         passed = _native_pass(observation)
+        named = self.allow_named_deferrals and isinstance(directive, Mapping) and directive.get("until") == "turn_end"
+        offered = _nonmana_ability_keys(observation) if named else None
+        requested = directive.get("deferAbilities") if named else None
+        requested_keys = None
+        if isinstance(requested, list) and all(
+            isinstance(item, Mapping) and set(item) == {"sourceId", "abilityId"}
+            and isinstance(item.get("sourceId"), str) and isinstance(item.get("abilityId"), str)
+            for item in requested
+        ):
+            requested_keys = tuple(sorted((item["sourceId"], item["abilityId"]) for item in requested))
         if (
             checkpoint is None or passed is None or choice.action_id != passed["actionId"]
             or not isinstance(directive, Mapping)
             or not {"until", "reason"}.issubset(directive)
-            or set(directive) - {"until", "reason", "watchOpponents"}
-            or directive.get("until") not in {"phase_end", "next_own_main"}
+            or set(directive) - ({"until", "reason", "deferAbilities", "watchOpponents"} if named else {"until", "reason", "watchOpponents"})
+            or (named and (offered is None or not offered or requested_keys != offered))
+            or (named and directive.get("watchOpponents", True) is not True)
+            or (not named and directive.get("until") not in {"phase_end", "next_own_main"})
             or not isinstance(directive.get("reason"), str)
             or not directive["reason"].strip()
-            or type(directive.get("watchOpponents", False)) is not bool
+            or (not named and type(directive.get("watchOpponents", False)) is not bool)
             or any(value for key, value in checkpoint["mana"].items() if key != "restrictedMana")
             or checkpoint["mana"].get("restrictedMana")
         ):
@@ -222,14 +439,27 @@ class DelegatedAutopassPilot:
             self._leases[seat] = _Lease(
                 start=checkpoint, previous=checkpoint,
                 until=directive["until"], reason=directive["reason"],
-                lease_id=lease_id, watch_opponents=directive.get("watchOpponents", False),
+                lease_id=lease_id, watch_opponents=(
+                    True if self.allow_named_deferrals else directive.get("watchOpponents", False)
+                ),
+                deferred_abilities=offered if named else None,
+                deferred_menu_digest=_nonmana_ability_menu_digest(observation) if named else None,
             )
         return choice
 
     def _continues(
         self, lease: _Lease, now: dict[str, Any], observation: Mapping[str, Any],
     ) -> bool:
-        if lease.passes >= self.max_passes or _pass_and_mana_only(observation) is None:
+        if lease.passes >= self.max_passes:
+            return False
+        if lease.deferred_abilities is not None:
+            if (
+                now["turn"] != lease.start["turn"]
+                or _nonmana_ability_keys(observation) != lease.deferred_abilities
+                or _nonmana_ability_menu_digest(observation) != lease.deferred_menu_digest
+            ):
+                return False
+        elif _pass_and_mana_only(observation) is None:
             return False
         start, previous = lease.start, lease.previous
         if (

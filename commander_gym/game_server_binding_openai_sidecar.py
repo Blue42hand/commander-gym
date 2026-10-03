@@ -75,6 +75,12 @@ BUILTIN_STANDING_MANA_ONLY_PASS_COMPONENT_REF = ArtifactRef(
     version="1",
     digest="sha256:727132e3a10fd28a551f62324f96e0d0d943560bdb7933c9d6edf9afa4e5c2bd",
 )
+BUILTIN_NATIVE_UNAFFORDABLE_PASS_COMPONENT_REF = ArtifactRef(
+    kind="deterministic-policy",
+    artifact_id="native-unaffordable-ability-pass",
+    version="2",
+    digest="sha256:989156518fba4374673e3218fb9c538898ecef79ea2f02c791c793e1765db443",
+)
 BUILTIN_OPENAI_RESPONSES_COMPONENT_REF = ArtifactRef(
     kind="provider",
     artifact_id="openai-responses",
@@ -86,6 +92,12 @@ BUILTIN_DELEGATED_AUTOPASS_COMPONENT_REF = ArtifactRef(
     artifact_id="openai-responses-delegated-autopass",
     version="1",
     digest="sha256:8f01e8269a20bd30dfab13a025972d7f8320b3fb9296a118d027b84d26487e0c",
+)
+BUILTIN_FORGE_CONDITIONAL_WAIT_COMPONENT_REF = ArtifactRef(
+    kind="provider",
+    artifact_id="openai-responses-forge-conditional-wait",
+    version="2",
+    digest="sha256:339686cd2684e701162b5d73fe0f6a91e0958217466d1a914fc1dc215436dca1",
 )
 
 
@@ -222,6 +234,14 @@ class OpenAIBindingPilotComponentResolver:
         ):
             return MechanicalHandlerSubsystem(StandingManaOnlyPassHandler())
         if (
+            spec.role == "deterministic"
+            and key == _component_key(BUILTIN_NATIVE_UNAFFORDABLE_PASS_COMPONENT_REF)
+        ):
+            return MechanicalHandlerSubsystem(StandingManaOnlyPassHandler(
+                name="native-unaffordable-ability-pass", version="2",
+                ignore_unaffordable_abilities=True,
+            ))
+        if (
             spec.role == "frontier_escalation"
             and key == _component_key(BUILTIN_OPENAI_RESPONSES_COMPONENT_REF)
         ):
@@ -246,6 +266,24 @@ class OpenAIBindingPilotComponentResolver:
                         budget=self.budget,
                         allow_priority_delegation=True,
                     )
+                )
+            )
+        if (
+            spec.role == "frontier_escalation"
+            and key == _component_key(BUILTIN_FORGE_CONDITIONAL_WAIT_COMPONENT_REF)
+        ):
+            return ArtificialPlayerSubsystem(
+                DelegatedAutopassPilot(
+                    OpenAIResponsesPilot(
+                        client=self.client,
+                        model=self.config.model,
+                        max_attempts=self.config.max_attempts,
+                        budget=self.budget,
+                        allow_priority_delegation=True,
+                        allow_named_deferrals=True,
+                    ),
+                    name="forge-conditional-wait", version="2",
+                    allow_named_deferrals=True,
                 )
             )
         raise PilotContractError(

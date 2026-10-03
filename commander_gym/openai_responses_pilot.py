@@ -397,6 +397,7 @@ def _native_action_param_fields(action: Mapping[str, Any]) -> Mapping[str, str] 
 
 def _native_action_format(
     observation: Mapping[str, Any], *, allow_priority_delegation: bool = False,
+    allow_named_deferrals: bool = False,
 ) -> dict[str, Any] | None:
     """Constrain each semantic action to its own Argentum-authored parameter fields."""
 
@@ -437,11 +438,23 @@ def _native_action_format(
         root_properties["priorityDelegation"] = {
             "type": "object",
             "properties": {
-                "until": {"type": "string", "enum": ["phase_end", "next_own_main"]},
+                "until": {"type": "string", "enum": ["phase_end", "next_own_main", "turn_end"] if allow_named_deferrals else ["phase_end", "next_own_main"]},
                 "reason": {"type": "string"},
                 "watchOpponents": {"type": "boolean"},
+                **({"deferAbilities": {"type": "array", "items": {
+                    "type": "object", "properties": {
+                        "sourceId": {"type": "string"}, "abilityId": {"type": "string"},
+                    }, "required": ["sourceId", "abilityId"], "additionalProperties": False,
+                }}} if allow_named_deferrals else {}),
             },
             "required": ["until", "reason"],
+            "additionalProperties": False,
+        }
+    if allow_named_deferrals:
+        root_properties["thenCast"] = {
+            "type": "object",
+            "properties": {"cardId": {"type": "string"}, "reason": {"type": "string"}},
+            "required": ["cardId", "reason"],
             "additionalProperties": False,
         }
     return {
@@ -703,6 +716,7 @@ class OpenAIResponsesPilot:
     max_attempts: int = 2
     budget: OpenAIRunBudget | None = None
     allow_priority_delegation: bool = False
+    allow_named_deferrals: bool = False
     name: str = "openai-responses"
     version: str = "1"
 
@@ -724,6 +738,7 @@ class OpenAIResponsesPilot:
         decision_format = _native_decision_format(observation)
         action_format = None if decision_format is not None else _native_action_format(
             observation, allow_priority_delegation=self.allow_priority_delegation,
+            allow_named_deferrals=self.allow_named_deferrals,
         )
         model_observation = _without_live_routing(observation)
         base_input = "Return one JSON object for this observation:\n" + json.dumps(
@@ -752,16 +767,41 @@ class OpenAIResponsesPilot:
                 "allowed by that action's parameterSpec."
             )
         if self.allow_priority_delegation:
-            request["instructions"] += (
-                "\n\nYou may optionally include priorityDelegation only when choosing "
-                "PassPriority. Set until to phase_end or next_own_main and give a "
-                "concrete reason. Optionally set watchOpponents true; by default "
-                "opponent battlefield changes do not end the reviewed wait. This "
-                "delegates later priority windows with only "
-                "mana abilities until the boundary. New spells, nonmana actions, "
-                "required decisions, or changed own hand/board, life, or mana wake "
-                "you. Omit delegation when floating mana or unreviewed events matter."
-            )
+            if self.allow_named_deferrals:
+                request["instructions"] += (
+                    "\n\nYou may include priorityDelegation only with PassPriority. "
+                    "For Forge-style conditional waiting across phases of the current "
+                    "turn, set until to turn_end, give a concrete reason, and set "
+                    "deferAbilities to every currently affordable nonmana "
+                    "ActivateAbility by its exact action.sourceId and action.abilityId. "
+                    "Omit currently unaffordable abilities. Include the complete set "
+                    "or omit delegation. You may set watchOpponents true; for turn_end "
+                    "it is always true. Only defer abilities you deliberately choose "
+                    "not to use through this turn. New legal alternatives, a changed "
+                    "stack, visible board, hand, resources, life, or required decision "
+                    "wake you. Do not defer tactical activations when timing matters. "
+                    "For shorter waits you may instead set until to phase_end or "
+                    "next_own_main without deferAbilities; those waits continue only "
+                    "while later menus have pass and mana abilities. Never delegate "
+                    "with floating mana or an unreviewed event you need to answer."
+                    " You may attach thenCast only to a selected PlayLand action: "
+                    "name one exact cardId already in your hand and a reason to "
+                    "cast it immediately after the land. Gym will execute that "
+                    "specific cast only if the land transition is isolated and "
+                    "Argentum then offers one affordable CastSpell for that card. "
+                    "A changed state or unavailable cast wakes you instead."
+                )
+            else:
+                request["instructions"] += (
+                    "\n\nYou may optionally include priorityDelegation only when choosing "
+                    "PassPriority. Set until to phase_end or next_own_main and give a "
+                    "concrete reason. Optionally set watchOpponents true; by default "
+                    "opponent battlefield changes do not end the reviewed wait. This "
+                    "delegates later priority windows with only "
+                    "mana abilities until the boundary. New spells, nonmana actions, "
+                    "required decisions, or changed own hand/board, life, or mana wake "
+                    "you. Omit delegation when floating mana or unreviewed events matter."
+                )
         if isinstance(pending, Mapping) and pending.get("requiresStructuredResponse") is True:
             request["instructions"] += (
                 "\n\nFor this structured decision, copy the exact responseType from "
@@ -909,15 +949,43 @@ class OpenAIResponsesPilot:
                 raise OpenAIResponsesPilotError("OpenAI action choice must be a JSON object")
             choice = self._action_choice(action_decision, observation, metadata)
             directive = decision.get("priorityDelegation")
+            then_cast = decision.get("thenCast")
+            if then_cast is not None:
+                if not self.allow_named_deferrals or directive is not None:
+                    raise OpenAIResponsesPilotError("thenCast requires the versioned action-sequence Pilot")
+                legal = observation.get("legalActions")
+                selected = next((item for item in legal if isinstance(item, Mapping)
+                                 and item.get("actionId") == choice.action_id), None) if isinstance(legal, list) else None
+                if (
+                    not isinstance(then_cast, Mapping)
+                    or set(then_cast) != {"cardId", "reason"}
+                    or not isinstance(then_cast.get("cardId"), str) or not then_cast["cardId"]
+                    or not isinstance(then_cast.get("reason"), str) or not then_cast["reason"].strip()
+                    or not isinstance(selected, Mapping) or selected.get("kind") != "PlayLand"
+                ):
+                    raise OpenAIResponsesPilotError("thenCast requires an exact PlayLand and card intent")
+                return ArgentumActionChoice(
+                    action_id=choice.action_id, params=choice.params,
+                    metadata={**dict(choice.metadata), "thenCast": dict(then_cast)},
+                )
             if directive is None:
                 return choice
             if not self.allow_priority_delegation:
                 raise OpenAIResponsesPilotError("priority delegation is not enabled for this Pilot")
+            named = self.allow_named_deferrals and isinstance(directive, Mapping) and directive.get("until") == "turn_end"
+            deferred = directive.get("deferAbilities") if named else None
             if (
                 not isinstance(directive, Mapping)
                     or not {"until", "reason"}.issubset(directive)
-                    or set(directive) - {"until", "reason", "watchOpponents"}
-                    or directive.get("until") not in {"phase_end", "next_own_main"}
+                    or set(directive) - ({"until", "reason", "deferAbilities", "watchOpponents"} if named else {"until", "reason", "watchOpponents"})
+                    or directive.get("until") not in ({"turn_end"} if named else {"phase_end", "next_own_main"})
+                    or (named and directive.get("watchOpponents", True) is not True)
+                    or (named and (not isinstance(deferred, list) or not deferred or any(
+                        not isinstance(item, Mapping) or set(item) != {"sourceId", "abilityId"}
+                        or not isinstance(item.get("sourceId"), str)
+                        or not isinstance(item.get("abilityId"), str)
+                        for item in deferred
+                    )))
                     or not isinstance(directive.get("reason"), str)
                     or not directive["reason"].strip()
                     or type(directive.get("watchOpponents", False)) is not bool
@@ -937,9 +1005,9 @@ class OpenAIResponsesPilot:
                 metadata={**dict(choice.metadata), "priorityDelegation": dict(directive)},
             )
         if channel == "decision":
-            if "priorityDelegation" in decision:
+            if "priorityDelegation" in decision or "thenCast" in decision:
                 raise OpenAIResponsesPilotError(
-                    "priority delegation cannot accompany a structured decision"
+                    "priority delegation or action sequence cannot accompany a structured decision"
                 )
             return self._decision_choice(decision, observation, metadata)
         raise OpenAIResponsesPilotError(
