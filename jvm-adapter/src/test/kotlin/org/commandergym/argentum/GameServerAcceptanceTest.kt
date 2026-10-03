@@ -165,7 +165,12 @@ class GameServerAcceptanceTest {
                         .jsonObject["agentToAct"]!!.jsonPrimitive.contentOrNull == seatId
             }
             assertOpponentHandMasked(policyObservation, seatId)
+            // Assert the exact sidecar callback shape, including opaque library slots.
+            assertOpponentLibraryMasked(policyObservation, seatId)
             assertEquals("false", context.environment.getProperty("game.debug-mode"))
+            System.getenv("COMMANDER_GYM_NATIVE_FIXTURE_PATH")?.let { fixturePath ->
+                Files.writeString(Path.of(fixturePath), policyObservation)
+            }
 
             val fullStatesBefore = client.fullStateCount()
             client.send(ClientMessage.RequestResync)
@@ -371,6 +376,22 @@ class GameServerAcceptanceTest {
                 zone["ownerId"]?.jsonPrimitive?.contentOrNull != aiSeatId &&
                 card["name"]?.jsonPrimitive?.contentOrNull != null
         }, "AI callback exposed an opponent hand card name")
+    }
+
+    private fun assertOpponentLibraryMasked(evidence: String, aiSeatId: String) {
+        val state = json.parseToJsonElement(evidence).jsonObject["observation"]!!
+            .jsonObject["state"]!!.jsonObject
+        val opponentLibraries = state["zones"]!!.jsonArray.map { it.jsonObject }.filter { zone ->
+            val zoneId = zone["zoneId"]!!.jsonObject
+            zoneId["zoneType"]!!.jsonPrimitive.contentOrNull == "Library" &&
+                zoneId["ownerId"]!!.jsonPrimitive.contentOrNull != aiSeatId
+        }
+        assertEquals(1, opponentLibraries.size)
+        val library = opponentLibraries.single()
+        val cardIds = library["cardIds"]!!.jsonArray.map { it.jsonPrimitive.contentOrNull!! }
+        assertTrue(cardIds.isNotEmpty())
+        assertTrue(cardIds.all { it.startsWith("client-hidden-library-slot:") })
+        assertTrue(cardIds.none { it in state["cards"]!!.jsonObject })
     }
 
     private fun await(timeout: Duration, description: String, predicate: () -> Boolean) {
