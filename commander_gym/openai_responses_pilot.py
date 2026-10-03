@@ -450,6 +450,13 @@ def _native_action_format(
             "required": ["until", "reason"],
             "additionalProperties": False,
         }
+    if allow_named_deferrals:
+        root_properties["thenCast"] = {
+            "type": "object",
+            "properties": {"cardId": {"type": "string"}, "reason": {"type": "string"}},
+            "required": ["cardId", "reason"],
+            "additionalProperties": False,
+        }
     return {
         "type": "json_schema",
         "name": "commander_gym_native_action",
@@ -777,6 +784,12 @@ class OpenAIResponsesPilot:
                     "next_own_main without deferAbilities; those waits continue only "
                     "while later menus have pass and mana abilities. Never delegate "
                     "with floating mana or an unreviewed event you need to answer."
+                    " You may attach thenCast only to a selected PlayLand action: "
+                    "name one exact cardId already in your hand and a reason to "
+                    "cast it immediately after the land. Gym will execute that "
+                    "specific cast only if the land transition is isolated and "
+                    "Argentum then offers one affordable CastSpell for that card. "
+                    "A changed state or unavailable cast wakes you instead."
                 )
             else:
                 request["instructions"] += (
@@ -936,6 +949,25 @@ class OpenAIResponsesPilot:
                 raise OpenAIResponsesPilotError("OpenAI action choice must be a JSON object")
             choice = self._action_choice(action_decision, observation, metadata)
             directive = decision.get("priorityDelegation")
+            then_cast = decision.get("thenCast")
+            if then_cast is not None:
+                if not self.allow_named_deferrals or directive is not None:
+                    raise OpenAIResponsesPilotError("thenCast requires the versioned action-sequence Pilot")
+                legal = observation.get("legalActions")
+                selected = next((item for item in legal if isinstance(item, Mapping)
+                                 and item.get("actionId") == choice.action_id), None) if isinstance(legal, list) else None
+                if (
+                    not isinstance(then_cast, Mapping)
+                    or set(then_cast) != {"cardId", "reason"}
+                    or not isinstance(then_cast.get("cardId"), str) or not then_cast["cardId"]
+                    or not isinstance(then_cast.get("reason"), str) or not then_cast["reason"].strip()
+                    or not isinstance(selected, Mapping) or selected.get("kind") != "PlayLand"
+                ):
+                    raise OpenAIResponsesPilotError("thenCast requires an exact PlayLand and card intent")
+                return ArgentumActionChoice(
+                    action_id=choice.action_id, params=choice.params,
+                    metadata={**dict(choice.metadata), "thenCast": dict(then_cast)},
+                )
             if directive is None:
                 return choice
             if not self.allow_priority_delegation:
@@ -973,9 +1005,9 @@ class OpenAIResponsesPilot:
                 metadata={**dict(choice.metadata), "priorityDelegation": dict(directive)},
             )
         if channel == "decision":
-            if "priorityDelegation" in decision:
+            if "priorityDelegation" in decision or "thenCast" in decision:
                 raise OpenAIResponsesPilotError(
-                    "priority delegation cannot accompany a structured decision"
+                    "priority delegation or action sequence cannot accompany a structured decision"
                 )
             return self._decision_choice(decision, observation, metadata)
         raise OpenAIResponsesPilotError(

@@ -97,7 +97,7 @@ BUILTIN_FORGE_CONDITIONAL_WAIT_COMPONENT_REF = ArtifactRef(
     kind="provider",
     artifact_id="openai-responses-forge-conditional-wait",
     version="2",
-    digest="sha256:77aea1a5c71b7014859ed716cddb150870e687215f6f0469305ae7d8a5b42937",
+    digest="sha256:08f0277ef839d75abae5b2b624365cf6670f04409bf770da70a6d5059249c41a",
 )
 
 

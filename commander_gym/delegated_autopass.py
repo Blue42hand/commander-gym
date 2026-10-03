@@ -205,6 +205,70 @@ class _Lease:
 
 
 @dataclass
+class _PendingCast:
+    before: dict[str, Any]
+    land_id: str
+    cast_id: str
+    reason: str
+
+
+def _own_battlefield(checkpoint: Mapping[str, Any]) -> list[str] | None:
+    zones = [zone for zone in checkpoint["zones"]
+             if zone["owner"] == checkpoint["seat"] and zone["kind"] == "Battlefield"]
+    return zones[0]["ids"] if len(zones) == 1 else None
+
+
+def _ready_followup_cast(
+    pending: _PendingCast, now: dict[str, Any] | None, observation: Mapping[str, Any],
+) -> Mapping[str, Any] | None:
+    if now is None or observation.get("pendingDecision") is not None:
+        return None
+    before = pending.before
+    if (
+        now["seat"] != before["seat"] or now["turn"] != before["turn"]
+        or now["phase"] != before["phase"] or now["active"] != now["seat"]
+        or now["stack"] != before["stack"] or now["mana"] != before["mana"]
+        or now["life"] != before["life"] or pending.cast_id not in now["hand"]
+    ):
+        return None
+    old_hand = list(before["hand"])
+    if pending.land_id not in old_hand:
+        return None
+    old_hand.remove(pending.land_id)
+    old_board, new_board = _own_battlefield(before), _own_battlefield(now)
+    if old_board is None or new_board is None or pending.land_id in old_board:
+        return None
+    added = list(new_board)
+    if pending.land_id not in added:
+        return None
+    added.remove(pending.land_id)
+    if now["hand"] != old_hand or added != old_board:
+        return None
+    if [z for z in now["zones"] if z["kind"] != "Battlefield" or z["owner"] != now["seat"]] != [
+        z for z in before["zones"] if z["kind"] != "Battlefield" or z["owner"] != before["seat"]
+    ]:
+        return None
+    if any(now["cards"].get(key) != value for key, value in before["cards"].items()):
+        return None
+    old_log, new_log = before["log"], now["log"]
+    if new_log[:len(old_log)] != old_log or len(new_log) != len(old_log) + 1:
+        return None
+    if not isinstance(new_log[-1], Mapping) or new_log[-1].get("type") != "permanentEntered":
+        return None
+    legal = observation.get("legalActions")
+    if not isinstance(legal, list):
+        return None
+    casts = [action for action in legal if isinstance(action, Mapping)
+             and action.get("kind") == "CastSpell"
+             and isinstance(action.get("action"), Mapping)
+             and action["action"].get("cardId") == pending.cast_id
+             and action.get("affordable") is True
+             and action.get("isAffordable") is True
+             and type(action.get("actionId")) is int]
+    return casts[0] if len(casts) == 1 else None
+
+
+@dataclass
 class DelegatedAutopassPilot:
     """Opt-in frontier component carrying explicit, per-seat strategic leases."""
 
@@ -214,14 +278,27 @@ class DelegatedAutopassPilot:
     max_passes: int = 16
     allow_named_deferrals: bool = False
     _leases: dict[str, _Lease] = field(default_factory=dict, init=False, repr=False)
+    _pending_casts: dict[str, _PendingCast] = field(default_factory=dict, init=False, repr=False)
     _lock: Lock = field(default_factory=Lock, init=False, repr=False)
 
     def choose(self, observation: Mapping[str, Any]) -> PilotChoice:
         seat = observation.get("agentToAct")
         lease = None
+        pending_cast = None
         if isinstance(seat, str):
             with self._lock:
                 lease = self._leases.pop(seat, None)
+                pending_cast = self._pending_casts.pop(seat, None)
+        if pending_cast is not None:
+            now = _visible_checkpoint(observation, watch_opponents=True)
+            followup = _ready_followup_cast(pending_cast, now, observation)
+            if followup is not None:
+                return ArgentumActionChoice(
+                    action_id=followup["actionId"],
+                    metadata={"forgeThenCast": {"cardId": pending_cast.cast_id,
+                                                "reason": pending_cast.reason,
+                                                "version": self.version}},
+                )
         checkpoint = _visible_checkpoint(
             observation, watch_opponents=lease.watch_opponents if lease else False,
         )
@@ -243,6 +320,35 @@ class DelegatedAutopassPilot:
                 )
 
         choice = self.strategic_pilot.choose(observation)
+        then_cast = choice.metadata.get("thenCast") if isinstance(choice, ArgentumActionChoice) else None
+        if then_cast is not None:
+            current = _visible_checkpoint(observation, watch_opponents=True)
+            legal = observation.get("legalActions")
+            action = next((item for item in legal if isinstance(item, Mapping)
+                           and item.get("actionId") == choice.action_id), None) if isinstance(legal, list) else None
+            land_id = action.get("action", {}).get("cardId") if isinstance(action, Mapping) and isinstance(action.get("action"), Mapping) else None
+            valid = (
+                self.allow_named_deferrals and current is not None
+                and isinstance(then_cast, Mapping) and set(then_cast) == {"cardId", "reason"}
+                and isinstance(then_cast.get("cardId"), str) and then_cast["cardId"]
+                and isinstance(then_cast.get("reason"), str) and then_cast["reason"].strip()
+                and isinstance(action, Mapping) and action.get("kind") == "PlayLand"
+                and isinstance(land_id, str) and land_id in current["hand"]
+                and then_cast["cardId"] in current["hand"] and then_cast["cardId"] != land_id
+                and current["active"] == seat and not current["stack"]
+                and choice.params == {}
+            )
+            if not valid:
+                return ArgentumActionChoice(
+                    action_id=choice.action_id, params=choice.params,
+                    metadata={**dict(choice.metadata), "thenCastRejected": "invalid exact land-to-cast intent"},
+                )
+            with self._lock:
+                self._pending_casts[seat] = _PendingCast(
+                    before=current, land_id=land_id, cast_id=then_cast["cardId"],
+                    reason=then_cast["reason"],
+                )
+            return choice
         # A wake discards the old lease. A new lease needs a fresh checkpoint
         # using the strategic choice's own opponent-watch setting.
         directive = choice.metadata.get("priorityDelegation") if isinstance(choice, ArgentumActionChoice) else None

@@ -63,6 +63,45 @@ class ScriptedPilot:
 
 
 class DelegatedAutopassTests(unittest.TestCase):
+    def test_forge_then_cast_runs_only_after_isolated_native_land_transition(self):
+        class LandPilot:
+            name, version = "scripted", "1"
+            calls = 0
+
+            def choose(self, observation):
+                self.calls += 1
+                return ArgentumActionChoice(0, metadata={"thenCast": {
+                    "cardId": "h2", "reason": "Play the planned follow-up creature",
+                }}) if self.calls == 1 else ArgentumActionChoice(0)
+
+        strategic = LandPilot()
+        pilot = DelegatedAutopassPilot(strategic, version="2", allow_named_deferrals=True)
+        start = observation(legal=[
+            {"actionId": 0, "kind": "PlayLand", "action": {"cardId": "h1"}},
+        ])
+        start["state"]["zones"][0]["cardIds"] = ["h1", "h2"]
+        pilot.choose(start)
+        later = copy.deepcopy(start)
+        later["state"]["zones"][0]["cardIds"] = ["h2"]
+        later["state"]["zones"][1]["cardIds"] = ["b1", "h1"]
+        later["state"]["cards"]["h1"] = {"name": "Played Land", "tapped": False}
+        later["state"]["gameLog"] = [{"type": "permanentEntered"}]
+        later["legalActions"] = [{"actionId": 7, "kind": "CastSpell", "affordable": True,
+                                  "isAffordable": True, "action": {"cardId": "h2"}}]
+        result = pilot.choose(later)
+        self.assertEqual(result.action_id, 7)
+        self.assertEqual(result.metadata["forgeThenCast"]["cardId"], "h2")
+        self.assertEqual(strategic.calls, 1)
+
+        # A new stack object means a real decision happened between the steps.
+        strategic = LandPilot()
+        pilot = DelegatedAutopassPilot(strategic, allow_named_deferrals=True)
+        pilot.choose(start)
+        interrupted = copy.deepcopy(later)
+        interrupted["state"]["zones"][-1]["cardIds"] = ["new-spell"]
+        pilot.choose(interrupted)
+        self.assertEqual(strategic.calls, 2)
+
     def test_named_forge_wait_crosses_phase_then_wakes_at_turn_end(self):
         class NamedPilot:
             name, version = "scripted", "1"

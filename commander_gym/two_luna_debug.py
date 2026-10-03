@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
+from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
@@ -174,6 +175,31 @@ def _natural_terminal_game(finished: Any) -> dict[str, Any] | None:
     if not (isinstance(game.get("winnerId"), str) or game.get("isDraw") is True):
         return None
     return dict(game)
+
+
+@dataclass
+class _ProgressGuard:
+    """Observe native progress and request reservations, not just turn changes."""
+
+    stall_seconds: float
+    last_change: float
+    signature: tuple[Any, ...] | None = None
+
+    def observe(self, signature: tuple[Any, ...], now: float) -> bool:
+        if signature != self.signature:
+            self.signature = signature
+            self.last_change = now
+            return False
+        return now - self.last_change >= self.stall_seconds
+
+
+def _provenance_size(path: Path | None) -> int | None:
+    if path is None:
+        return None
+    try:
+        return path.stat().st_size
+    except FileNotFoundError:
+        return 0
 
 
 def _summarize(
@@ -370,11 +396,14 @@ def run(args: argparse.Namespace) -> int:
         raise RuntimeError(f"AI tournament did not return lobbyId: {created}")
 
     deadline = time.monotonic() + args.timeout
+    progress_guard = _ProgressGuard(args.stall_seconds, time.monotonic())
+    provenance_path = Path(args.provenance) if args.provenance else None
     game_ids: list[str] = []
     max_turn = 0
     last_signature: tuple[Any, ...] | None = None
     completed = False
     terminal_evidence: dict[str, Any] | None = None
+    stop_reason = "emergency_ceiling"
 
     while time.monotonic() < deadline:
         status = _request_json(f"{base}/api/dev/ai-tournament/{lobby_id}")
@@ -416,6 +445,19 @@ def run(args: argparse.Namespace) -> int:
             last_signature = signature
         if status.get("complete") is True:
             completed = terminal_evidence is not None
+            stop_reason = "native_complete" if completed else "native_complete_without_terminal"
+            break
+        # A native callback can advance inside one turn without changing the
+        # tournament status. Provenance growth captures it; request reservations
+        # capture an API attempt before any response or provenance write. Old
+        # unsettled reservations never count as live progress.
+        progress_signature = (
+            signature,
+            _provenance_size(provenance_path),
+            budget.snapshot()["requests"],
+        )
+        if progress_guard.observe(progress_signature, time.monotonic()):
+            stop_reason = "no_native_or_api_progress"
             break
         time.sleep(args.poll_seconds)
 
@@ -432,6 +474,7 @@ def run(args: argparse.Namespace) -> int:
         wall_time_seconds=time.monotonic() - run_started,
     )
     result["terminalEvidence"] = terminal_evidence
+    result["stopReason"] = stop_reason
     after = budget.snapshot()
     result["budget"] = {
         "capUsd": after["capUsd"],
@@ -458,11 +501,17 @@ def main() -> int:
     parser.add_argument("--profile-b", required=True)
     parser.add_argument("--budget-ledger", required=True)
     parser.add_argument("--budget-cap", type=float, default=5.0)
-    parser.add_argument("--timeout", type=float, default=900)
+    parser.add_argument("--timeout", type=float, default=3600,
+                        help="emergency wall-time ceiling; natural completion remains the goal")
+    parser.add_argument("--stall-seconds", type=float, default=600,
+                        help="stop after no native callback, turn, or API reservation progress")
     parser.add_argument("--poll-seconds", type=float, default=1.0)
     parser.add_argument("--provenance")
     parser.add_argument("--server-log")
-    return run(parser.parse_args())
+    args = parser.parse_args()
+    if args.timeout <= 0 or args.stall_seconds <= 0 or args.poll_seconds <= 0:
+        parser.error("timeout, stall-seconds, and poll-seconds must be positive")
+    return run(args)
 
 
 if __name__ == "__main__":
