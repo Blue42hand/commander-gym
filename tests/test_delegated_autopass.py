@@ -1,0 +1,194 @@
+import copy
+import json
+import unittest
+
+from commander_gym.delegated_autopass import DelegatedAutopassPilot
+from commander_gym.openai_responses_pilot import OpenAIResponsesPilot
+from commander_gym.pilot import ArgentumActionChoice, ArgentumDecisionChoice
+
+
+def observation(*, turn=1, step="PRECOMBAT_MAIN", legal=None):
+    return {
+        "agentToAct": "p1", "perspectivePlayerId": "p1", "terminated": False,
+        "pendingDecision": None,
+        "legalActions": legal if legal is not None else [
+            {"actionId": 0, "kind": "PassPriority"},
+            {"actionId": 1, "kind": "ActivateAbility", "isManaAbility": True},
+        ],
+        "state": {
+            "turnNumber": turn, "currentStep": step, "currentPhase": (
+                "COMBAT" if step in {"DECLARE_ATTACKERS", "DECLARE_BLOCKERS"} else step
+            ), "activePlayerId": "p1",
+            "priorityPlayerId": "p1",
+            "players": [
+                {"playerId": "p1", "life": 40, "poisonCounters": 0,
+                 "commanderDamage": [], "manaPool": {"red": 0, "restrictedMana": []}},
+                {"playerId": "p2", "life": 40, "poisonCounters": 0,
+                 "commanderDamage": [], "manaPool": {"blue": 0, "restrictedMana": []}},
+            ],
+            "zones": [
+                {"zoneId": {"ownerId": "p1", "zoneType": "Hand"}, "cardIds": ["h1"]},
+                {"zoneId": {"ownerId": "p1", "zoneType": "Battlefield"}, "cardIds": ["b1"]},
+                {"zoneId": {"ownerId": "p2", "zoneType": "Battlefield"}, "cardIds": []},
+                {"zoneId": {"ownerId": "p1", "zoneType": "Stack"}, "cardIds": []},
+            ],
+            "cards": {"b1": {"name": "Land", "tapped": False}},
+            "gameLog": [],
+        },
+    }
+
+
+class ScriptedPilot:
+    name = "scripted"
+    version = "1"
+
+    def __init__(self, until="phase_end", watch_opponents=False):
+        self.calls = 0
+        self.until = until
+        self.watch_opponents = watch_opponents
+
+    def choose(self, observation):
+        self.calls += 1
+        if observation.get("pendingDecision") is not None:
+            return ArgentumDecisionChoice({"type": "NumberChosenResponse", "decisionId": "d1", "number": 1})
+        return ArgentumActionChoice(
+            0, metadata=(
+                {"priorityDelegation": {
+                    "until": self.until, "reason": "Reviewed no action this phase",
+                    "watchOpponents": self.watch_opponents,
+                }}
+                if self.calls == 1 else {}
+            ),
+        )
+
+
+class DelegatedAutopassTests(unittest.TestCase):
+    def test_one_model_approved_pass_covers_later_native_mana_window(self):
+        class Responses:
+            calls = 0
+
+            def create(self, **kwargs):
+                self.calls += 1
+                return type("Response", (), {
+                    "status": "completed",
+                    "output_text": json.dumps({
+                        "channel": "action", "semanticId": "native-pass",
+                        "params": {},
+                        "priorityDelegation": {
+                            "until": "phase_end", "reason": "Reviewed this priority window",
+                        },
+                    }),
+                })()
+
+        client = type("Client", (), {"responses": Responses()})()
+        strategic = OpenAIResponsesPilot(
+            client=client, model="gpt-test", allow_priority_delegation=True,
+        )
+        pilot = DelegatedAutopassPilot(strategic)
+        current = observation()
+        current["legalActions"][0]["semanticId"] = "native-pass"
+        current["legalActions"][1]["semanticId"] = "native-mana"
+        self.assertEqual(pilot.choose(current).action_id, 0)
+        later = copy.deepcopy(current)
+        self.assertEqual(pilot.choose(later).metadata["delegatedPass"]["ordinal"], 1)
+        self.assertEqual(client.responses.calls, 1)
+
+    def test_approved_wait_passes_mana_only_and_expires_at_phase_boundary(self):
+        strategic = ScriptedPilot()
+        pilot = DelegatedAutopassPilot(strategic)
+        first = observation()
+        pilot.choose(first)
+        self.assertEqual(pilot.choose(copy.deepcopy(first)).action_id, 0)
+        self.assertEqual(strategic.calls, 1)
+        later = observation(step="POSTCOMBAT_MAIN")
+        pilot.choose(later)
+        self.assertEqual(strategic.calls, 2)
+
+    def test_new_payable_action_stack_or_private_change_wakes(self):
+        for change in ("spell", "ability", "stack", "hand", "battlefield", "life", "mana", "log"):
+            with self.subTest(change=change):
+                strategic = ScriptedPilot()
+                pilot = DelegatedAutopassPilot(strategic)
+                base = observation()
+                pilot.choose(base)
+                later = copy.deepcopy(base)
+                if change == "spell":
+                    later["legalActions"].append({"actionId": 2, "kind": "CastSpell", "affordable": True})
+                elif change == "ability":
+                    later["legalActions"].append({"actionId": 2, "kind": "ActivateAbility", "isManaAbility": False})
+                elif change == "stack":
+                    later["state"]["zones"][-1]["cardIds"].append("s1")
+                elif change == "hand":
+                    later["state"]["zones"][0]["cardIds"].append("h2")
+                elif change == "battlefield":
+                    later["state"]["cards"]["b1"]["tapped"] = True
+                elif change == "life":
+                    later["state"]["players"][0]["life"] = 39
+                elif change == "mana":
+                    later["state"]["players"][0]["manaPool"]["red"] = 1
+                elif change == "log":
+                    later["state"]["gameLog"].append({"type": "spellCast"})
+                pilot.choose(later)
+                self.assertEqual(strategic.calls, 2)
+
+    def test_required_decision_missing_state_and_stale_turn_wake(self):
+        for change in ("decision", "missing", "stale"):
+            with self.subTest(change=change):
+                strategic = ScriptedPilot(until="next_own_main")
+                pilot = DelegatedAutopassPilot(strategic)
+                pilot.choose(observation())
+                later = observation()
+                if change == "decision":
+                    later["pendingDecision"] = {"decisionId": "d1", "requiresStructuredResponse": True}
+                elif change == "missing":
+                    del later["state"]["gameLog"]
+                else:
+                    later["state"]["turnNumber"] = 0
+                pilot.choose(later)
+                self.assertEqual(strategic.calls, 2)
+
+    def test_float_mana_rejects_delegation_and_does_not_arm(self):
+        strategic = ScriptedPilot()
+        pilot = DelegatedAutopassPilot(strategic)
+        first = observation()
+        first["state"]["players"][0]["manaPool"]["red"] = 1
+        rejected = pilot.choose(first)
+        self.assertIn("priorityDelegationRejected", rejected.metadata)
+        pilot.choose(first)
+        self.assertEqual(strategic.calls, 2)
+
+    def test_next_own_main_and_explicit_opponent_watch(self):
+        strategic = ScriptedPilot(until="next_own_main")
+        pilot = DelegatedAutopassPilot(strategic)
+        pilot.choose(observation())
+        opponent_turn = observation(turn=2, step="PRECOMBAT_MAIN")
+        opponent_turn["state"]["activePlayerId"] = "p2"
+        opponent_turn["state"]["gameLog"] = [{"type": "turnChanged"}]
+        opponent_turn["state"]["zones"][2]["cardIds"] = ["opponent-land"]
+        self.assertEqual(pilot.choose(opponent_turn).metadata["delegatedPass"]["ordinal"], 1)
+        own_main = observation(turn=3)
+        own_main["state"]["gameLog"] = [{"type": "turnChanged"}, {"type": "turnChanged"}]
+        pilot.choose(own_main)
+        self.assertEqual(strategic.calls, 2)
+
+        strategic = ScriptedPilot(watch_opponents=True)
+        pilot = DelegatedAutopassPilot(strategic)
+        pilot.choose(observation())
+        opponent_land = observation()
+        opponent_land["state"]["zones"][2]["cardIds"] = ["opponent-land"]
+        opponent_land["state"]["gameLog"] = [{"type": "permanentEntered"}]
+        pilot.choose(opponent_land)
+        self.assertEqual(strategic.calls, 2)
+
+    def test_pass_limit_expires_lease(self):
+        strategic = ScriptedPilot(until="next_own_main")
+        pilot = DelegatedAutopassPilot(strategic, max_passes=1)
+        same = observation()
+        pilot.choose(same)
+        self.assertIn("delegatedPass", pilot.choose(copy.deepcopy(same)).metadata)
+        pilot.choose(copy.deepcopy(same))
+        self.assertEqual(strategic.calls, 2)
+
+
+if __name__ == "__main__":
+    unittest.main()

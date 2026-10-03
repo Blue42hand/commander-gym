@@ -191,6 +191,7 @@ def _summarize(
     strategic_by_kind = Counter()
     mechanical_by_handler = Counter()
     provider_calls = 0
+    delegated_passes = 0
     retries = 0
     input_tokens = 0
     output_tokens = 0
@@ -200,6 +201,8 @@ def _summarize(
 
     for record in records:
         metadata = _metadata(record)
+        if isinstance(metadata.get("delegatedPass"), Mapping):
+            delegated_passes += 1
         routing = metadata.get("routing")
         if isinstance(routing, Mapping):
             route_path = str(routing.get("path", "unknown"))
@@ -306,6 +309,7 @@ def _summarize(
         "strategicByKind": dict(strategic_by_kind),
         "mechanicalByHandler": dict(mechanical_by_handler),
         "providerCalls": provider_calls,
+        "delegatedPasses": delegated_passes,
         "providerRequests": provider_calls + retries,
         "validationRetries": retries,
         "providerWallTimeMs": round(provider_wall_time_ms, 3),
@@ -313,7 +317,7 @@ def _summarize(
         "inputTokens": input_tokens,
         "cachedInputTokens": cached_input_tokens,
         "outputTokens": output_tokens,
-        "strategicWakesAvoided": routes.get("mechanical", 0),
+        "strategicWakesAvoided": routes.get("mechanical", 0) + delegated_passes,
         "avoidableStrategicWakes": avoidable,
         "communicationErrors": communication_errors[:20],
         "skillReviewFlags": skill_flags,

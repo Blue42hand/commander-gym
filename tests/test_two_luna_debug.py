@@ -86,6 +86,14 @@ class TwoLunaDebugReportTests(unittest.TestCase):
                 },
             },
         ]
+        records.append({
+            "callback": "chooseAction", "playerId": "ai-a",
+            "observation": records[0]["observation"],
+            "choice": {"channel": "action", "metadata": {
+                "routing": {"path": "composed"},
+                "delegatedPass": {"leaseId": "lease-1", "strategicWakeAvoided": True},
+            }},
+        })
         with tempfile.TemporaryDirectory() as directory:
             log = Path(directory) / "server.log"
             log.write_text("normal game log\n")
@@ -103,7 +111,8 @@ class TwoLunaDebugReportTests(unittest.TestCase):
         self.assertTrue(summary["provenanceComplete"])
         self.assertEqual(summary["policySeats"], ["ai-a", "ai-b"])
         self.assertEqual(summary["providerCalls"], 1)
-        self.assertEqual(summary["strategicWakesAvoided"], 1)
+        self.assertEqual(summary["strategicWakesAvoided"], 2)
+        self.assertEqual(summary["delegatedPasses"], 1)
         self.assertEqual(summary["strategicByKind"], {"chooseAction": 1})
         self.assertEqual(summary["mechanicalByHandler"], {"certified-native-decision": 1})
         self.assertEqual(summary["inputTokens"], 20)

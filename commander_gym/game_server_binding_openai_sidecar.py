@@ -22,6 +22,7 @@ from typing import Any, Mapping
 
 from .binding_catalog import BindingCatalogError, load_binding_catalog
 from .deck_package import ArtifactRef
+from .delegated_autopass import DelegatedAutopassPilot
 from .game_server_bindings import GameServerBindingError, GameServerBindingRegistry
 from .game_server_openai_sidecar import (
     JsonlSeatProvenanceWriter,
@@ -72,6 +73,12 @@ BUILTIN_OPENAI_RESPONSES_COMPONENT_REF = ArtifactRef(
     artifact_id="openai-responses",
     version="1",
     digest="sha256:5010883834fef52a65e49a2fc245ec9faa506badcae64ae5f16cdf65e70dac92",
+)
+BUILTIN_DELEGATED_AUTOPASS_COMPONENT_REF = ArtifactRef(
+    kind="provider",
+    artifact_id="openai-responses-delegated-autopass",
+    version="1",
+    digest="sha256:8f01e8269a20bd30dfab13a025972d7f8320b3fb9296a118d027b84d26487e0c",
 )
 
 
@@ -212,6 +219,21 @@ class OpenAIBindingPilotComponentResolver:
                     model=self.config.model,
                     max_attempts=self.config.max_attempts,
                     budget=self.budget,
+                )
+            )
+        if (
+            spec.role == "frontier_escalation"
+            and key == _component_key(BUILTIN_DELEGATED_AUTOPASS_COMPONENT_REF)
+        ):
+            return ArtificialPlayerSubsystem(
+                DelegatedAutopassPilot(
+                    OpenAIResponsesPilot(
+                        client=self.client,
+                        model=self.config.model,
+                        max_attempts=self.config.max_attempts,
+                        budget=self.budget,
+                        allow_priority_delegation=True,
+                    )
                 )
             )
         raise PilotContractError(

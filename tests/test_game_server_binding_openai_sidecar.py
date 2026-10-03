@@ -9,10 +9,12 @@ from pathlib import Path
 
 from commander_gym.deck_package import ArtifactRef
 from commander_gym.game_server_binding_openai_sidecar import (
+    BUILTIN_DELEGATED_AUTOPASS_COMPONENT_REF,
     BUILTIN_FORCED_PARAMETERLESS_COMPONENT_REF,
     BUILTIN_NATIVE_NO_CHOICE_COMPONENT_REF,
     BUILTIN_OPENAI_RESPONSES_COMPONENT_REF,
     BindingOpenAIGameServerConfig,
+    OpenAIBindingPilotComponentResolver,
     binding_openai_game_server_config_from_environment,
     build_binding_openai_game_server_sidecar,
 )
@@ -22,6 +24,8 @@ from commander_gym.game_server_openai_sidecar import (
 )
 from commander_gym.game_server_sidecar import UnknownProfileError
 from commander_gym.identity import Binding, Deck, Pilot
+from commander_gym.pilot_composition import PilotSubsystemSpec
+from commander_gym.delegated_autopass import DelegatedAutopassPilot
 
 
 class FakeClient:
@@ -114,6 +118,23 @@ def synthetic_catalog(
 
 
 class BindingOpenAIGameServerSidecarTests(unittest.TestCase):
+    def test_delegated_autopass_requires_exact_opt_in_provider_ref(self):
+        config = OpenAIGameServerSidecarConfig(
+            token="sidecar-secret", api_key="sk-test-secret", port=12345,
+        )
+        resolver = OpenAIBindingPilotComponentResolver(config=config, client=FakeClient())
+        subsystem = resolver.resolve(PilotSubsystemSpec(
+            role="frontier_escalation", ordinal=0,
+            ref=BUILTIN_DELEGATED_AUTOPASS_COMPONENT_REF,
+        ))
+        self.assertIsInstance(subsystem.player, DelegatedAutopassPilot)
+        self.assertTrue(subsystem.player.strategic_pilot.allow_priority_delegation)
+        standard = resolver.resolve(PilotSubsystemSpec(
+            role="frontier_escalation", ordinal=0,
+            ref=BUILTIN_OPENAI_RESPONSES_COMPONENT_REF,
+        ))
+        self.assertFalse(standard.player.allow_priority_delegation)
+
     def test_versioned_native_no_choice_component_avoids_model_for_empty_combat(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

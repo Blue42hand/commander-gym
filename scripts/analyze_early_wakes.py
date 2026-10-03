@@ -12,12 +12,41 @@ import json
 from pathlib import Path
 
 from commander_gym.pilot_routing import NativeNoChoiceHandler
+from commander_gym.delegated_autopass import DelegatedAutopassPilot
+from commander_gym.pilot import ArgentumActionChoice
+
+
+class _RecordedStrategicPilot:
+    """Hypothetically approve a bounded wait on each recorded strategic pass."""
+
+    name = "recorded-strategic-pass"
+    version = "1"
+
+    def __init__(self) -> None:
+        self.record: dict | None = None
+
+    def choose(self, observation: dict) -> ArgentumActionChoice:
+        assert self.record is not None
+        action_id = self.record.get("choice", {}).get("actionId")
+        selected = next((
+            action for action in observation.get("legalActions", [])
+            if action.get("actionId") == action_id
+        ), None)
+        metadata = {}
+        if selected and selected.get("kind") == "PassPriority":
+            metadata["priorityDelegation"] = {
+                "until": "next_own_main", "reason": "Hypothetical recorded-pass approval",
+            }
+        return ArgentumActionChoice(action_id=action_id, metadata=metadata)
 
 
 def analyze(paths: list[Path], through_turn: int) -> dict:
     handler = NativeNoChoiceHandler()
     games = []
     for path in paths:
+        replay = _RecordedStrategicPilot()
+        delegation = DelegatedAutopassPilot(replay)
+        delegated = matched_delegated = rejected_delegation = 0
         turns: dict[int, dict[str, int]] = defaultdict(
             lambda: {"callbacks": 0, "eligible": 0, "matched": 0, "diverged": 0}
         )
@@ -32,6 +61,16 @@ def analyze(paths: list[Path], through_turn: int) -> dict:
                     continue
                 row = turns[turn]
                 row["callbacks"] += 1
+                if type(record.get("choice", {}).get("actionId")) is int:
+                    replay.record = record
+                    replayed = delegation.choose(observation)
+                    if "priorityDelegationRejected" in replayed.metadata:
+                        rejected_delegation += 1
+                    if "delegatedPass" in replayed.metadata:
+                        delegated += 1
+                        matched_delegated += int(
+                            replayed.action_id == record["choice"]["actionId"]
+                        )
                 candidate = handler.choose(observation)
                 if candidate is None:
                     continue
@@ -44,12 +83,17 @@ def analyze(paths: list[Path], through_turn: int) -> dict:
                 key: sum(row[key] for row in turns.values())
                 for key in ("callbacks", "eligible", "matched", "diverged")
             },
+            "hypotheticalDelegation": {
+                "delegatedPasses": delegated,
+                "matchedRecordedChoice": matched_delegated,
+                "rejectedProposals": rejected_delegation,
+            },
         })
     return {
         "route": f"{handler.name}/v{handler.version}",
         "throughTurn": through_turn,
         "games": games,
-        "interpretation": "matched counts are counterfactual wake opportunities, not observed API savings",
+        "interpretation": "all counts are counterfactual wake opportunities, not observed API savings; delegation assumes model approval at each recorded pass",
     }
 
 
