@@ -284,8 +284,8 @@ class GameServerSeatAdapter:
                 native_type = pending.get("type")
                 if isinstance(native_type, str) and native_type:
                     pending["kind"] = native_type
-            # On the game-server seam a non-null PendingDecision is not folded into synthetic
-            # legal actions; AiPlayerController must answer it with a native DecisionResponse.
+            # Keep the native decision separate from legal actions. A mana-payment
+            # window may also offer mana abilities before its DecisionResponse.
             pending["requiresStructuredResponse"] = True
 
         observation = {

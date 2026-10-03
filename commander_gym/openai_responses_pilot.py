@@ -23,6 +23,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 import json
+from time import perf_counter
 from typing import Any, Mapping
 
 from .pilot import ArgentumActionChoice, ArgentumDecisionChoice, PilotChoice
@@ -325,6 +326,9 @@ def _native_action_format(
     """Constrain each semantic action to its own Argentum-authored parameter fields."""
 
     legal = observation.get("legalActions")
+    pending = observation.get("pendingDecision")
+    if isinstance(pending, Mapping) and pending.get("requiresStructuredResponse") is True:
+        return None
     if not isinstance(legal, list) or not legal:
         return None
     variants: list[dict[str, Any]] = []
@@ -378,6 +382,65 @@ def _native_action_format(
     }
 
 
+def _native_mana_source_format(observation: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Constrain a native mana-source response to this decision's offered IDs."""
+
+    pending = observation.get("pendingDecision")
+    if not isinstance(pending, Mapping) or pending.get("requiresStructuredResponse") is not True:
+        return None
+    spec = pending.get("responseSpec")
+    if not isinstance(spec, Mapping) or spec.get("responseType") != "ManaSourcesSelectedResponse":
+        return None
+    legal = observation.get("legalActions")
+    if isinstance(legal, list) and any(
+        isinstance(action, Mapping)
+        and action.get("kind") == "ActivateAbility"
+        and action.get("isManaAbility") is True
+        for action in legal
+    ):
+        # A mixed payment window permits a native mana action before answering
+        # the decision; a decision-only schema would hide that legal channel.
+        return None
+    fields = spec.get("requiredFields")
+    if fields != {
+        "autoPay": "BOOLEAN", "declined": "BOOLEAN",
+        "selectedSources": "ENTITY_ID_ARRAY", "waterbendPermanents": "ENTITY_ID_ARRAY",
+    }:
+        return None
+    available = pending.get("availableSources")
+    if not isinstance(available, list) or any(
+        not isinstance(source, Mapping) or not isinstance(source.get("entityId"), str)
+        for source in available
+    ):
+        return None
+    offered_ids = list(dict.fromkeys(source["entityId"] for source in available))
+    return {
+        "type": "json_schema", "name": "commander_gym_native_mana_sources", "strict": False,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "channel": {"type": "string", "const": "decision"},
+                "response": {
+                    "type": "object",
+                    "properties": {
+                        "type": {"type": "string", "const": "ManaSourcesSelectedResponse"},
+                        "autoPay": {"type": "boolean"},
+                        "declined": {"type": "boolean"},
+                        "selectedSources": {
+                            "type": "array", "items": {"type": "string", "enum": offered_ids},
+                        },
+                        "waterbendPermanents": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "required": ["type", *fields],
+                    "additionalProperties": False,
+                },
+            },
+            "required": ["channel", "response"],
+            "additionalProperties": False,
+        },
+    }
+
+
 def _matches_action_param_kind(value: Any, kind: str) -> bool:
     if kind == "INTEGER":
         return type(value) is int
@@ -418,19 +481,23 @@ def _validate_native_action_params(
     return dict(params)
 
 
-def _with_model_io(choice: PilotChoice, model_io: Mapping[str, Any]) -> PilotChoice:
+def _with_model_io(
+    choice: PilotChoice, model_io: Mapping[str, Any], provider_wall_time_ms: float,
+) -> PilotChoice:
     """Attach exact provider attempts without changing the chosen Argentum payload."""
 
     if isinstance(choice, ArgentumActionChoice):
         return ArgentumActionChoice(
             action_id=choice.action_id,
             params=choice.params,
-            metadata={**dict(choice.metadata), "modelIo": dict(model_io)},
+            metadata={**dict(choice.metadata), "modelIo": dict(model_io),
+                      "providerWallTimeMs": round(provider_wall_time_ms, 3)},
         )
     if isinstance(choice, ArgentumDecisionChoice):
         return ArgentumDecisionChoice(
             response=choice.response,
-            metadata={**dict(choice.metadata), "modelIo": dict(model_io)},
+            metadata={**dict(choice.metadata), "modelIo": dict(model_io),
+                      "providerWallTimeMs": round(provider_wall_time_ms, 3)},
         )
     raise OpenAIResponsesPilotError("provider returned unsupported pilot choice type")
 
@@ -440,9 +507,8 @@ class OpenAIResponsesPilot:
     """Concrete strategic ``ArtificialPlayer`` backed by OpenAI Responses.
 
     ``client`` must expose ``client.responses.create(**kwargs)``.  The adapter uses
-    Responses JSON mode because native structured Argentum DecisionResponse payloads
-    have decision-kind-specific fields and therefore cannot be represented by one
-    closed static JSON Schema without duplicating Argentum's decision ontology here.
+    Responses JSON mode for most native structured decisions; a mana-source
+    decision uses a request-local schema constrained to Argentum's offered IDs.
     Commander Gym parses and validates the returned channel locally, then the existing
     pilot/execution validators and Argentum perform authoritative validation.
     """
@@ -472,7 +538,8 @@ class OpenAIResponsesPilot:
             )
 
     def choose(self, observation: Mapping[str, Any]) -> PilotChoice:
-        action_format = _native_action_format(
+        mana_source_format = _native_mana_source_format(observation)
+        action_format = None if mana_source_format is not None else _native_action_format(
             observation, allow_priority_delegation=self.allow_priority_delegation,
         )
         model_observation = _without_live_routing(observation)
@@ -488,7 +555,7 @@ class OpenAIResponsesPilot:
             # The Responses JSON-object mode requires the user input itself to name
             # JSON; mentioning it only in instructions is not sufficient.
             "input": base_input,
-            "text": {"format": action_format or {"type": "json_object"}},
+            "text": {"format": mana_source_format or action_format or {"type": "json_object"}},
             "store": False,
         }
         if self.budget is not None:
@@ -518,9 +585,23 @@ class OpenAIResponsesPilot:
                 "pendingDecision.responseSpec into response.type and provide every "
                 "requiredFields entry with its declared JSON value kind."
             )
+            spec = pending.get("responseSpec")
+            legal_actions = observation.get("legalActions")
+            if isinstance(spec, Mapping) and spec.get("responseType") == "ManaSourcesSelectedResponse" and isinstance(legal_actions, list) and any(
+                isinstance(action, Mapping)
+                and action.get("kind") == "ActivateAbility"
+                and action.get("isManaAbility") is True
+                for action in legal_actions
+            ):
+                request["instructions"] += (
+                    " You may instead choose an offered native mana ability via "
+                    "channel action before answering this payment decision. "
+                    "For selectedSources, use only IDs in pendingDecision.availableSources."
+                )
 
         validation_error: OpenAIResponsesPilotError | None = None
         attempts: list[dict[str, Any]] = []
+        provider_wall_time_ms = 0.0
         for attempt in range(self.max_attempts):
             if validation_error is not None:
                 request["input"] = (
@@ -530,6 +611,7 @@ class OpenAIResponsesPilot:
                     + "\nReturn a corrected JSON object using only the current observation."
                 )
             request_snapshot = deepcopy(request)
+            request_started = perf_counter()
             try:
                 response = (
                     self.budget.create(self.client.responses.create, request)
@@ -540,12 +622,14 @@ class OpenAIResponsesPilot:
                 # A pre-dispatch cap rejection is not a provider attempt.
                 raise OpenAIResponsesPilotError(str(exc)) from exc
             except Exception as exc:  # Provider SDK owns transport-level retries.
+                elapsed_ms = (perf_counter() - request_started) * 1000
                 failure_summary = _provider_failure_summary(exc)
                 attempts.append(
                     {
                         "attempt": attempt,
                         "request": request_snapshot,
-                        "response": {"transportError": failure_summary},
+                        "response": {"transportError": failure_summary,
+                                     "providerWallTimeMs": round(elapsed_ms, 3)},
                     }
                 )
                 raise OpenAIResponsesPilotError(
@@ -553,7 +637,10 @@ class OpenAIResponsesPilot:
                     model_io=_failed_model_io(attempts),
                 ) from exc
 
+            elapsed_ms = (perf_counter() - request_started) * 1000
+            provider_wall_time_ms += elapsed_ms
             response_snapshot = _provider_response_snapshot(response)
+            response_snapshot["providerWallTimeMs"] = round(elapsed_ms, 3)
             try:
                 choice = self._choice_from_response(
                     response,
@@ -587,6 +674,7 @@ class OpenAIResponsesPilot:
                     "selectedAttempt": attempt,
                     "attempts": attempts,
                 },
+                provider_wall_time_ms,
             )
 
         assert validation_error is not None
@@ -763,6 +851,23 @@ class OpenAIResponsesPilot:
             if not _matches_native_field_kind(value, kind):
                 raise OpenAIResponsesPilotError(
                     f"native response field {field} requires {kind}"
+                )
+
+        if response_type == "ManaSourcesSelectedResponse":
+            available = pending.get("availableSources")
+            selected_sources = response.get("selectedSources")
+            if not isinstance(available, list) or any(
+                not isinstance(source, Mapping)
+                or not isinstance(source.get("entityId"), str)
+                for source in available
+            ) or not _matches_native_field_kind(selected_sources, "ENTITY_ID_ARRAY"):
+                raise OpenAIResponsesPilotError(
+                    "native mana-source decision requires exact availableSources and selectedSources"
+                )
+            offered_ids = {source["entityId"] for source in available}
+            if any(source_id not in offered_ids for source_id in selected_sources):
+                raise OpenAIResponsesPilotError(
+                    "native response selectedSources must be offered in availableSources"
                 )
 
         submitted = dict(response)
