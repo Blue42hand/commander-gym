@@ -273,13 +273,13 @@ def _matches_native_field_kind(value: Any, kind: str) -> bool:
     if kind == "BOOLEAN":
         return type(value) is bool
     if kind == "INTEGER":
-        return type(value) is int
+        return type(value) is int and -(2**31) <= value < 2**31
     if kind == "STRING":
         return isinstance(value, str)
     if kind == "ENTITY_ID_ARRAY":
         return isinstance(value, list) and all(isinstance(item, str) for item in value)
     if kind == "INTEGER_ARRAY":
-        return isinstance(value, list) and all(type(item) is int for item in value)
+        return isinstance(value, list) and all(_matches_native_field_kind(item, "INTEGER") for item in value)
     if kind == "ENTITY_ID_ARRAY_ARRAY":
         return isinstance(value, list) and all(
             isinstance(group, list) and all(isinstance(item, str) for item in group)
@@ -290,6 +290,81 @@ def _matches_native_field_kind(value: Any, kind: str) -> bool:
     if kind == "DAMAGE_EDGE_AMOUNT_ARRAY":
         return isinstance(value, list)
     return False
+
+
+_NATIVE_DECISION_FIELD_SCHEMAS: dict[str, dict[str, Any]] = {
+    "BOOLEAN": {"type": "boolean"},
+    "INTEGER": {"type": "integer", "minimum": -(2**31), "maximum": 2**31 - 1},
+    "STRING": {"type": "string"},
+    "ENTITY_ID_ARRAY": {"type": "array", "items": {"type": "string"}},
+    "INTEGER_ARRAY": {"type": "array", "items": {"type": "integer", "minimum": -(2**31), "maximum": 2**31 - 1}},
+    "ENTITY_ID_ARRAY_ARRAY": {
+        "type": "array", "items": {"type": "array", "items": {"type": "string"}},
+    },
+    # Argentum's MAP kind does not describe its values. The response DTOs do.
+    "MAP": {"type": "object"},
+    "DAMAGE_EDGE_AMOUNT_ARRAY": {
+        "type": "array", "items": {
+            "type": "object",
+            "properties": {"edgeId": {"type": "string"}, "amount": {"type": "integer", "minimum": -(2**31), "maximum": 2**31 - 1}},
+            "required": ["edgeId", "amount"], "additionalProperties": False,
+        },
+    },
+}
+
+# Optional fields present in native response DTOs but absent from requiredFields.
+_NATIVE_OPTIONAL_RESPONSE_FIELDS = {
+    "CombatResolutionResponse": {
+        "orderedBlockers": "ENTITY_ID_ARRAY_MAP",
+        "orderedAttackers": "ENTITY_ID_ARRAY_MAP",
+    },
+}
+
+
+def _native_response_field_schema(response_type: str, field: str, kind: str) -> dict[str, Any] | None:
+    if kind == "ENTITY_ID_ARRAY_MAP" and (
+        _NATIVE_OPTIONAL_RESPONSE_FIELDS.get(response_type, {}).get(field) == kind
+    ):
+        # The set of native entity-ID keys is dynamic. Validate values locally;
+        # OpenAI's structured-output subset does not support typed map entries.
+        return {"type": "object"}
+    if kind == "MAP":
+        if (response_type, field) in {
+            ("DistributionResponse", "distribution"),
+            ("DamageAssignmentResponse", "assignments"),
+        }:
+            return {"type": "object"}
+        return None  # TargetsResponse uses the offered requirement indices below.
+    if (response_type, field, kind) == ("ColorChosenResponse", "color", "STRING"):
+        return {"type": "string", "enum": ["WHITE", "BLUE", "BLACK", "RED", "GREEN"]}
+    return _NATIVE_DECISION_FIELD_SCHEMAS.get(kind)
+
+
+def _matches_native_response_field(value: Any, response_type: str, field: str, kind: str) -> bool:
+    if kind == "ENTITY_ID_ARRAY_MAP":
+        return isinstance(value, dict) and all(
+            isinstance(key, str) and _matches_native_field_kind(ids, "ENTITY_ID_ARRAY")
+            for key, ids in value.items()
+        )
+    if kind == "MAP":
+        if (response_type, field) in {
+            ("DistributionResponse", "distribution"),
+            ("DamageAssignmentResponse", "assignments"),
+        }:
+            return isinstance(value, dict) and all(
+                isinstance(key, str) and _matches_native_field_kind(amount, "INTEGER")
+                for key, amount in value.items()
+            )
+        return response_type == "TargetsResponse" and field == "selectedTargets" and isinstance(value, dict)
+    if kind == "DAMAGE_EDGE_AMOUNT_ARRAY":
+        return response_type == "CombatResolutionResponse" and field == "edges" and isinstance(value, list) and all(
+            isinstance(edge, dict) and set(edge) == {"edgeId", "amount"}
+            and isinstance(edge["edgeId"], str) and _matches_native_field_kind(edge["amount"], "INTEGER")
+            for edge in value
+        )
+    if (response_type, field, kind) == ("ColorChosenResponse", "color", "STRING"):
+        return isinstance(value, str) and value in {"WHITE", "BLUE", "BLACK", "RED", "GREEN"}
+    return _matches_native_field_kind(value, kind)
 
 
 _ACTION_PARAM_SCHEMAS: dict[str, dict[str, Any]] = {
@@ -441,6 +516,114 @@ def _native_mana_source_format(observation: Mapping[str, Any]) -> dict[str, Any]
     }
 
 
+def _native_targets_format(observation: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Constrain a target response to Argentum's current requirement indices and IDs."""
+
+    pending = observation.get("pendingDecision")
+    if not isinstance(pending, Mapping) or pending.get("requiresStructuredResponse") is not True:
+        return None
+    spec = pending.get("responseSpec")
+    if not isinstance(spec, Mapping) or spec.get("responseType") != "TargetsResponse":
+        return None
+    if spec.get("requiredFields") != {"selectedTargets": "MAP"}:
+        return None
+    legal_targets = pending.get("legalTargets")
+    if not isinstance(legal_targets, Mapping) or any(
+        not isinstance(index, str)
+        or not index.isdecimal()
+        or not _matches_native_field_kind(ids, "ENTITY_ID_ARRAY")
+        for index, ids in legal_targets.items()
+    ):
+        return None
+    return {
+        "type": "json_schema", "name": "commander_gym_native_targets", "strict": False,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "channel": {"type": "string", "const": "decision"},
+                "response": {
+                    "type": "object",
+                    "properties": {
+                        "type": {"type": "string", "const": "TargetsResponse"},
+                        "selectedTargets": {
+                            "type": "object",
+                            "properties": {
+                                index: {"type": "array", "items": {"type": "string", "enum": list(dict.fromkeys(ids))}}
+                                for index, ids in legal_targets.items()
+                            },
+                            "additionalProperties": False,
+                        },
+                    },
+                    "required": ["type", "selectedTargets"],
+                    "additionalProperties": False,
+                },
+            },
+            "required": ["channel", "response"],
+            "additionalProperties": False,
+        },
+    }
+
+
+def _native_decision_format(observation: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Build a request-local wire schema from Argentum's live responseSpec."""
+
+    pending = observation.get("pendingDecision")
+    if not isinstance(pending, Mapping) or pending.get("requiresStructuredResponse") is not True:
+        return None
+    spec = pending.get("responseSpec")
+    if not isinstance(spec, Mapping):
+        return None
+    # A payment window can also offer a native mana action before the decision.
+    special = _native_mana_source_format(observation) or _native_targets_format(observation)
+    if special is not None:
+        return _with_native_cancel_schema(special, spec)
+    response_type, fields = spec.get("responseType"), spec.get("requiredFields")
+    if not isinstance(response_type, str) or not isinstance(fields, Mapping):
+        return None
+    if response_type == "ManaSourcesSelectedResponse":
+        return None  # Preserve the mixed mana-action channel.
+    properties: dict[str, Any] = {"type": {"type": "string", "const": response_type}}
+    for field, kind in fields.items():
+        if not isinstance(field, str) or not isinstance(kind, str):
+            return None
+        schema = _native_response_field_schema(response_type, field, kind)
+        if schema is None:
+            return None
+        properties[field] = schema
+    for field, kind in _NATIVE_OPTIONAL_RESPONSE_FIELDS.get(response_type, {}).items():
+        properties[field] = _native_response_field_schema(response_type, field, kind)
+    result = {
+        "type": "json_schema", "name": "commander_gym_native_decision", "strict": False,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "channel": {"type": "string", "const": "decision"},
+                "response": {
+                    "type": "object", "properties": properties,
+                    "required": ["type", *fields], "additionalProperties": False,
+                },
+            },
+            "required": ["channel", "response"], "additionalProperties": False,
+        },
+    }
+    return _with_native_cancel_schema(result, spec)
+
+
+def _with_native_cancel_schema(format_: dict[str, Any], spec: Mapping[str, Any]) -> dict[str, Any]:
+    if spec.get("cancelAllowed") is not True:
+        return format_
+    cancel = {
+        "type": "object",
+        "properties": {"type": {"type": "string", "const": "CancelDecisionResponse"}},
+        "required": ["type"], "additionalProperties": False,
+    }
+    schema = deepcopy(format_["schema"])
+    schema["properties"]["response"] = {"anyOf": [
+        schema["properties"]["response"], cancel,
+    ]}
+    return {**format_, "schema": schema}
+
+
 def _matches_action_param_kind(value: Any, kind: str) -> bool:
     if kind == "INTEGER":
         return type(value) is int
@@ -507,8 +690,8 @@ class OpenAIResponsesPilot:
     """Concrete strategic ``ArtificialPlayer`` backed by OpenAI Responses.
 
     ``client`` must expose ``client.responses.create(**kwargs)``.  The adapter uses
-    Responses JSON mode for most native structured decisions; a mana-source
-    decision uses a request-local schema constrained to Argentum's offered IDs.
+    Responses JSON mode for most native structured decisions; mana-source and
+    target decisions use request-local schemas constrained to Argentum's offered IDs.
     Commander Gym parses and validates the returned channel locally, then the existing
     pilot/execution validators and Argentum perform authoritative validation.
     """
@@ -538,8 +721,8 @@ class OpenAIResponsesPilot:
             )
 
     def choose(self, observation: Mapping[str, Any]) -> PilotChoice:
-        mana_source_format = _native_mana_source_format(observation)
-        action_format = None if mana_source_format is not None else _native_action_format(
+        decision_format = _native_decision_format(observation)
+        action_format = None if decision_format is not None else _native_action_format(
             observation, allow_priority_delegation=self.allow_priority_delegation,
         )
         model_observation = _without_live_routing(observation)
@@ -555,7 +738,7 @@ class OpenAIResponsesPilot:
             # The Responses JSON-object mode requires the user input itself to name
             # JSON; mentioning it only in instructions is not sufficient.
             "input": base_input,
-            "text": {"format": mana_source_format or action_format or {"type": "json_object"}},
+            "text": {"format": decision_format or action_format or {"type": "json_object"}},
             "store": False,
         }
         if self.budget is not None:
@@ -586,6 +769,11 @@ class OpenAIResponsesPilot:
                 "requiredFields entry with its declared JSON value kind."
             )
             spec = pending.get("responseSpec")
+            if isinstance(spec, Mapping) and spec.get("cancelAllowed") is True:
+                request["instructions"] += (
+                    " If cancelling is appropriate, use CancelDecisionResponse with no "
+                    "model-authored fields beyond type."
+                )
             legal_actions = observation.get("legalActions")
             if isinstance(spec, Mapping) and spec.get("responseType") == "ManaSourcesSelectedResponse" and isinstance(legal_actions, list) and any(
                 isinstance(action, Mapping)
@@ -824,6 +1012,15 @@ class OpenAIResponsesPilot:
                 "Argentum structured decision is missing its native responseSpec"
             )
         expected_type = _require_string(spec.get("responseType"), "native responseType")
+        if response_type == "CancelDecisionResponse" and spec.get("cancelAllowed") is True:
+            if set(response) != {"type"}:
+                raise OpenAIResponsesPilotError(
+                    "native cancel response only permits type"
+                )
+            return ArgentumDecisionChoice(
+                response={"type": response_type, "decisionId": decision_id},
+                metadata=dict(metadata),
+            )
         if response_type != expected_type:
             raise OpenAIResponsesPilotError(
                 f"structured decision requires native Argentum response type {expected_type}"
@@ -833,22 +1030,27 @@ class OpenAIResponsesPilot:
             raise OpenAIResponsesPilotError("native responseSpec requiredFields must be an object")
         if any(not isinstance(field, str) for field in required):
             raise OpenAIResponsesPilotError("native responseSpec field names must be strings")
-        allowed_fields = {"type", *required}
+        optional = _NATIVE_OPTIONAL_RESPONSE_FIELDS.get(response_type, {})
+        allowed_fields = {"type", *required, *optional}
         unexpected = set(response) - allowed_fields
         if unexpected:
             raise OpenAIResponsesPilotError(
                 f"native response has unsupported fields: {sorted(unexpected)}"
             )
         for field, kind in required.items():
-            if kind not in {
-                "BOOLEAN", "INTEGER", "STRING", "ENTITY_ID_ARRAY", "INTEGER_ARRAY",
-                "ENTITY_ID_ARRAY_ARRAY", "MAP", "DAMAGE_EDGE_AMOUNT_ARRAY",
-            }:
+            if kind not in _NATIVE_DECISION_FIELD_SCHEMAS:
                 raise OpenAIResponsesPilotError(
                     f"unsupported native response field kind {kind!r}"
                 )
             value = response.get(field)
-            if not _matches_native_field_kind(value, kind):
+            if not _matches_native_response_field(value, response_type, field, kind):
+                raise OpenAIResponsesPilotError(
+                    f"native response field {field} requires {kind}"
+                )
+        for field, kind in optional.items():
+            if field in response and not _matches_native_response_field(
+                response[field], response_type, field, kind,
+            ):
                 raise OpenAIResponsesPilotError(
                     f"native response field {field} requires {kind}"
                 )
@@ -869,6 +1071,24 @@ class OpenAIResponsesPilot:
                 raise OpenAIResponsesPilotError(
                     "native response selectedSources must be offered in availableSources"
                 )
+        if response_type == "TargetsResponse":
+            legal_targets = pending.get("legalTargets")
+            selected_targets = response.get("selectedTargets")
+            if not isinstance(legal_targets, Mapping) or not isinstance(selected_targets, Mapping):
+                raise OpenAIResponsesPilotError(
+                    "native target decision requires exact legalTargets and selectedTargets"
+                )
+            for index, ids in selected_targets.items():
+                offered = legal_targets.get(index)
+                if (
+                    not isinstance(index, str) or not index.isdecimal()
+                    or not _matches_native_field_kind(offered, "ENTITY_ID_ARRAY")
+                    or not _matches_native_field_kind(ids, "ENTITY_ID_ARRAY")
+                    or any(target_id not in offered for target_id in ids)
+                ):
+                    raise OpenAIResponsesPilotError(
+                        "native response selectedTargets requires arrays of offered target IDs"
+                    )
 
         submitted = dict(response)
         submitted["decisionId"] = decision_id
