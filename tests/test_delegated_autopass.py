@@ -63,6 +63,16 @@ class ScriptedPilot:
 
 
 class DelegatedAutopassTests(unittest.TestCase):
+    def test_versioned_short_wait_uses_same_opponent_watch_on_both_callbacks(self):
+        for boundary in ("phase_end", "next_own_main"):
+            with self.subTest(boundary=boundary):
+                strategic = ScriptedPilot(until=boundary)
+                pilot = DelegatedAutopassPilot(strategic, version="2", allow_named_deferrals=True)
+                start = observation()
+                pilot.choose(start)
+                self.assertIn("delegatedPass", pilot.choose(copy.deepcopy(start)).metadata)
+                self.assertEqual(strategic.calls, 1)
+
     def test_forge_then_cast_runs_only_after_isolated_native_land_transition(self):
         class LandPilot:
             name, version = "scripted", "1"
@@ -87,13 +97,32 @@ class DelegatedAutopassTests(unittest.TestCase):
         later["state"]["cards"]["h1"] = {"name": "Played Land", "tapped": False}
         later["state"]["gameLog"] = [{"type": "permanentEntered"}]
         later["legalActions"] = [{"actionId": 7, "kind": "CastSpell", "affordable": True,
-                                  "isAffordable": True, "action": {"cardId": "h2"}}]
+                                  "isAffordable": True, "hasXCost": False,
+                                  "additionalCostInfo": None,
+                                  "parameterSpec": {"allowedFields": {}},
+                                  "action": {"type": "CastSpell", "playerId": "p1", "cardId": "h2",
+                                             "additionalCostPayment": None,
+                                             "alternativeCostType": None,
+                                             "alternativePayment": None,
+                                             "casualtyCreature": None,
+                                             "chosenModes": [], "targets": [],
+                                             "modeTargetsOrdered": [], "splicedCardIds": [],
+                                             "conspiredCreatures": [], "damageDistribution": None,
+                                             "declaredCostSlot": None, "faceIndex": None,
+                                             "giftRecipient": None, "graveyardCastRider": None,
+                                             "graveyardLifeCost": 0, "modeDamageDistribution": {},
+                                             "wasWaterbendPaid": False, "xValue": None,
+                                             "paymentStrategy": {"type": "AutoPay"},
+                                             "useAlternativeCost": False,
+                                             "useWithoutPayingManaCost": False,
+                                             "castFaceDown": False}}]
         result = pilot.choose(later)
         self.assertEqual(result.action_id, 7)
         self.assertEqual(result.metadata["forgeThenCast"]["cardId"], "h2")
         self.assertEqual(strategic.calls, 1)
 
-        for change in ("stack", "opponent", "unaffordable", "ambiguous"):
+        for change in ("stack", "opponent", "unaffordable", "ambiguous",
+                       "targeted_template", "x_cost", "additional_cost", "mode"):
             with self.subTest(change=change):
                 strategic = LandPilot()
                 pilot = DelegatedAutopassPilot(strategic, allow_named_deferrals=True)
@@ -106,9 +135,22 @@ class DelegatedAutopassTests(unittest.TestCase):
                     interrupted["state"]["cards"]["new-permanent"] = {"controllerId": "p2"}
                 elif change == "unaffordable":
                     interrupted["legalActions"][0]["affordable"] = False
-                else:
+                elif change == "ambiguous":
                     interrupted["legalActions"].append({**interrupted["legalActions"][0],
                                                         "actionId": 8})
+                elif change == "targeted_template":
+                    # Real Argentum CastSpell offers currently use this broad
+                    # ActionParams template even for otherwise simple cards.
+                    interrupted["legalActions"][0]["parameterSpec"]["allowedFields"] = {
+                        "exiledCards": "ENTITY_ID_ARRAY", "targets": "ENTITY_ID_ARRAY",
+                        "xValue": "INTEGER",
+                    }
+                elif change == "x_cost":
+                    interrupted["legalActions"][0]["hasXCost"] = True
+                elif change == "additional_cost":
+                    interrupted["legalActions"][0]["additionalCostInfo"] = {"kind": "sacrifice"}
+                else:
+                    interrupted["legalActions"][0]["action"]["chosenModes"] = ["first"]
                 pilot.choose(interrupted)
                 self.assertEqual(strategic.calls, 2)
 

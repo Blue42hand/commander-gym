@@ -218,6 +218,41 @@ def _own_battlefield(checkpoint: Mapping[str, Any]) -> list[str] | None:
     return zones[0]["ids"] if len(zones) == 1 else None
 
 
+def _parameterless_native_cast(offered: Mapping[str, Any]) -> bool:
+    """Require an explicit native no-ActionParams certificate and default cast shape."""
+    spec = offered.get("parameterSpec")
+    action = offered.get("action")
+    if (
+        not isinstance(spec, Mapping) or set(spec) != {"allowedFields"}
+        or spec.get("allowedFields") != {}
+        or not isinstance(action, Mapping) or action.get("type") != "CastSpell"
+        or offered.get("hasXCost") is not False
+        or offered.get("additionalCostInfo") is not None
+        or offered.get("isDecisionOption") is True
+    ):
+        return False
+    defaults = {
+        "additionalCostPayment": None, "alternativeCostType": None,
+        "alternativePayment": None, "castFaceDown": False,
+        "casualtyCreature": None, "chosenModes": [], "conspiredCreatures": [],
+        "damageDistribution": None, "declaredCostSlot": None,
+        "faceIndex": None, "giftRecipient": None,
+        "graveyardCastRider": None, "graveyardLifeCost": 0,
+        "modeDamageDistribution": {}, "modeTargetsOrdered": [],
+        "splicedCardIds": [], "targets": [], "useAlternativeCost": False,
+        "useWithoutPayingManaCost": False, "wasWaterbendPaid": False,
+        "xValue": None,
+    }
+    if any(action.get(field) != value for field, value in defaults.items()):
+        return False
+    return (
+        action.get("paymentStrategy") == {"type": "AutoPay"}
+        and isinstance(action.get("cardId"), str)
+        and isinstance(action.get("playerId"), str)
+        and set(action) == set(defaults) | {"type", "cardId", "playerId", "paymentStrategy"}
+    )
+
+
 def _ready_followup_cast(
     pending: _PendingCast, now: dict[str, Any] | None, observation: Mapping[str, Any],
 ) -> Mapping[str, Any] | None:
@@ -262,8 +297,10 @@ def _ready_followup_cast(
              and action.get("kind") == "CastSpell"
              and isinstance(action.get("action"), Mapping)
              and action["action"].get("cardId") == pending.cast_id
+             and action["action"].get("playerId") == now["seat"]
              and action.get("affordable") is True
              and action.get("isAffordable") is True
+             and _parameterless_native_cast(action)
              and type(action.get("actionId")) is int]
     return casts[0] if len(casts) == 1 else None
 
@@ -402,7 +439,9 @@ class DelegatedAutopassPilot:
             self._leases[seat] = _Lease(
                 start=checkpoint, previous=checkpoint,
                 until=directive["until"], reason=directive["reason"],
-                lease_id=lease_id, watch_opponents=(True if named else directive.get("watchOpponents", False)),
+                lease_id=lease_id, watch_opponents=(
+                    True if self.allow_named_deferrals else directive.get("watchOpponents", False)
+                ),
                 deferred_abilities=offered if named else None,
                 deferred_menu_digest=_nonmana_ability_menu_digest(observation) if named else None,
             )
