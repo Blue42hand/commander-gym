@@ -765,6 +765,23 @@ class OpenAIResponsesPilot:
                     f"native response field {field} requires {kind}"
                 )
 
+        if response_type == "ManaSourcesSelectedResponse":
+            available = pending.get("availableSources")
+            selected_sources = response.get("selectedSources")
+            if not isinstance(available, list) or any(
+                not isinstance(source, Mapping)
+                or not isinstance(source.get("entityId"), str)
+                for source in available
+            ) or not _matches_native_field_kind(selected_sources, "ENTITY_ID_ARRAY"):
+                raise OpenAIResponsesPilotError(
+                    "native mana-source decision requires exact availableSources and selectedSources"
+                )
+            offered_ids = {source["entityId"] for source in available}
+            if any(source_id not in offered_ids for source_id in selected_sources):
+                raise OpenAIResponsesPilotError(
+                    "native response selectedSources must be offered in availableSources"
+                )
+
         submitted = dict(response)
         submitted["decisionId"] = decision_id
         return ArgentumDecisionChoice(response=submitted, metadata=dict(metadata))

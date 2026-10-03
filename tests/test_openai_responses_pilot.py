@@ -445,6 +445,34 @@ class OpenAIResponsesPilotTests(unittest.TestCase):
             pilot.choose(structured_observation())
         self.assertEqual(len(client.responses.calls), 1)
 
+    def test_retries_mana_source_not_offered_by_current_decision(self):
+        observation = structured_observation()
+        observation["pendingDecision"].update({
+            "kind": "SelectManaSourcesDecision",
+            "availableSources": [{"entityId": "e170", "name": "Mountain"}],
+            "responseSpec": {
+                "responseType": "ManaSourcesSelectedResponse",
+                "requiredFields": {
+                    "autoPay": "BOOLEAN", "declined": "BOOLEAN",
+                    "selectedSources": "ENTITY_ID_ARRAY",
+                    "waterbendPermanents": "ENTITY_ID_ARRAY",
+                },
+            },
+        })
+        def answer(sources):
+            return FakeResponse(json.dumps({
+                "channel": "decision", "response": {
+                    "type": "ManaSourcesSelectedResponse", "autoPay": True,
+                    "declined": False, "selectedSources": sources,
+                    "waterbendPermanents": [],
+                },
+            }))
+        client = FakeClient([answer(["e170", "e146"]), answer(["e170"])])
+        choice = OpenAIResponsesPilot(client=client, model="gpt-test").choose(observation)
+        self.assertEqual(choice.response["selectedSources"], ["e170"])
+        self.assertEqual(choice.metadata["modelIo"]["selectedAttempt"], 1)
+        self.assertIn("must be offered", client.responses.calls[1]["input"])
+
     def test_rejects_wrong_native_array_element_kind_before_submission(self):
         observation = structured_observation()
         observation["pendingDecision"]["responseSpec"] = {
