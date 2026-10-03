@@ -76,6 +76,19 @@ def _assert_library_visibility(state, viewer: str) -> tuple[set[str], set[str]]:
     return opaque, visible
 
 
+def _assert_case_coverage(rows, reconcealment, selected, profiles, max_selected):
+    assert reconcealment and any(row["previouslyKnownIds"] > 0 for row in reconcealment)
+    assert {row["structuredDecision"] for row in rows if row.get("structuredDecision")} >= {
+        "SelectCardsDecision", "YesNoDecision",
+    }
+    assert any(row.get("combatPresent") for row in rows)
+    assert any(row.get("visibleOwnLibraryIds", 0) > 0 for row in rows)
+    assert len(selected) == max_selected
+    assert max_selected % 2 == 0 and len(profiles) == 2
+    assert sorted(sum(item[0]["profileId"] == profile for item in selected)
+                  for profile in profiles) == [max_selected // 2] * 2
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--capture-dir", type=Path, required=True)
@@ -226,15 +239,7 @@ def main() -> int:
                                       "previouslyKnownIds": len(prior_visible),
                                       "idsLinkedToLaterLibrarySlots": 0})
             break
-    assert reconcealment and any(row["previouslyKnownIds"] > 0 for row in reconcealment)
-    assert {row["structuredDecision"] for row in rows if row.get("structuredDecision")} >= {
-        "SelectCardsDecision", "YesNoDecision",
-    }
-    assert any(row.get("combatPresent") for row in rows)
-    assert any(row.get("visibleOwnLibraryIds", 0) > 0 for row in rows)
-    assert len(selected) == args.max_selected
-    assert sorted(sum(item[0]["profileId"] == profile for item in selected)
-                  for profile in summary["profiles"]) == [args.max_selected // 2] * 2
+    _assert_case_coverage(rows, reconcealment, selected, summary["profiles"], args.max_selected)
     selected_meta = []
     for index, (row, raw, full, compact, requests) in enumerate(selected):
         stem = f"sample-{index:02d}"

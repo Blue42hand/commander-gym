@@ -5,7 +5,8 @@ import unittest
 
 from commander_gym.binding_resolver import _KnowledgeBoundPilot
 from scripts.audit_scripted_privacy_capture import (
-    _NeverRunPilot, _assert_library_visibility, _bound_observation, _count_exact,
+    _NeverRunPilot, _assert_case_coverage, _assert_library_visibility,
+    _bound_observation, _count_exact,
 )
 
 
@@ -30,6 +31,29 @@ class ScriptedPrivacyAuditTests(unittest.TestCase):
         state["zones"][0]["isVisible"] = True
         with self.assertRaisesRegex(AssertionError, "unrevealed library identity"):
             _assert_library_visibility(state, "opponent")
+
+    def test_hidden_slot_card_object_and_name_are_rejected(self):
+        hidden = "client-hidden-library-slot:private"
+        state = {"cards": {hidden: {"name": "Secret card"}}, "zones": [{
+            "zoneId": {"zoneType": "Library", "ownerId": "opponent"},
+            "cardIds": [hidden], "isVisible": False,
+        }]}
+        with self.assertRaises(AssertionError):
+            _assert_library_visibility(state, "viewer")
+
+    def test_missing_critical_case_fails_closed(self):
+        rows = [{"structuredDecision": "SelectCardsDecision", "combatPresent": True,
+                 "visibleOwnLibraryIds": 2}, {"structuredDecision": "YesNoDecision"}]
+        selected = [({"profileId": "a"},), ({"profileId": "b"},)]
+        reconcealment = [{"previouslyKnownIds": 2}]
+        _assert_case_coverage(rows, reconcealment, selected, ["a", "b"], 2)
+        with self.assertRaises(AssertionError):
+            _assert_case_coverage(rows, [], selected, ["a", "b"], 2)
+        with self.assertRaises(AssertionError):
+            _assert_case_coverage(rows[:1], reconcealment, selected, ["a", "b"], 2)
+        with self.assertRaises(AssertionError):
+            _assert_case_coverage([{**row, "visibleOwnLibraryIds": 0} for row in rows],
+                                  reconcealment, selected, ["a", "b"], 2)
 
 
 if __name__ == "__main__":
