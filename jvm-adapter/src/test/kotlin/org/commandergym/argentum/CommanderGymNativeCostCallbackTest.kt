@@ -121,6 +121,14 @@ class CommanderGymNativeCostCallbackTest {
                 assertThrows(IllegalArgumentException::class.java) {
                     ActionParameterizer.apply(offered, invalid, GameState())
                 }
+                val unofferedField = if (field == "tappedPermanents") {
+                    ActionParams(discardedCards = listOf(offeredId))
+                } else {
+                    ActionParams(tappedPermanents = listOf(offeredId))
+                }
+                assertThrows(IllegalArgumentException::class.java) {
+                    ActionParameterizer.apply(offered, unofferedField, GameState())
+                }
             }
         } finally {
             server.stop(0)
