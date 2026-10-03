@@ -23,6 +23,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 import json
+from time import perf_counter
 from typing import Any, Mapping
 
 from .pilot import ArgentumActionChoice, ArgentumDecisionChoice, PilotChoice
@@ -470,19 +471,23 @@ def _validate_native_action_params(
     return dict(params)
 
 
-def _with_model_io(choice: PilotChoice, model_io: Mapping[str, Any]) -> PilotChoice:
+def _with_model_io(
+    choice: PilotChoice, model_io: Mapping[str, Any], provider_wall_time_ms: float,
+) -> PilotChoice:
     """Attach exact provider attempts without changing the chosen Argentum payload."""
 
     if isinstance(choice, ArgentumActionChoice):
         return ArgentumActionChoice(
             action_id=choice.action_id,
             params=choice.params,
-            metadata={**dict(choice.metadata), "modelIo": dict(model_io)},
+            metadata={**dict(choice.metadata), "modelIo": dict(model_io),
+                      "providerWallTimeMs": round(provider_wall_time_ms, 3)},
         )
     if isinstance(choice, ArgentumDecisionChoice):
         return ArgentumDecisionChoice(
             response=choice.response,
-            metadata={**dict(choice.metadata), "modelIo": dict(model_io)},
+            metadata={**dict(choice.metadata), "modelIo": dict(model_io),
+                      "providerWallTimeMs": round(provider_wall_time_ms, 3)},
         )
     raise OpenAIResponsesPilotError("provider returned unsupported pilot choice type")
 
@@ -492,9 +497,8 @@ class OpenAIResponsesPilot:
     """Concrete strategic ``ArtificialPlayer`` backed by OpenAI Responses.
 
     ``client`` must expose ``client.responses.create(**kwargs)``.  The adapter uses
-    Responses JSON mode because native structured Argentum DecisionResponse payloads
-    have decision-kind-specific fields and therefore cannot be represented by one
-    closed static JSON Schema without duplicating Argentum's decision ontology here.
+    Responses JSON mode for most native structured decisions; a mana-source
+    decision uses a request-local schema constrained to Argentum's offered IDs.
     Commander Gym parses and validates the returned channel locally, then the existing
     pilot/execution validators and Argentum perform authoritative validation.
     """
@@ -574,6 +578,7 @@ class OpenAIResponsesPilot:
 
         validation_error: OpenAIResponsesPilotError | None = None
         attempts: list[dict[str, Any]] = []
+        provider_wall_time_ms = 0.0
         for attempt in range(self.max_attempts):
             if validation_error is not None:
                 request["input"] = (
@@ -583,6 +588,7 @@ class OpenAIResponsesPilot:
                     + "\nReturn a corrected JSON object using only the current observation."
                 )
             request_snapshot = deepcopy(request)
+            request_started = perf_counter()
             try:
                 response = (
                     self.budget.create(self.client.responses.create, request)
@@ -593,12 +599,14 @@ class OpenAIResponsesPilot:
                 # A pre-dispatch cap rejection is not a provider attempt.
                 raise OpenAIResponsesPilotError(str(exc)) from exc
             except Exception as exc:  # Provider SDK owns transport-level retries.
+                elapsed_ms = (perf_counter() - request_started) * 1000
                 failure_summary = _provider_failure_summary(exc)
                 attempts.append(
                     {
                         "attempt": attempt,
                         "request": request_snapshot,
-                        "response": {"transportError": failure_summary},
+                        "response": {"transportError": failure_summary,
+                                     "providerWallTimeMs": round(elapsed_ms, 3)},
                     }
                 )
                 raise OpenAIResponsesPilotError(
@@ -606,7 +614,10 @@ class OpenAIResponsesPilot:
                     model_io=_failed_model_io(attempts),
                 ) from exc
 
+            elapsed_ms = (perf_counter() - request_started) * 1000
+            provider_wall_time_ms += elapsed_ms
             response_snapshot = _provider_response_snapshot(response)
+            response_snapshot["providerWallTimeMs"] = round(elapsed_ms, 3)
             try:
                 choice = self._choice_from_response(
                     response,
@@ -640,6 +651,7 @@ class OpenAIResponsesPilot:
                     "selectedAttempt": attempt,
                     "attempts": attempts,
                 },
+                provider_wall_time_ms,
             )
 
         assert validation_error is not None

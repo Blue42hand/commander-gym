@@ -476,6 +476,11 @@ class OpenAIResponsesPilotTests(unittest.TestCase):
         choice = OpenAIResponsesPilot(client=client, model="gpt-test").choose(observation)
         self.assertEqual(choice.response["selectedSources"], ["e170"])
         self.assertEqual(choice.metadata["modelIo"]["selectedAttempt"], 1)
+        self.assertGreaterEqual(choice.metadata["providerWallTimeMs"], 0)
+        self.assertTrue(all(
+            attempt["response"]["providerWallTimeMs"] >= 0
+            for attempt in choice.metadata["modelIo"]["attempts"]
+        ))
         self.assertIn("must be offered", client.responses.calls[1]["input"])
         response_schema = client.responses.calls[0]["text"]["format"]["schema"]
         self.assertEqual(response_schema["properties"]["channel"]["const"], "decision")
