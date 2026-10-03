@@ -10,6 +10,7 @@ from pathlib import Path
 from commander_gym.deck_package import ArtifactRef
 from commander_gym.game_server_binding_openai_sidecar import (
     BUILTIN_FORCED_PARAMETERLESS_COMPONENT_REF,
+    BUILTIN_NATIVE_NO_CHOICE_COMPONENT_REF,
     BUILTIN_OPENAI_RESPONSES_COMPONENT_REF,
     BindingOpenAIGameServerConfig,
     binding_openai_game_server_config_from_environment,
@@ -113,6 +114,43 @@ def synthetic_catalog(
 
 
 class BindingOpenAIGameServerSidecarTests(unittest.TestCase):
+    def test_versioned_native_no_choice_component_avoids_model_for_mana_only_menu(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            pilot = Pilot(
+                pilot_id="synthetic-optimized-pilot",
+                revision="r2",
+                deterministic_policy=BUILTIN_NATIVE_NO_CHOICE_COMPONENT_REF,
+                escalation_provider=BUILTIN_OPENAI_RESPONSES_COMPONENT_REF,
+            )
+            catalog = synthetic_catalog(root, pilot=pilot)
+            config = BindingOpenAIGameServerConfig(
+                sidecar=OpenAIGameServerSidecarConfig(
+                    token="sidecar-secret", api_key="sk-test-secret", port=free_port(),
+                ),
+                catalog_path=catalog,
+                instance_root=root,
+            )
+            server = build_binding_openai_game_server_sidecar(config, client=FakeClient())
+            try:
+                seat = server.resolve_seat("ai-one", "seat-a")
+                result = seat.choose_action(
+                    {"viewingPlayerId": "ai-one"},
+                    [
+                        {"kind": "PassPriority", "actionType": "PassPriority", "affordable": True,
+                         "action": {"type": "PassPriority", "playerId": "ai-one"}},
+                        {"kind": "ActivateAbility", "actionType": "ActivateAbility",
+                         "isManaAbility": True,
+                         "action": {"type": "ActivateAbility", "playerId": "ai-one"}},
+                    ],
+                    None,
+                )
+                self.assertEqual(result.action["type"], "PassPriority")
+                self.assertEqual(result.metadata["routing"]["handledBy"]["component"]["artifactId"], "native-no-choice")
+                self.assertEqual(result.metadata["pilot"]["revision"], "r2")
+            finally:
+                server.server_close()
+
     def test_environment_accepts_instance_supplied_catalog_and_root(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

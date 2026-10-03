@@ -48,7 +48,7 @@ from .pilot_composition import (
     PilotSubsystemSpec,
     compose_pilot_runtime,
 )
-from .pilot_routing import ForcedParameterlessChoiceHandler
+from .pilot_routing import ForcedParameterlessChoiceHandler, NativeNoChoiceHandler
 
 
 # These refs identify the public executable adapter contracts, not a particular model
@@ -60,6 +60,12 @@ BUILTIN_FORCED_PARAMETERLESS_COMPONENT_REF = ArtifactRef(
     artifact_id="forced-parameterless-choice",
     version="1",
     digest="sha256:3c00dd57dbed45ceb9937fecbedd0d67f509d9619f8e565eae0eeed789f4ac38",
+)
+BUILTIN_NATIVE_NO_CHOICE_COMPONENT_REF = ArtifactRef(
+    kind="deterministic-policy",
+    artifact_id="native-no-choice",
+    version="1",
+    digest="sha256:f1536ca7c883bea5a080bb2d9102c84d1423cbed7333d9aa3a99fddb0e7e7a23",
 )
 BUILTIN_OPENAI_RESPONSES_COMPONENT_REF = ArtifactRef(
     kind="provider",
@@ -191,6 +197,11 @@ class OpenAIBindingPilotComponentResolver:
             and key == _component_key(BUILTIN_FORCED_PARAMETERLESS_COMPONENT_REF)
         ):
             return MechanicalHandlerSubsystem(ForcedParameterlessChoiceHandler())
+        if (
+            spec.role == "deterministic"
+            and key == _component_key(BUILTIN_NATIVE_NO_CHOICE_COMPONENT_REF)
+        ):
+            return MechanicalHandlerSubsystem(NativeNoChoiceHandler())
         if (
             spec.role == "frontier_escalation"
             and key == _component_key(BUILTIN_OPENAI_RESPONSES_COMPONENT_REF)
