@@ -146,6 +146,67 @@ class NativeNoChoiceHandler:
         return ArgentumActionChoice(action_id=action["actionId"])
 
 
+@dataclass(frozen=True)
+class StandingManaOnlyPassHandler:
+    """Opt-in pass when Argentum offers no response except optional mana setup.
+
+    This is a player-behavior policy, not a claim that passing is forced. It is
+    deliberately stateless: a changed stack does not wake the provider if the
+    current native menu still has only PassPriority and mana abilities. Its
+    separate component identity leaves the qualified no-choice handler intact.
+    """
+
+    name: str = "standing-mana-only-pass"
+    version: str = "1"
+
+    def choose(self, observation: Mapping[str, Any]) -> PilotChoice | None:
+        previous = NativeNoChoiceHandler().choose(observation)
+        if previous is not None:
+            return previous
+        if (
+            observation.get("terminated") is not False
+            or observation.get("pendingDecision") is not None
+            or not isinstance(observation.get("agentToAct"), str)
+            or observation.get("agentToAct") != observation.get("perspectivePlayerId")
+        ):
+            return None
+        legal = observation.get("legalActions")
+        if not isinstance(legal, list) or len(legal) < 2:
+            return None
+        seat = observation["agentToAct"]
+        ids: set[int] = set()
+        passes: list[Mapping[str, Any]] = []
+        for action in legal:
+            if (
+                not isinstance(action, Mapping)
+                or type(action.get("actionId")) is not int
+                or not isinstance(action.get("semanticId"), str)
+                or not action["semanticId"]
+                or (action.get("isDecisionOption") is not None
+                    and action.get("isDecisionOption") is not False)
+                or not isinstance(action.get("action"), Mapping)
+                or action["action"].get("playerId") != seat
+                or type(action.get("affordable")) is not bool
+            ):
+                return None
+            action_id = action["actionId"]
+            if action_id in ids:
+                return None
+            ids.add(action_id)
+            kind = action.get("kind")
+            if action["action"].get("type") != kind:
+                return None
+            if kind == "PassPriority":
+                if action.get("affordable") is not True or action.get("isManaAbility") is not False:
+                    return None
+                passes.append(action)
+            elif kind != "ActivateAbility" or action.get("isManaAbility") is not True:
+                return None
+        if len(passes) != 1:
+            return None
+        return ArgentumActionChoice(action_id=passes[0]["actionId"])
+
+
 def _annotate(choice: PilotChoice, routing: Mapping[str, Any]) -> PilotChoice:
     """Attach routing evidence without changing Argentum execution semantics."""
 

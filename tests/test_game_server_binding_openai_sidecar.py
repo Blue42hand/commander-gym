@@ -12,6 +12,7 @@ from commander_gym.game_server_binding_openai_sidecar import (
     BUILTIN_DELEGATED_AUTOPASS_COMPONENT_REF,
     BUILTIN_FORCED_PARAMETERLESS_COMPONENT_REF,
     BUILTIN_NATIVE_NO_CHOICE_COMPONENT_REF,
+    BUILTIN_STANDING_MANA_ONLY_PASS_COMPONENT_REF,
     BUILTIN_OPENAI_RESPONSES_COMPONENT_REF,
     BindingOpenAIGameServerConfig,
     OpenAIBindingPilotComponentResolver,
@@ -118,6 +119,43 @@ def synthetic_catalog(
 
 
 class BindingOpenAIGameServerSidecarTests(unittest.TestCase):
+    def test_standing_mana_pass_requires_new_exact_opt_in_pilot_ref(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            pilot = Pilot(
+                pilot_id="synthetic-standing-pass", revision="r1",
+                deterministic_policy=BUILTIN_STANDING_MANA_ONLY_PASS_COMPONENT_REF,
+                escalation_provider=BUILTIN_OPENAI_RESPONSES_COMPONENT_REF,
+            )
+            catalog = synthetic_catalog(root, pilot=pilot)
+            config = BindingOpenAIGameServerConfig(
+                sidecar=OpenAIGameServerSidecarConfig(
+                    token="sidecar-secret", api_key="sk-test-secret", port=free_port(),
+                ), catalog_path=catalog, instance_root=root,
+            )
+            server = build_binding_openai_game_server_sidecar(config, client=FakeClient())
+            try:
+                seat = server.resolve_seat("ai-one", "seat-a")
+                result = seat.choose_action(
+                    {"viewingPlayerId": "ai-one"},
+                    [
+                        {"kind": "PassPriority", "actionType": "PassPriority",
+                         "semanticId": "argentum-action-v1:pass",
+                         "affordable": True, "isManaAbility": False,
+                         "action": {"type": "PassPriority", "playerId": "ai-one"}},
+                        {"kind": "ActivateAbility", "actionType": "ActivateAbility",
+                         "semanticId": "argentum-action-v1:mana",
+                         "affordable": False, "isManaAbility": True,
+                         "action": {"type": "ActivateAbility", "playerId": "ai-one"}},
+                    ], None,
+                )
+                self.assertEqual(result.action["type"], "PassPriority")
+                self.assertEqual(result.metadata["routing"]["handledBy"]["component"]["artifactId"],
+                                 "standing-mana-only-pass")
+                self.assertEqual(result.metadata["pilot"]["revision"], "r1")
+            finally:
+                server.server_close()
+
     def test_delegated_autopass_requires_exact_opt_in_provider_ref(self):
         config = OpenAIGameServerSidecarConfig(
             token="sidecar-secret", api_key="sk-test-secret", port=12345,

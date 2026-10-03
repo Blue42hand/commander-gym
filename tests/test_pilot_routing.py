@@ -5,7 +5,9 @@ from commander_gym.pilot import (
     ArgentumDecisionChoice,
     choose_for_observation,
 )
-from commander_gym.pilot_routing import NativeNoChoiceHandler, RoutingPilot
+from commander_gym.pilot_routing import (
+    NativeNoChoiceHandler, RoutingPilot, StandingManaOnlyPassHandler,
+)
 
 
 def observation(action, *, pending=None):
@@ -52,6 +54,69 @@ class CountingPilot:
 
 
 class RoutingPilotTests(unittest.TestCase):
+    def test_opt_in_standing_mana_pass_handles_changed_stack_without_model(self):
+        passed = {
+            **pass_action(), "isManaAbility": False,
+            "action": {"type": "PassPriority", "playerId": "player-1"},
+        }
+        mana = {
+            "actionId": 1, "semanticId": "argentum-action-v1:mana",
+            "kind": "ActivateAbility", "isManaAbility": True,
+            "affordable": False,
+            "action": {"type": "ActivateAbility", "playerId": "player-1"},
+        }
+        strategic = CountingPilot(ArgentumActionChoice(action_id=1))
+        pilot = RoutingPilot(strategic, handlers=(StandingManaOnlyPassHandler(),))
+        for stack in ([], ["new-opponent-spell"]):
+            with self.subTest(stack=stack):
+                current = observation(passed)
+                current["legalActions"] = [passed, mana]
+                current["state"] = {"stack": stack}
+                choice = choose_for_observation(pilot, current)
+                self.assertEqual(choice.action_id, 0)
+                self.assertEqual(choice.metadata["routing"]["handler"], "standing-mana-only-pass")
+        self.assertEqual(strategic.calls, 0)
+        # The qualified native-no-choice component remains a distinct policy.
+        self.assertIsNone(NativeNoChoiceHandler().choose(current))
+
+    def test_opt_in_standing_pass_escalates_for_real_choice_or_malformed_menu(self):
+        passed = {
+            **pass_action(), "isManaAbility": False,
+            "action": {"type": "PassPriority", "playerId": "player-1"},
+        }
+        mana = {
+            "actionId": 1, "semanticId": "argentum-action-v1:mana",
+            "kind": "ActivateAbility", "isManaAbility": True, "affordable": True,
+            "action": {"type": "ActivateAbility", "playerId": "player-1"},
+        }
+        handler = StandingManaOnlyPassHandler()
+        base = observation(passed)
+        base["legalActions"] = [passed, mana]
+        variations = [
+            {**base, "pendingDecision": {"requiresStructuredResponse": True}},
+            {**base, "terminated": True},
+            {**base, "perspectivePlayerId": "other-seat"},
+            {**base, "legalActions": [passed, mana, {
+                **mana, "actionId": 2, "kind": "CastSpell",
+                "action": {"type": "CastSpell", "playerId": "player-1"},
+            }]},
+            {**base, "legalActions": [passed, {**mana, "isManaAbility": False}]},
+            {**base, "legalActions": [passed, {**mana, "kind": "CycleCard",
+                "action": {"type": "CycleCard", "playerId": "player-1"}}]},
+            {**base, "legalActions": [passed, {**mana, "isDecisionOption": True}]},
+            {**base, "legalActions": [passed, {**mana, "actionId": 0}]},
+            {**base, "legalActions": [passed, {**mana, "actionId": True}]},
+            {**base, "legalActions": [passed, {**mana, "semanticId": ""}]},
+            {**base, "legalActions": [passed, {**mana, "action": {"type": "ActivateAbility", "playerId": "other-seat"}}]},
+            {**base, "legalActions": [passed, {**mana, "isManaAbility": None}]},
+            {**base, "legalActions": [passed, None]},
+            {**base, "legalActions": [passed, mana, passed]},
+            {**base, "legalActions": []},
+        ]
+        for altered in variations:
+            with self.subTest(altered=altered):
+                self.assertIsNone(handler.choose(altered))
+
     def test_native_no_choice_never_suppresses_a_mana_choice(self):
         handler = NativeNoChoiceHandler()
         pass_only = observation(pass_action())
