@@ -6,7 +6,7 @@ from commander_gym.pilot import (
     choose_for_observation,
 )
 from commander_gym.pilot_routing import (
-    NativeNoChoiceHandler, RoutingPilot, StandingManaOnlyPassHandler,
+    AllUnaffordablePassHandler, NativeNoChoiceHandler, RoutingPilot, StandingManaOnlyPassHandler,
 )
 
 
@@ -54,6 +54,71 @@ class CountingPilot:
 
 
 class RoutingPilotTests(unittest.TestCase):
+    def test_all_unaffordable_pass_requires_complete_native_false_certificates(self):
+        passed = {
+            **pass_action(), "actionType": "PassPriority", "isAffordable": True,
+            "isManaAbility": False,
+            "action": {"type": "PassPriority", "playerId": "player-1"},
+        }
+        cast = {
+            "actionId": 1, "semanticId": "native-cast", "kind": "CastSpell",
+            "actionType": "CastSpell", "affordable": False, "isAffordable": False,
+            "isManaAbility": False, "isDecisionOption": False,
+            "action": {"type": "CastSpell", "playerId": "player-1"},
+        }
+        kicker = {**cast, "actionId": 2, "semanticId": "native-kicker",
+                  "kind": "CastWithKicker", "actionType": "CastWithKicker"}
+        ability = {**cast, "actionId": 3, "semanticId": "native-ability",
+                   "kind": "ActivateAbility", "actionType": "ActivateAbility",
+                   "isManaAbility": True,
+                   "action": {"type": "ActivateAbility", "playerId": "player-1"}}
+        current = observation(passed)
+        current["state"] = {"priorityPlayerId": "player-1"}
+        current["legalActions"] = [passed, kicker, cast, ability]
+        handler = AllUnaffordablePassHandler()
+        self.assertEqual(handler.choose(current).action_id, 0)
+        self.assertIsNone(StandingManaOnlyPassHandler(
+            ignore_unaffordable_abilities=True,
+        ).choose(current))
+
+        mana = {**ability, "actionId": 4, "semanticId": "native-mana",
+                "affordable": True, "isAffordable": True}
+        standing = {**current, "legalActions": [passed, mana]}
+        self.assertEqual(handler.choose(standing).action_id, 0)
+        for changed in (
+            {**standing, "state": {"priorityPlayerId": "other"}},
+            {**standing, "legalActions": [passed, {**mana, "semanticId": passed["semanticId"]}]},
+            {**standing, "legalActions": [{**passed, "isAffordable": False}, mana]},
+            {**standing, "legalActions": [passed, {**mana, "actionType": "CastSpell"}]},
+            {**standing, "legalActions": [passed, {**mana, "isAffordable": None}]},
+        ):
+            with self.subTest(inherited_fast_path=changed):
+                self.assertIsNone(handler.choose(changed))
+
+        for key, value in (("affordable", True), ("affordable", None),
+                           ("isAffordable", True), ("isAffordable", None),
+                           ("isDecisionOption", None), ("kind", "Unknown"),
+                           ("actionType", "Unknown"), ("semanticId", "")):
+            with self.subTest(key=key, value=value):
+                changed = {**cast, key: value}
+                self.assertIsNone(handler.choose({**current, "legalActions": [passed, changed, kicker]}))
+        for changed in (
+            {**passed, "isAffordable": None},
+            {**passed, "action": {"type": "PassPriority", "playerId": "other"}},
+            {**passed, "actionId": True},
+        ):
+            with self.subTest(changed=changed):
+                self.assertIsNone(handler.choose({**current, "legalActions": [changed, cast]}))
+        for changed in (
+            {**current, "pendingDecision": {"kind": "SelectCards"}},
+            {**current, "terminated": True},
+            {**current, "state": {"priorityPlayerId": "other"}},
+            {**current, "state": None},
+            {**current, "legalActions": [passed, cast, {**cast, "actionId": 0}]},
+        ):
+            with self.subTest(changed=changed):
+                self.assertIsNone(handler.choose(changed))
+
     def test_opt_in_standing_pass_validates_sole_native_action_before_no_choice(self):
         passed = {
             **pass_action(), "isManaAbility": False,
