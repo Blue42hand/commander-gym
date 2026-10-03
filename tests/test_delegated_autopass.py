@@ -63,6 +63,84 @@ class ScriptedPilot:
 
 
 class DelegatedAutopassTests(unittest.TestCase):
+    def test_named_forge_wait_crosses_phase_then_wakes_at_turn_end(self):
+        class NamedPilot:
+            name, version = "scripted", "1"
+            calls = 0
+
+            def choose(self, observation):
+                self.calls += 1
+                return ArgentumActionChoice(0, metadata={"priorityDelegation": {
+                    "until": "turn_end", "reason": "Hold Mind Stone through this turn",
+                    "deferAbilities": [{"sourceId": "stone", "abilityId": "draw"}],
+                }} if self.calls == 1 else {})
+
+        legal = [
+            {"actionId": 0, "kind": "PassPriority"},
+            {"actionId": 1, "kind": "ActivateAbility", "isManaAbility": False,
+             "action": {"sourceId": "stone", "abilityId": "draw"}},
+        ]
+        strategic = NamedPilot()
+        pilot = DelegatedAutopassPilot(strategic, version="2", allow_named_deferrals=True)
+        start = observation(legal=legal)
+        pilot.choose(start)
+        later = observation(step="POSTCOMBAT_MAIN", legal=copy.deepcopy(legal))
+        self.assertEqual(pilot.choose(later).metadata["delegatedPass"]["ordinal"], 1)
+        self.assertEqual(strategic.calls, 1)
+        pilot.choose(observation(turn=2, legal=copy.deepcopy(legal)))
+        self.assertEqual(strategic.calls, 2)
+
+    def test_named_wait_wakes_on_changed_menu_state_and_decision(self):
+        class NamedPilot:
+            name, version = "scripted", "1"
+            calls = 0
+
+            def choose(self, observation):
+                self.calls += 1
+                return ArgentumActionChoice(0, metadata={"priorityDelegation": {
+                    "until": "turn_end", "reason": "Defer current ability",
+                    "deferAbilities": [{"sourceId": "stone", "abilityId": "draw"}],
+                }} if self.calls == 1 else {})
+
+        legal = [{"actionId": 0, "kind": "PassPriority"},
+                 {"actionId": 1, "kind": "ActivateAbility", "isManaAbility": False,
+                  "action": {"sourceId": "stone", "abilityId": "draw"}}]
+        for change in ("spell", "ability", "opponent", "stack", "decision"):
+            with self.subTest(change=change):
+                strategic = NamedPilot()
+                pilot = DelegatedAutopassPilot(strategic, allow_named_deferrals=True)
+                base = observation(legal=copy.deepcopy(legal))
+                pilot.choose(base)
+                later = copy.deepcopy(base)
+                if change == "spell":
+                    later["legalActions"].append({"actionId": 2, "kind": "CastSpell"})
+                elif change == "ability":
+                    later["legalActions"][1]["action"]["abilityId"] = "different"
+                elif change == "opponent":
+                    later["state"]["zones"][2]["cardIds"] = ["new"]
+                    later["state"]["cards"]["new"] = {"controllerId": "p2"}
+                elif change == "stack":
+                    later["state"]["zones"][-1]["cardIds"] = ["spell"]
+                else:
+                    later["pendingDecision"] = {"decisionId": "d1"}
+                pilot.choose(later)
+                self.assertEqual(strategic.calls, 2)
+
+    def test_named_wait_rejects_incomplete_deferral(self):
+        class NamedPilot:
+            name, version = "scripted", "1"
+
+            def choose(self, observation):
+                return ArgentumActionChoice(0, metadata={"priorityDelegation": {
+                    "until": "turn_end", "reason": "Skip", "deferAbilities": [],
+                }})
+
+        pilot = DelegatedAutopassPilot(NamedPilot(), allow_named_deferrals=True)
+        legal = [{"actionId": 0, "kind": "PassPriority"},
+                 {"actionId": 1, "kind": "ActivateAbility", "isManaAbility": False,
+                  "action": {"sourceId": "stone", "abilityId": "draw"}}]
+        self.assertIn("priorityDelegationRejected", pilot.choose(observation(legal=legal)).metadata)
+
     def test_one_model_approved_pass_covers_later_native_mana_window(self):
         class Responses:
             calls = 0

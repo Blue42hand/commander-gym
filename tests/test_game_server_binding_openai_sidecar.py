@@ -10,8 +10,10 @@ from pathlib import Path
 from commander_gym.deck_package import ArtifactRef
 from commander_gym.game_server_binding_openai_sidecar import (
     BUILTIN_DELEGATED_AUTOPASS_COMPONENT_REF,
+    BUILTIN_FORGE_CONDITIONAL_WAIT_COMPONENT_REF,
     BUILTIN_FORCED_PARAMETERLESS_COMPONENT_REF,
     BUILTIN_NATIVE_NO_CHOICE_COMPONENT_REF,
+    BUILTIN_NATIVE_UNAFFORDABLE_PASS_COMPONENT_REF,
     BUILTIN_STANDING_MANA_ONLY_PASS_COMPONENT_REF,
     BUILTIN_OPENAI_RESPONSES_COMPONENT_REF,
     BindingOpenAIGameServerConfig,
@@ -172,6 +174,25 @@ class BindingOpenAIGameServerSidecarTests(unittest.TestCase):
             ref=BUILTIN_OPENAI_RESPONSES_COMPONENT_REF,
         ))
         self.assertFalse(standard.player.allow_priority_delegation)
+
+    def test_forge_wait_requires_new_exact_provider_ref(self):
+        config = OpenAIGameServerSidecarConfig(
+            token="sidecar-secret", api_key="sk-test-secret", port=12345,
+        )
+        resolver = OpenAIBindingPilotComponentResolver(config=config, client=FakeClient())
+        subsystem = resolver.resolve(PilotSubsystemSpec(
+            role="frontier_escalation", ordinal=0,
+            ref=BUILTIN_FORGE_CONDITIONAL_WAIT_COMPONENT_REF,
+        ))
+        self.assertIsInstance(subsystem.player, DelegatedAutopassPilot)
+        self.assertTrue(subsystem.player.allow_named_deferrals)
+        self.assertTrue(subsystem.player.strategic_pilot.allow_named_deferrals)
+        self.assertEqual(subsystem.player.version, "2")
+        mechanical = resolver.resolve(PilotSubsystemSpec(
+            role="deterministic", ordinal=0,
+            ref=BUILTIN_NATIVE_UNAFFORDABLE_PASS_COMPONENT_REF,
+        ))
+        self.assertTrue(mechanical.handler.ignore_unaffordable_abilities)
 
     def test_versioned_native_no_choice_component_avoids_model_for_empty_combat(self):
         with tempfile.TemporaryDirectory() as directory:
