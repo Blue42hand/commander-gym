@@ -140,6 +140,33 @@ def main() -> int:
             break
         if candidate not in selected and candidate[0]["turn"] <= 12:
             selected.append(candidate)
+    reconcealment = []
+    for index, (prior_row, prior_raw, _, _) in enumerate(candidates):
+        prior = json.loads(prior_raw)
+        prior_visible = {
+            card_id for zone in prior["state"]["zones"]
+            if zone["zoneId"]["ownerId"] == prior["playerId"] and zone["zoneId"]["zoneType"] == "Library"
+            for card_id in zone["cardIds"]
+            if not card_id.startswith("client-hidden-library-slot:")
+        }
+        if not prior_visible:
+            continue
+        for later_row, later_raw, _, _ in candidates[index + 1:]:
+            later = json.loads(later_raw)
+            if later["playerId"] != prior["playerId"]:
+                continue
+            later_slots = {
+                card_id for zone in later["state"]["zones"]
+                if zone["zoneId"]["ownerId"] == prior["playerId"] and zone["zoneId"]["zoneType"] == "Library"
+                for card_id in zone["cardIds"]
+            }
+            if later_row["visibleOwnLibraryIds"] == 0:
+                assert not prior_visible & later_slots
+                reconcealment.append({"revealedHttpSha256": prior_row["httpSha256"],
+                                      "laterHttpSha256": later_row["httpSha256"],
+                                      "previouslyKnownIds": len(prior_visible),
+                                      "idsLinkedToLaterLibrarySlots": 0})
+            break
     selected_meta = []
     for index, (row, raw, full, compact) in enumerate(selected):
         stem = f"sample-{index:02d}"
@@ -157,7 +184,8 @@ def main() -> int:
     audit = {"evidenceClass": "actual normal GameServer HTTP callbacks, canonical Binding deck metadata and production Gym model input projection; zero provider dispatch",
              "capturedCallbacks": len(files), "actionCallbacks": len(candidates),
              "sourceSetSha256": _sha("\n".join(sorted(row["httpSha256"] for row in rows)).encode()),
-             "rows": rows, "selected": selected_meta, "paidCalls": 0,
+             "rows": rows, "selected": selected_meta,
+             "libraryReconcealment": reconcealment, "paidCalls": 0,
              "limit": "Scripted fixture Pilot, not canonical foundation Pilot strategy. Model input strings are constructed offline by the production formatter; no provider request was sent."}
     (output / "corpus-audit.json").write_text(json.dumps(audit, indent=2) + "\n")
     print(json.dumps({"callbacks": len(files), "actions": len(candidates),
