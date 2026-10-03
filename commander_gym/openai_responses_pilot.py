@@ -61,7 +61,9 @@ The only supported params fields are native Argentum ActionParams:
 - attackers: object mapping attacker entity id to attacked player/permanent entity id;
 - blockers: object mapping blocker entity id to an array of attacker entity ids;
 - targets: array of target entity ids;
-- xValue: integer.
+- xValue: integer;
+- exiledCards: array of card entity ids to exile for an additional cost, only when
+  the selected legal action's parameterSpec offers this field.
 Do not use attackerIds, attackTargetId, or other substitute field names.
 
 For a structured pending decision, return:

@@ -64,6 +64,42 @@ class GameServerSeatAdapterTests(unittest.TestCase):
         self.assertEqual(records[0].callback, "chooseAction")
         self.assertNotIn("snapshot", records[0].observation)
 
+    def test_native_offered_exile_param_reaches_parameterizer_boundary_unchanged(self):
+        class Responses:
+            def create(self, **_request):
+                return type("Response", (), {
+                    "status": "completed",
+                    "output_text": json.dumps({
+                        "channel": "action", "choice": {
+                            "semanticId": "native-alternative-cast",
+                            "params": {"targets": ["spell-1"], "exiledCards": ["blue-card-1"]},
+                        },
+                    }),
+                })()
+
+        action = {
+            "actionType": "CastWithAlternativeCost",
+            "semanticId": "native-alternative-cast",
+            "parameterSpec": {"allowedFields": {
+                "targets": "ENTITY_ID_ARRAY", "exiledCards": "ENTITY_ID_ARRAY",
+            }},
+            "action": {
+                "type": "CastSpell", "playerId": "ai", "cardId": "spell-card-1",
+                "useAlternativeCost": True,
+            },
+        }
+        provider = OpenAIResponsesPilot(
+            client=type("Client", (), {"responses": Responses()})(), model="gpt-test",
+        )
+
+        result = GameServerSeatAdapter(provider, "ai").choose_action(self.state, [action], None)
+
+        self.assertEqual(result.action_id, 0)
+        self.assertEqual(result.action, action["action"])
+        self.assertEqual(result.params, {
+            "targets": ["spell-1"], "exiledCards": ["blue-card-1"],
+        })
+
     def test_native_structured_decision_round_trip(self):
         pending = {
             "decisionId": "decision-7",
