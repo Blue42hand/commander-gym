@@ -56,6 +56,7 @@ class GameServerSeatAdapterTests(unittest.TestCase):
 
         self.assertIsInstance(result, NativeActionResponse)
         self.assertEqual(result.action, self.actions[1]["action"])
+        self.assertEqual(result.params, {})
         self.assertEqual(pilot.observations[0]["state"], self.state)
         self.assertNotIn("snapshot", pilot.observations[0])
         self.assertEqual(records[0].callback, "chooseAction")
@@ -129,16 +130,26 @@ class GameServerSeatAdapterTests(unittest.TestCase):
                     else:
                         adapter.choose_action(self.state, [], pending)
 
-    def test_rejects_wrong_perspective_and_action_parameter_reimplementation(self):
+    def test_rejects_wrong_perspective_and_carries_native_action_params(self):
         with self.assertRaisesRegex(GameServerSeatError, "perspective"):
             GameServerSeatAdapter(ScriptedPilot(ArgentumActionChoice(0)), "ai").choose_action(
                 {"viewingPlayerId": "human"}, self.actions, None
             )
 
-        with self.assertRaisesRegex(GameServerSeatError, "does not silently parameterize"):
-            GameServerSeatAdapter(
-                ScriptedPilot(ArgentumActionChoice(0, params={"targets": ["hidden"]})), "ai"
-            ).choose_action(self.state, self.actions, None)
+        result = GameServerSeatAdapter(
+            ScriptedPilot(ArgentumActionChoice(0, params={"targets": ["target-1"]})), "ai"
+        ).choose_action(self.state, self.actions, None)
+        self.assertEqual(result.action, self.actions[0]["action"])
+        self.assertEqual(result.params, {"targets": ["target-1"]})
+
+    def test_canonical_known_deck_reaches_masked_observation(self):
+        pilot = ScriptedPilot(ArgentumActionChoice(0))
+        seat = GameServerSeatAdapter(pilot, "ai")
+        seat.set_deck_list({"Mountain": 20, "Goblin": 4})
+        seat.choose_action(self.state, [self.actions[0]], None)
+        self.assertEqual(pilot.observations[0]["knownDeck"], {
+            "cards": {"Mountain": 20, "Goblin": 4},
+        })
 
 
 if __name__ == "__main__":

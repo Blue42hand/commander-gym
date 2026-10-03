@@ -33,6 +33,7 @@ from .game_server_openai_sidecar import (
 from .game_server_sidecar import GameServerSidecarServer
 from .identity import Binding, Pilot
 from .openai_responses_pilot import OpenAIResponsesPilot
+from .openai_run_budget import OpenAIRunBudget
 from .pilot import (
     ArgentumActionChoice,
     ArgentumDecisionChoice,
@@ -80,6 +81,7 @@ class BindingOpenAIGameServerConfig:
     sidecar: OpenAIGameServerSidecarConfig
     catalog_path: Path
     instance_root: Path
+    budget: OpenAIRunBudget | None = None
 
 
 def binding_openai_game_server_config_from_environment(
@@ -107,10 +109,24 @@ def binding_openai_game_server_config_from_environment(
         raise OpenAIGameServerSidecarConfigurationError(
             "COMMANDER_GYM_BINDING_CATALOG must be below COMMANDER_GYM_INSTANCE_ROOT"
         ) from exc
+    ledger_value = environment.get("COMMANDER_GYM_OPENAI_BUDGET_LEDGER")
+    cap_value = environment.get("COMMANDER_GYM_OPENAI_BUDGET_CAP_USD")
+    if bool(ledger_value) != bool(cap_value):
+        raise OpenAIGameServerSidecarConfigurationError(
+            "OpenAI budget ledger and cap must be configured together"
+        )
     return BindingOpenAIGameServerConfig(
         sidecar=sidecar,
         catalog_path=catalog_path,
         instance_root=instance_root,
+        budget=(
+            OpenAIRunBudget(
+                Path(environment["COMMANDER_GYM_OPENAI_BUDGET_LEDGER"]).expanduser().resolve(),
+                float(environment["COMMANDER_GYM_OPENAI_BUDGET_CAP_USD"]),
+            )
+            if ledger_value and cap_value
+            else None
+        ),
     )
 
 
@@ -166,6 +182,7 @@ class OpenAIBindingPilotComponentResolver:
 
     config: OpenAIGameServerSidecarConfig
     client: Any
+    budget: OpenAIRunBudget | None = None
 
     def resolve(self, spec: PilotSubsystemSpec):
         key = spec.component_key()
@@ -183,6 +200,7 @@ class OpenAIBindingPilotComponentResolver:
                     client=self.client,
                     model=self.config.model,
                     max_attempts=self.config.max_attempts,
+                    budget=self.budget,
                 )
             )
         raise PilotContractError(
@@ -192,14 +210,14 @@ class OpenAIBindingPilotComponentResolver:
         )
 
 
-def _default_openai_client(config: OpenAIGameServerSidecarConfig) -> Any:
+def _default_openai_client(config: OpenAIGameServerSidecarConfig, *, bounded: bool) -> Any:
     try:
         from openai import OpenAI
     except ImportError as exc:
         raise OpenAIGameServerSidecarConfigurationError(
             "OpenAI SDK is not installed; install requirements-openai.txt"
         ) from exc
-    return OpenAI(api_key=config.api_key, timeout=config.timeout)
+    return OpenAI(api_key=config.api_key, timeout=config.timeout, max_retries=0 if bounded else 2)
 
 
 def build_binding_openai_game_server_sidecar(
@@ -230,10 +248,13 @@ def build_binding_openai_game_server_sidecar(
 
     runtime_resolver = component_resolver
     if runtime_resolver is None:
-        provider_client = client if client is not None else _default_openai_client(config.sidecar)
+        provider_client = client if client is not None else _default_openai_client(
+            config.sidecar, bounded=config.budget is not None,
+        )
         runtime_resolver = OpenAIBindingPilotComponentResolver(
             config=config.sidecar,
             client=provider_client,
+            budget=config.budget,
         )
 
     if provenance_sink is None and config.sidecar.provenance_path is not None:

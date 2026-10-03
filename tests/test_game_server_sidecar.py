@@ -78,6 +78,7 @@ class GameServerSidecarTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(response["kind"], "action")
         self.assertEqual(response["action"], body["legalActions"][0]["action"])
+        self.assertEqual(response["params"], {})
         self.assertEqual(self.pilot.observations[0]["state"], body["state"])
         self.assertNotIn("snapshot", self.pilot.observations[0])
 

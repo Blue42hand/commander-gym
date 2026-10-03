@@ -26,6 +26,7 @@ import json
 from typing import Any, Mapping
 
 from .pilot import ArgentumActionChoice, ArgentumDecisionChoice, PilotChoice
+from .openai_run_budget import OpenAIRunBudget, OpenAIRunBudgetError
 
 MODEL_IO_SCHEMA_VERSION = 1
 
@@ -437,6 +438,7 @@ class OpenAIResponsesPilot:
     instructions: str = _DEFAULT_INSTRUCTIONS
     strategy: str | None = None
     max_attempts: int = 2
+    budget: OpenAIRunBudget | None = None
     name: str = "openai-responses"
     version: str = "1"
 
@@ -472,6 +474,8 @@ class OpenAIResponsesPilot:
             "text": {"format": action_format or {"type": "json_object"}},
             "store": False,
         }
+        if self.budget is not None:
+            request["max_output_tokens"] = self.budget.MAX_OUTPUT_TOKENS
         pending = observation.get("pendingDecision")
         if action_format is not None:
             request["instructions"] += (
@@ -499,7 +503,14 @@ class OpenAIResponsesPilot:
                 )
             request_snapshot = deepcopy(request)
             try:
-                response = self.client.responses.create(**request)
+                response = (
+                    self.budget.create(self.client.responses.create, request)
+                    if self.budget is not None
+                    else self.client.responses.create(**request)
+                )
+            except OpenAIRunBudgetError as exc:
+                # A pre-dispatch cap rejection is not a provider attempt.
+                raise OpenAIResponsesPilotError(str(exc)) from exc
             except Exception as exc:  # Provider SDK owns transport-level retries.
                 failure_summary = _provider_failure_summary(exc)
                 attempts.append(
