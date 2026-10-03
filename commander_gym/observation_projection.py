@@ -71,6 +71,8 @@ def expand_seat_observation(view: Mapping[str, Any]) -> dict[str, Any]:
     if any(not isinstance(key, str) or not _empty_default(value) for key, value in defaults.items()):
         raise ValueError("card defaults must be explicit JSON empty values")
     result = deepcopy(dict(original))
+    if not defaults:
+        return result
     state = result.get("state")
     cards = state.get("cards") if isinstance(state, Mapping) else None
     if defaults and (not isinstance(cards, Mapping) or not all(

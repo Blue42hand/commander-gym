@@ -40,6 +40,15 @@ class ObservationProjectionTests(unittest.TestCase):
         self.assertEqual(compact["cardDefaults"], {})
         self.assertEqual(expand_seat_observation(compact), observation)
 
+    def test_nonobject_cards_fall_back_without_decoder_mutation(self):
+        for card in (None, [], 0, "masked"):
+            with self.subTest(card=card):
+                observation = {"state": {"cards": {"a": card}},
+                               "legalActions": [{"semanticId": "native-pass"}]}
+                compact = compact_seat_observation(observation)
+                self.assertEqual(compact["cardDefaults"], {})
+                self.assertEqual(expand_seat_observation(compact), observation)
+
     def test_inconsistent_empty_defaults_fall_back_per_field(self):
         observation = {"state": {"cards": {
             "a": {"id": "a", "value": []},
