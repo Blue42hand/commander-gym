@@ -5,7 +5,7 @@ from commander_gym.pilot import (
     ArgentumDecisionChoice,
     choose_for_observation,
 )
-from commander_gym.pilot_routing import RoutingPilot
+from commander_gym.pilot_routing import NativeNoChoiceHandler, RoutingPilot
 
 
 def observation(action, *, pending=None):
@@ -52,6 +52,47 @@ class CountingPilot:
 
 
 class RoutingPilotTests(unittest.TestCase):
+    def test_native_no_choice_never_suppresses_a_mana_choice(self):
+        handler = NativeNoChoiceHandler()
+        pass_only = observation(pass_action())
+        pass_only["legalActions"].append({
+            "actionId": 1, "kind": "ActivateAbility", "isManaAbility": True,
+            "description": "Add mana",
+            "action": {
+                "type": "ActivateAbility", "abilityId": "intrinsic_mana_U",
+                "targets": [], "costPayment": None, "alternativePayment": None,
+                "repeatCount": 1, "opponentTargetsChosen": False,
+            },
+        })
+        # Replay regression: in an own-main pass-plus-mana window the strategic
+        # pilot chose to add mana. Legal mana actions are not a forced pass.
+        pass_only["state"] = {"turnNumber": 3, "currentStep": "PRECOMBAT_MAIN"}
+        self.assertIsNone(handler.choose(pass_only))
+        for change in (
+            {"isManaAbility": False},
+            {"kind": "CastSpell"},
+            {"isDecisionOption": True},
+        ):
+            with self.subTest(change=change):
+                altered = {**pass_only, "legalActions": [pass_action(), {**pass_only["legalActions"][1], **change}]}
+                self.assertIsNone(handler.choose(altered))
+        self.assertIsNone(handler.choose({**pass_only, "pendingDecision": {"kind": "SelectCards"}}))
+
+    def test_native_no_choice_confirms_only_empty_combat(self):
+        handler = NativeNoChoiceHandler()
+        for kind, field, choice_field in (
+            ("DeclareAttackers", "validAttackers", "attackers"),
+            ("DeclareBlockers", "validBlockers", "blockers"),
+        ):
+            action = {
+                "actionId": 0, "kind": kind, field: [],
+                "action": {"type": kind, choice_field: {}},
+            }
+            with self.subTest(kind=kind):
+                self.assertEqual(handler.choose(observation(action)).action_id, 0)
+                self.assertIsNone(handler.choose(observation({**action, field: ["candidate"]})))
+                self.assertIsNone(handler.choose(observation({**action, "action": {"type": kind, choice_field: {"candidate": "target"}}})))
+
     def test_forced_parameterless_pass_avoids_strategic_wake(self):
         strategic = CountingPilot(ArgentumActionChoice(action_id=999))
         router = RoutingPilot(strategic)

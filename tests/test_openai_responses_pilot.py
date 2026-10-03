@@ -110,6 +110,54 @@ def structured_observation():
 
 
 class OpenAIResponsesPilotTests(unittest.TestCase):
+    def test_priority_delegation_requires_opt_in_and_exact_pass(self):
+        directive = {"until": "phase_end", "reason": "Reviewed this main phase"}
+        output = json.dumps({
+            "channel": "action", "semanticId": "argentum-action-v1:pass",
+            "params": {}, "priorityDelegation": directive,
+        })
+        client = FakeClient(FakeResponse(output))
+        pilot = OpenAIResponsesPilot(
+            client=client, model="gpt-test", allow_priority_delegation=True,
+        )
+        choice = pilot.choose(action_observation())
+        self.assertEqual(choice.metadata["priorityDelegation"], directive)
+        self.assertIn("priorityDelegation", client.responses.calls[0]["instructions"])
+
+        rejected = OpenAIResponsesPilot(
+            client=FakeClient(FakeResponse(output)), model="gpt-test", max_attempts=1,
+        )
+        with self.assertRaisesRegex(OpenAIResponsesPilotError, "not enabled"):
+            rejected.choose(action_observation())
+
+        wrong_action = json.dumps({
+            "channel": "action", "semanticId": "argentum-action-v1:attack",
+            "params": {"attackers": {}}, "priorityDelegation": directive,
+        })
+        rejected = OpenAIResponsesPilot(
+            client=FakeClient(FakeResponse(wrong_action)), model="gpt-test",
+            max_attempts=1, allow_priority_delegation=True,
+        )
+        with self.assertRaisesRegex(OpenAIResponsesPilotError, "requires an exact current PassPriority"):
+            rejected.choose(action_observation())
+
+    def test_native_action_schema_exposes_delegation_only_for_opt_in(self):
+        obs = action_observation()
+        for action in obs["legalActions"]:
+            action["parameterSpec"] = {"allowedFields": {}}
+        output = json.dumps({
+            "channel": "action", "choice": {
+                "semanticId": "argentum-action-v1:pass", "params": {},
+            },
+        })
+        for enabled in (False, True):
+            client = FakeClient(FakeResponse(output))
+            OpenAIResponsesPilot(
+                client=client, model="gpt-test", allow_priority_delegation=enabled,
+            ).choose(obs)
+            properties = client.responses.calls[0]["text"]["format"]["schema"]["properties"]
+            self.assertEqual("priorityDelegation" in properties, enabled)
+
     def test_bounded_provider_request_is_recorded_in_exact_model_io(self):
         with TemporaryDirectory() as temporary:
             budget = OpenAIRunBudget(Path(temporary) / "budget.json", 5)

@@ -93,6 +93,59 @@ class ForcedParameterlessChoiceHandler:
         return ArgentumActionChoice(action_id=action["actionId"])
 
 
+@dataclass(frozen=True)
+class NativeNoChoiceHandler:
+    """Port Forge's certified no-action and empty-combat fast paths to Argentum.
+
+    Argentum's legal actions are native. A sole PassPriority action is forced; empty
+    native attacker/blocker candidate lists similarly certify an empty declaration.
+    Even an otherwise simple mana activation remains a player choice: the recorded
+    early-game replay contains a mana activation in a pass-plus-mana menu.
+
+    This is a new component identity: the qualified foundation Pilot still resolves
+    its original ForcedParameterlessChoiceHandler unchanged.
+    """
+
+    name: str = "native-no-choice"
+    version: str = "3"
+
+    def choose(self, observation: Mapping[str, Any]) -> PilotChoice | None:
+        forced = ForcedParameterlessChoiceHandler().choose(observation)
+        if forced is not None:
+            return forced
+        if observation.get("pendingDecision") is not None:
+            return None
+        legal = observation.get("legalActions")
+        if not isinstance(legal, list) or not legal:
+            return None
+        if any(not isinstance(action, Mapping) for action in legal):
+            return None
+
+        if len(legal) != 1:
+            return None
+        action = legal[0]
+        kind = action.get("kind")
+        candidates = {
+            "DeclareAttackers": "validAttackers",
+            "DeclareBlockers": "validBlockers",
+        }.get(kind)
+        if candidates is None or action.get(candidates) != []:
+            return None
+        if type(action.get("actionId")) is not int or action.get("affordable") is False:
+            return None
+        if action.get("isDecisionOption") is True:
+            return None
+        if action.get("mandatoryAttackers") or action.get("mandatoryBlockerAssignments"):
+            return None
+        native = action.get("action")
+        field = "attackers" if kind == "DeclareAttackers" else "blockers"
+        if not isinstance(native, Mapping) or native.get("type") != kind:
+            return None
+        if native.get(field) != {}:
+            return None
+        return ArgentumActionChoice(action_id=action["actionId"])
+
+
 def _annotate(choice: PilotChoice, routing: Mapping[str, Any]) -> PilotChoice:
     """Attach routing evidence without changing Argentum execution semantics."""
 

@@ -319,7 +319,9 @@ def _native_action_param_fields(action: Mapping[str, Any]) -> Mapping[str, str] 
     return fields
 
 
-def _native_action_format(observation: Mapping[str, Any]) -> dict[str, Any] | None:
+def _native_action_format(
+    observation: Mapping[str, Any], *, allow_priority_delegation: bool = False,
+) -> dict[str, Any] | None:
     """Constrain each semantic action to its own Argentum-authored parameter fields."""
 
     legal = observation.get("legalActions")
@@ -348,16 +350,28 @@ def _native_action_format(observation: Mapping[str, Any]) -> dict[str, Any] | No
             "required": ["semanticId", "params"],
             "additionalProperties": False,
         })
+    root_properties: dict[str, Any] = {
+        "channel": {"type": "string", "const": "action"},
+        "choice": {"anyOf": variants},
+    }
+    if allow_priority_delegation:
+        root_properties["priorityDelegation"] = {
+            "type": "object",
+            "properties": {
+                "until": {"type": "string", "enum": ["phase_end", "next_own_main"]},
+                "reason": {"type": "string"},
+                "watchOpponents": {"type": "boolean"},
+            },
+            "required": ["until", "reason"],
+            "additionalProperties": False,
+        }
     return {
         "type": "json_schema",
         "name": "commander_gym_native_action",
         "strict": False,
         "schema": {
             "type": "object",
-            "properties": {
-                "channel": {"type": "string", "const": "action"},
-                "choice": {"anyOf": variants},
-            },
+            "properties": root_properties,
             "required": ["channel", "choice"],
             "additionalProperties": False,
         },
@@ -439,6 +453,7 @@ class OpenAIResponsesPilot:
     strategy: str | None = None
     max_attempts: int = 2
     budget: OpenAIRunBudget | None = None
+    allow_priority_delegation: bool = False
     name: str = "openai-responses"
     version: str = "1"
 
@@ -457,7 +472,9 @@ class OpenAIResponsesPilot:
             )
 
     def choose(self, observation: Mapping[str, Any]) -> PilotChoice:
-        action_format = _native_action_format(observation)
+        action_format = _native_action_format(
+            observation, allow_priority_delegation=self.allow_priority_delegation,
+        )
         model_observation = _without_live_routing(observation)
         base_input = "Return one JSON object for this observation:\n" + json.dumps(
             model_observation,
@@ -483,6 +500,17 @@ class OpenAIResponsesPilot:
                 "instead of top-level semanticId/params. Return channel action with "
                 "choice containing the exact semanticId and only the ActionParams "
                 "allowed by that action's parameterSpec."
+            )
+        if self.allow_priority_delegation:
+            request["instructions"] += (
+                "\n\nYou may optionally include priorityDelegation only when choosing "
+                "PassPriority. Set until to phase_end or next_own_main and give a "
+                "concrete reason. Optionally set watchOpponents true; by default "
+                "opponent battlefield changes do not end the reviewed wait. This "
+                "delegates later priority windows with only "
+                "mana abilities until the boundary. New spells, nonmana actions, "
+                "required decisions, or changed own hand/board, life, or mana wake "
+                "you. Omit delegation when floating mana or unreviewed events matter."
             )
         if isinstance(pending, Mapping) and pending.get("requiresStructuredResponse") is True:
             request["instructions"] += (
@@ -603,8 +631,40 @@ class OpenAIResponsesPilot:
             action_decision = decision.get("choice") if "choice" in decision else decision
             if not isinstance(action_decision, Mapping):
                 raise OpenAIResponsesPilotError("OpenAI action choice must be a JSON object")
-            return self._action_choice(action_decision, observation, metadata)
+            choice = self._action_choice(action_decision, observation, metadata)
+            directive = decision.get("priorityDelegation")
+            if directive is None:
+                return choice
+            if not self.allow_priority_delegation:
+                raise OpenAIResponsesPilotError("priority delegation is not enabled for this Pilot")
+            if (
+                not isinstance(directive, Mapping)
+                    or not {"until", "reason"}.issubset(directive)
+                    or set(directive) - {"until", "reason", "watchOpponents"}
+                    or directive.get("until") not in {"phase_end", "next_own_main"}
+                    or not isinstance(directive.get("reason"), str)
+                    or not directive["reason"].strip()
+                    or type(directive.get("watchOpponents", False)) is not bool
+                or not any(
+                    isinstance(action, Mapping)
+                    and action.get("actionId") == choice.action_id
+                    and action.get("kind") == "PassPriority"
+                    for action in observation.get("legalActions", [])
+                )
+            ):
+                raise OpenAIResponsesPilotError(
+                    "priority delegation requires an exact current PassPriority and bounded reason"
+                )
+            return ArgentumActionChoice(
+                action_id=choice.action_id,
+                params=choice.params,
+                metadata={**dict(choice.metadata), "priorityDelegation": dict(directive)},
+            )
         if channel == "decision":
+            if "priorityDelegation" in decision:
+                raise OpenAIResponsesPilotError(
+                    "priority delegation cannot accompany a structured decision"
+                )
             return self._decision_choice(decision, observation, metadata)
         raise OpenAIResponsesPilotError(
             "OpenAI pilot output channel must be 'action' or 'decision'"
