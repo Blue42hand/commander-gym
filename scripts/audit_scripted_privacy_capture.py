@@ -123,9 +123,10 @@ def main() -> int:
                     "fullCompactRoundtrip": True})
         rows.append(row)
         candidates.append((row, raw, full, compact))
-    # Pick earliest per seat plus every new observed category, then fill in time order.
+    # Pick earliest per seat plus every new observed category, then balance seats/turns.
     selected = []
     seen = set()
+    known_library_seen = set()
     for candidate in candidates:
         row = candidate[0]
         categories = {("seat", row["profileId"])}
@@ -135,16 +136,26 @@ def main() -> int:
             categories.add(("combat", True))
         if row["visibleLibraryIds"]:
             categories.add(("library-reveal", True))
+        if row["visibleOwnLibraryIds"]:
+            known_library_seen.add(row["profileId"])
+        elif row["profileId"] in known_library_seen:
+            categories.add(("library-reconcealed", row["profileId"]))
         if row["faceDownCardCount"]:
             categories.add(("face-down", True))
         if categories - seen and len(selected) < args.max_selected:
             selected.append(candidate)
             seen.update(categories)
-    for candidate in candidates:
-        if len(selected) >= args.max_selected:
+    while len(selected) < args.max_selected:
+        remaining = [candidate for candidate in candidates
+                     if candidate not in selected and candidate[0]["turn"] <= 12]
+        if not remaining:
             break
-        if candidate not in selected and candidate[0]["turn"] <= 12:
-            selected.append(candidate)
+        def balance_key(candidate):
+            row = candidate[0]
+            same_seat = [item[0] for item in selected if item[0]["profileId"] == row["profileId"]]
+            return (len(same_seat), row["turn"] in {item["turn"] for item in same_seat},
+                    row["turn"], candidates.index(candidate))
+        selected.append(min(remaining, key=balance_key))
     reconcealment = []
     for index, (prior_row, prior_raw, _, _) in enumerate(candidates):
         prior = json.loads(prior_raw)
