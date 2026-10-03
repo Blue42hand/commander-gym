@@ -58,6 +58,11 @@ class RoutingPilotTests(unittest.TestCase):
         pass_only["legalActions"].append({
             "actionId": 1, "kind": "ActivateAbility", "isManaAbility": True,
             "description": "Add mana",
+            "action": {
+                "type": "ActivateAbility", "abilityId": "intrinsic_mana_U",
+                "targets": [], "costPayment": None, "alternativePayment": None,
+                "repeatCount": 1, "opponentTargetsChosen": False,
+            },
         })
         self.assertEqual(handler.choose(pass_only).action_id, 0)
         for change in (
@@ -69,6 +74,17 @@ class RoutingPilotTests(unittest.TestCase):
                 altered = {**pass_only, "legalActions": [pass_action(), {**pass_only["legalActions"][1], **change}]}
                 self.assertIsNone(handler.choose(altered))
         self.assertIsNone(handler.choose({**pass_only, "pendingDecision": {"kind": "SelectCards"}}))
+        for native_change in (
+            {"targets": ["e1"]},
+            {"costPayment": {"type": "TapPermanent"}},
+            {"alternativePayment": {"type": "Other"}},
+            {"repeatCount": 2},
+            {"opponentTargetsChosen": True},
+        ):
+            with self.subTest(native_change=native_change):
+                mana = dict(pass_only["legalActions"][1])
+                mana["action"] = {**mana["action"], **native_change}
+                self.assertIsNone(handler.choose({**pass_only, "legalActions": [pass_action(), mana]}))
 
     def test_native_no_choice_confirms_only_empty_combat(self):
         handler = NativeNoChoiceHandler()

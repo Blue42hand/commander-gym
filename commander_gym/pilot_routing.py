@@ -107,7 +107,7 @@ class NativeNoChoiceHandler:
     """
 
     name: str = "native-no-choice"
-    version: str = "1"
+    version: str = "2"
 
     def choose(self, observation: Mapping[str, Any]) -> PilotChoice | None:
         forced = ForcedParameterlessChoiceHandler().choose(observation)
@@ -125,11 +125,7 @@ class NativeNoChoiceHandler:
         if len(passes) == 1 and type(passes[0].get("actionId")) is int:
             if passes[0].get("affordable") is not False and all(
                 action is passes[0]
-                or (
-                    action.get("kind") == "ActivateAbility"
-                    and action.get("isManaAbility") is True
-                    and action.get("isDecisionOption") is not True
-                )
+                or self._ordinary_mana_action(action)
                 for action in legal
             ):
                 return ArgentumActionChoice(action_id=passes[0]["actionId"])
@@ -157,6 +153,30 @@ class NativeNoChoiceHandler:
         if native.get(field) != {}:
             return None
         return ArgentumActionChoice(action_id=action["actionId"])
+
+    @staticmethod
+    def _ordinary_mana_action(action: Mapping[str, Any]) -> bool:
+        """Accept only Argentum's parameter-free mana activation template.
+
+        Mana abilities with a target, alternate payment, repeated activation, or
+        another-permanent cost need a strategic choice even when they are the only
+        alternatives to passing priority. Native legality remains authoritative.
+        """
+
+        native = action.get("action")
+        return (
+            action.get("kind") == "ActivateAbility"
+            and action.get("isManaAbility") is True
+            and action.get("isDecisionOption") is not True
+            and isinstance(native, Mapping)
+            and native.get("type") == "ActivateAbility"
+            and isinstance(native.get("abilityId"), str)
+            and native.get("targets") == []
+            and native.get("costPayment") is None
+            and native.get("alternativePayment") is None
+            and native.get("repeatCount") == 1
+            and native.get("opponentTargetsChosen") is False
+        )
 
 
 def _annotate(choice: PilotChoice, routing: Mapping[str, Any]) -> PilotChoice:

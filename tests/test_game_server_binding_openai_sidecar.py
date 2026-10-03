@@ -141,7 +141,10 @@ class BindingOpenAIGameServerSidecarTests(unittest.TestCase):
                          "action": {"type": "PassPriority", "playerId": "ai-one"}},
                         {"kind": "ActivateAbility", "actionType": "ActivateAbility",
                          "isManaAbility": True,
-                         "action": {"type": "ActivateAbility", "playerId": "ai-one"}},
+                         "action": {"type": "ActivateAbility", "playerId": "ai-one",
+                                    "abilityId": "intrinsic_mana_U", "targets": [],
+                                    "costPayment": None, "alternativePayment": None,
+                                    "repeatCount": 1, "opponentTargetsChosen": False}},
                     ],
                     None,
                 )
