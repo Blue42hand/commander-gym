@@ -1,15 +1,59 @@
 from pathlib import Path
 from argparse import Namespace
+import hashlib
+import json
+import stat
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from commander_gym.openai_run_budget import OpenAIRunBudget, OpenAIRunBudgetError
 from commander_gym.two_luna_debug import (
-    _ProgressGuard, _natural_terminal_game, _provenance_size, _run_budget, _summarize,
+    _ProgressGuard, _capture_terminal_replay, _natural_terminal_game,
+    _provenance_size, _run_budget, _summarize,
 )
 
 
 class TwoLunaDebugReportTests(unittest.TestCase):
+    def test_captures_replay_and_native_terminal_frame_before_server_cleanup(self):
+        replay = {"metadata": {"gameId": "game-1", "snapshotCount": 3,
+                               "stateReproducible": True},
+                  "initialSnapshot": {}, "deltas": [{}, {}]}
+        state = {"gameOver": True, "winnerId": "ai-a", "turnNumber": 13}
+        # The pre-fix status could omit nativeGameOver yet still identify the
+        # completed match. Replay capture must remain independent of that DTO.
+        finished = [{"gameSessionId": "game-1", "winnerId": "ai-a",
+                     "nativeGameOver": False, "finalTurnNumber": None}]
+        with tempfile.TemporaryDirectory() as directory:
+            with patch("commander_gym.two_luna_debug._request_json",
+                       side_effect=[replay, state]) as request:
+                receipt = _capture_terminal_replay("http://127.0.0.1:1234", finished, Path(directory))
+            request.assert_any_call("http://127.0.0.1:1234/api/public/replays/game-1", timeout=120)
+            request.assert_any_call(
+                "http://127.0.0.1:1234/api/public/replays/game-1/frames/2/full-state",
+                timeout=120,
+            )
+            self.assertEqual(receipt["finalTurnNumber"], 13)
+            for name, expected_hash in (("terminal-replay.json", receipt["replaySha256"]),
+                                        ("terminal-state.json", receipt["terminalStateSha256"])):
+                path = Path(directory) / name
+                self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+                self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), expected_hash)
+            self.assertEqual(json.loads((Path(directory) / "terminal-state.json").read_text()), state)
+
+    def test_capture_rejects_a_nonterminal_final_frame(self):
+        replay = {"metadata": {"gameId": "game-1", "snapshotCount": 1}}
+        with tempfile.TemporaryDirectory() as directory:
+            with patch("commander_gym.two_luna_debug._request_json",
+                       side_effect=[replay, {"gameOver": False, "turnNumber": 13}]):
+                with self.assertRaisesRegex(RuntimeError, "native game-over"):
+                    _capture_terminal_replay(
+                        "http://127.0.0.1:1234",
+                        [{"gameSessionId": "game-1", "winnerId": "ai-a"}], Path(directory),
+                    )
+            self.assertTrue((Path(directory) / "terminal-replay.json").is_file())
+            self.assertFalse((Path(directory) / "terminal-state.json").exists())
+
     def test_existing_elevated_cumulative_budget_is_read_without_reset(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "ledger.json"

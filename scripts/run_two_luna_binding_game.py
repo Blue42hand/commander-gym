@@ -166,6 +166,7 @@ def main():
             *(["--budget-max-requests", str(args.budget_max_requests)] if args.budget_max_requests is not None else []),
             "--provenance", str(run_dir / "policy.jsonl"),
             "--server-log", str(run_dir / "server.log"),
+            "--terminal-evidence-dir", str(run_dir),
             "--timeout", str(min(args.timeout, 30) if args.dry_run else args.timeout),
             "--stall-seconds", str(min(args.stall_seconds, 30) if args.dry_run else args.stall_seconds)],
             cwd=gym, env=runner_env, check=False)

@@ -15,10 +15,12 @@ from __future__ import annotations
 import argparse
 from collections import Counter
 from dataclasses import dataclass
+import hashlib
 import json
 import os
 from pathlib import Path
 import re
+import stat
 import time
 from typing import Any, Mapping
 from urllib.error import HTTPError, URLError
@@ -38,6 +40,7 @@ ERROR_RE = re.compile(
 
 def _request_json(
     url: str, *, payload: Mapping[str, Any] | None = None, token: str | None = None,
+    timeout: float = 10,
 ) -> Mapping[str, Any]:
     data = None if payload is None else json.dumps(payload).encode()
     request = Request(
@@ -50,7 +53,7 @@ def _request_json(
         method="POST" if data is not None else "GET",
     )
     try:
-        with urlopen(request, timeout=10) as response:
+        with urlopen(request, timeout=timeout) as response:
             body = json.loads(response.read())
     except HTTPError as exc:
         detail = exc.read().decode(errors="replace")
@@ -60,6 +63,62 @@ def _request_json(
     if not isinstance(body, Mapping):
         raise RuntimeError(f"{url} returned non-object JSON")
     return body
+
+
+def _write_private_json(path: Path, value: Mapping[str, Any]) -> str:
+    """Create one owner-only run artifact without replacing earlier evidence."""
+
+    encoded = (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "wb") as output:
+        output.write(encoded)
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _capture_terminal_replay(
+    base: str, finished: list[dict[str, Any]], evidence_dir: Path,
+) -> dict[str, Any]:
+    """Retain the in-memory replay and its native final frame before server shutdown."""
+
+    if (len(finished) != 1 or not isinstance(finished[0], Mapping)
+            or not isinstance(finished[0].get("gameSessionId"), str)):
+        raise RuntimeError("expected exactly one finished game with a session id")
+    if stat.S_IMODE(evidence_dir.stat().st_mode) & 0o077:
+        raise RuntimeError("terminal evidence directory must be private to the current user")
+    game = finished[0]
+    game_id = game["gameSessionId"]
+    replay = _request_json(f"{base}/api/public/replays/{game_id}", timeout=120)
+    metadata = replay.get("metadata")
+    if not isinstance(metadata, Mapping) or metadata.get("gameId") != game_id:
+        raise RuntimeError("replay metadata did not identify the finished game")
+    frame_count = metadata.get("snapshotCount")
+    if type(frame_count) is not int or frame_count < 1:
+        raise RuntimeError("replay did not report a positive frame count")
+    replay_sha = _write_private_json(evidence_dir / "terminal-replay.json", replay)
+
+    # This existing endpoint returns native GameState, including the final game-over fields.
+    # Keep it private: unlike the ordinary spectator replay, it can contain hidden cards.
+    final_state = _request_json(
+        f"{base}/api/public/replays/{game_id}/frames/{frame_count - 1}/full-state",
+        timeout=120,
+    )
+    if final_state.get("gameOver") is not True:
+        raise RuntimeError("last replay frame did not contain native game-over state")
+    if type(final_state.get("turnNumber")) is not int:
+        raise RuntimeError("last replay frame had no native final turn")
+    if game.get("winnerId") != final_state.get("winnerId"):
+        raise RuntimeError("last replay frame winner disagreed with tournament result")
+    state_sha = _write_private_json(evidence_dir / "terminal-state.json", final_state)
+    return {
+        "gameSessionId": game_id,
+        "replaySha256": replay_sha,
+        "terminalStateSha256": state_sha,
+        "snapshotCount": frame_count,
+        "nativeGameOver": True,
+        "finalTurnNumber": final_state["turnNumber"],
+        "winnerId": final_state.get("winnerId"),
+        "stateReproducible": metadata.get("stateReproducible"),
+    }
 
 
 def _read_provenance(path: Path | None) -> list[dict[str, Any]]:
@@ -412,9 +471,11 @@ def run(args: argparse.Namespace) -> int:
     completed = False
     terminal_evidence: dict[str, Any] | None = None
     stop_reason = "emergency_ceiling"
+    final_status: Mapping[str, Any] = {}
 
     while time.monotonic() < deadline:
         status = _request_json(f"{base}/api/dev/ai-tournament/{lobby_id}")
+        final_status = status
         live = status.get("liveGames")
         if not isinstance(live, list):
             live = []
@@ -483,6 +544,15 @@ def run(args: argparse.Namespace) -> int:
     )
     result["terminalEvidence"] = terminal_evidence
     result["stopReason"] = stop_reason
+    if final_status.get("complete") is True and args.terminal_evidence_dir:
+        finished = final_status.get("completedGames")
+        try:
+            result["terminalArtifact"] = _capture_terminal_replay(
+                base, finished if isinstance(finished, list) else [],
+                Path(args.terminal_evidence_dir),
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            result["terminalArtifact"] = {"error": str(exc)}
     after = budget.snapshot()
     result["budget"] = {
         "capUsd": after["capUsd"],
@@ -518,6 +588,8 @@ def main() -> int:
     parser.add_argument("--poll-seconds", type=float, default=1.0)
     parser.add_argument("--provenance")
     parser.add_argument("--server-log")
+    parser.add_argument("--terminal-evidence-dir",
+                        help="owner-only run directory for final replay and native terminal state")
     args = parser.parse_args()
     if args.timeout <= 0 or args.stall_seconds <= 0 or args.poll_seconds <= 0:
         parser.error("timeout, stall-seconds, and poll-seconds must be positive")
