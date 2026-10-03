@@ -49,7 +49,8 @@ from .pilot_composition import (
     compose_pilot_runtime,
 )
 from .pilot_routing import (
-    ForcedParameterlessChoiceHandler, NativeNoChoiceHandler, StandingManaOnlyPassHandler,
+    AllUnaffordablePassHandler, ForcedParameterlessChoiceHandler, NativeNoChoiceHandler,
+    StandingManaOnlyPassHandler,
 )
 
 
@@ -80,6 +81,12 @@ BUILTIN_NATIVE_UNAFFORDABLE_PASS_COMPONENT_REF = ArtifactRef(
     artifact_id="native-unaffordable-ability-pass",
     version="2",
     digest="sha256:989156518fba4374673e3218fb9c538898ecef79ea2f02c791c793e1765db443",
+)
+BUILTIN_ALL_UNAFFORDABLE_PASS_COMPONENT_REF = ArtifactRef(
+    kind="deterministic-policy",
+    artifact_id="native-all-unaffordable-pass",
+    version="1",
+    digest="sha256:120a1bcb22ad1d2e919a3d10e3cdf25c086e5ff6abe6e95c48aaa7833a1475a4",
 )
 BUILTIN_OPENAI_RESPONSES_COMPONENT_REF = ArtifactRef(
     kind="provider",
@@ -247,6 +254,11 @@ class OpenAIBindingPilotComponentResolver:
                 name="native-unaffordable-ability-pass", version="2",
                 ignore_unaffordable_abilities=True,
             ))
+        if (
+            spec.role == "deterministic"
+            and key == _component_key(BUILTIN_ALL_UNAFFORDABLE_PASS_COMPONENT_REF)
+        ):
+            return MechanicalHandlerSubsystem(AllUnaffordablePassHandler())
         if (
             spec.role == "frontier_escalation"
             and key == _component_key(BUILTIN_OPENAI_RESPONSES_COMPONENT_REF)

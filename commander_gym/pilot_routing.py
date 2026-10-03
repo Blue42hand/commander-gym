@@ -226,6 +226,83 @@ class StandingManaOnlyPassHandler:
         return ArgentumActionChoice(action_id=passes[0]["actionId"])
 
 
+@dataclass(frozen=True)
+class AllUnaffordablePassHandler:
+    """Opt-in pass when every other native offer is explicitly unaffordable.
+
+    Retain the prior standing pass behavior, then handle only a fully certified
+    no-action menu. Unknown or incomplete offers always wake the strategic pilot.
+    """
+
+    name: str = "native-all-unaffordable-pass"
+    version: str = "1"
+
+    def choose(self, observation: Mapping[str, Any]) -> PilotChoice | None:
+        previous = StandingManaOnlyPassHandler(
+            name=self.name, version=self.version, ignore_unaffordable_abilities=True,
+        ).choose(observation)
+        if previous is not None:
+            return previous
+        seat = observation.get("agentToAct")
+        state = observation.get("state")
+        legal = observation.get("legalActions")
+        if (
+            observation.get("terminated") is not False
+            or observation.get("pendingDecision") is not None
+            or not isinstance(seat, str) or not seat
+            or observation.get("perspectivePlayerId") != seat
+            or not isinstance(state, Mapping) or state.get("priorityPlayerId") != seat
+            or not isinstance(legal, list) or len(legal) < 2
+        ):
+            return None
+        passes: list[Mapping[str, Any]] = []
+        action_ids: set[int] = set()
+        semantic_ids: set[str] = set()
+        native_types = {
+            "ActivateAbility": "ActivateAbility",
+            "CastSpell": "CastSpell",
+            "CastWithKicker": "CastSpell",
+        }
+        for offer in legal:
+            if not isinstance(offer, Mapping):
+                return None
+            action_id, semantic_id = offer.get("actionId"), offer.get("semanticId")
+            action = offer.get("action")
+            if (
+                type(action_id) is not int or action_id in action_ids
+                or not isinstance(semantic_id, str) or not semantic_id
+                or semantic_id in semantic_ids
+                or not isinstance(action, Mapping) or action.get("playerId") != seat
+                or offer.get("isDecisionOption", False) is not False
+                or type(offer.get("affordable")) is not bool
+                or type(offer.get("isAffordable")) is not bool
+            ):
+                return None
+            action_ids.add(action_id)
+            semantic_ids.add(semantic_id)
+            kind = offer.get("kind")
+            if offer.get("actionType") != kind:
+                return None
+            if kind == "PassPriority":
+                if (
+                    action != {"type": "PassPriority", "playerId": seat}
+                    or offer.get("affordable") is not True
+                    or offer.get("isAffordable") is not True
+                    or offer.get("isManaAbility") is not False
+                ):
+                    return None
+                passes.append(offer)
+            elif (
+                kind not in native_types
+                or action.get("type") != native_types[kind]
+                or offer.get("affordable") is not False
+                or offer.get("isAffordable") is not False
+                or type(offer.get("isManaAbility")) is not bool
+            ):
+                return None
+        return ArgentumActionChoice(action_id=passes[0]["actionId"]) if len(passes) == 1 else None
+
+
 def _annotate(choice: PilotChoice, routing: Mapping[str, Any]) -> PilotChoice:
     """Attach routing evidence without changing Argentum execution semantics."""
 

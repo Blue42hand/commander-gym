@@ -9,6 +9,7 @@ from pathlib import Path
 
 from commander_gym.deck_package import ArtifactRef
 from commander_gym.game_server_binding_openai_sidecar import (
+    BUILTIN_ALL_UNAFFORDABLE_PASS_COMPONENT_REF,
     BUILTIN_DELEGATED_AUTOPASS_COMPONENT_REF,
     BUILTIN_FORGE_CONDITIONAL_WAIT_COMPONENT_REF,
     BUILTIN_FORGE_CONDITIONAL_WAIT_V3_COMPONENT_REF,
@@ -30,6 +31,7 @@ from commander_gym.game_server_sidecar import UnknownProfileError
 from commander_gym.identity import Binding, Deck, Pilot
 from commander_gym.pilot_composition import PilotSubsystemSpec
 from commander_gym.delegated_autopass import DelegatedAutopassPilot
+from commander_gym.pilot_routing import AllUnaffordablePassHandler
 
 
 class FakeClient:
@@ -122,6 +124,22 @@ def synthetic_catalog(
 
 
 class BindingOpenAIGameServerSidecarTests(unittest.TestCase):
+    def test_all_unaffordable_pass_requires_exact_new_component_ref(self):
+        config = OpenAIGameServerSidecarConfig(
+            token="sidecar-secret", api_key="sk-test-secret", port=12345,
+        )
+        resolver = OpenAIBindingPilotComponentResolver(config=config, client=FakeClient())
+        new = resolver.resolve(PilotSubsystemSpec(
+            role="deterministic", ordinal=0,
+            ref=BUILTIN_ALL_UNAFFORDABLE_PASS_COMPONENT_REF,
+        ))
+        self.assertIsInstance(new.handler, AllUnaffordablePassHandler)
+        old = resolver.resolve(PilotSubsystemSpec(
+            role="deterministic", ordinal=0,
+            ref=BUILTIN_NATIVE_UNAFFORDABLE_PASS_COMPONENT_REF,
+        ))
+        self.assertNotIsInstance(old.handler, AllUnaffordablePassHandler)
+
     def test_standing_mana_pass_requires_new_exact_opt_in_pilot_ref(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
