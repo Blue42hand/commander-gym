@@ -10,6 +10,53 @@ from commander_gym.openai_run_budget import OpenAIRunBudget, OpenAIRunBudgetErro
 
 
 class OpenAIRunBudgetTests(unittest.TestCase):
+    def test_cap_increase_is_explicit_monotonic_and_preserves_ledger(self):
+        with TemporaryDirectory() as temporary:
+            path = Path(temporary) / "budget.json"
+            with self.assertRaises(ValueError):
+                OpenAIRunBudget(path, 6)
+            with self.assertRaisesRegex(ValueError, "absolute request limit"):
+                OpenAIRunBudget(path, 6, authorized_max_usd=6)
+            with self.assertRaisesRegex(OpenAIRunBudgetError, "new ledger"):
+                OpenAIRunBudget(path, 6, authorized_max_usd=6, max_requests=10).snapshot()
+
+            budget = OpenAIRunBudget(path, 5, authorized_max_usd=6, max_requests=10)
+            budget.snapshot()
+            with self.assertRaisesRegex(ValueError, "absolute request limit"):
+                OpenAIRunBudget(path, 5, authorized_max_usd=6).increase_cap(6)
+            def failure(**_request):
+                raise RuntimeError("ambiguous provider outcome")
+            with self.assertRaises(RuntimeError):
+                budget.create(failure, self.request())
+            before = budget.snapshot()
+            with self.assertRaises(ValueError):
+                budget.increase_cap(6.01)
+            after = budget.increase_cap(6)
+            self.assertEqual(after["capUsd"], 6)
+            for key in ("requests", "estimatedUsd", "unsettledRequests", "inputTokens", "outputTokens"):
+                self.assertEqual(after[key], before[key])
+            with self.assertRaisesRegex(OpenAIRunBudgetError, "cap does not match"):
+                OpenAIRunBudget(path, 5).snapshot()
+            self.assertEqual(OpenAIRunBudget(
+                path, 6, authorized_max_usd=6, max_requests=10,
+            ).snapshot(), after)
+
+    def test_absolute_request_limit_counts_ambiguous_attempts_across_restarts(self):
+        with TemporaryDirectory() as temporary:
+            path = Path(temporary) / "budget.json"
+            budget = OpenAIRunBudget(path, 5, max_requests=1)
+            calls = []
+            def failure(**request):
+                calls.append(request)
+                raise RuntimeError("ambiguous provider outcome")
+            with self.assertRaises(RuntimeError):
+                budget.create(failure, self.request())
+            restarted = OpenAIRunBudget(path, 5, max_requests=1)
+            with self.assertRaisesRegex(OpenAIRunBudgetError, "absolute request limit"):
+                restarted.create(failure, self.request())
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(restarted.snapshot()["unsettledRequests"], 1)
+
     def request(self, input_text="small input"):
         return {
             "model": "gpt-6-luna",

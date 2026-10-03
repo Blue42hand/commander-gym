@@ -162,9 +162,27 @@ def binding_openai_game_server_config_from_environment(
         ) from exc
     ledger_value = environment.get("COMMANDER_GYM_OPENAI_BUDGET_LEDGER")
     cap_value = environment.get("COMMANDER_GYM_OPENAI_BUDGET_CAP_USD")
+    authorized_max_value = environment.get("COMMANDER_GYM_OPENAI_BUDGET_AUTHORIZED_MAX_USD")
+    request_limit_value = environment.get("COMMANDER_GYM_OPENAI_BUDGET_MAX_REQUESTS")
     if bool(ledger_value) != bool(cap_value):
         raise OpenAIGameServerSidecarConfigurationError(
             "OpenAI budget ledger and cap must be configured together"
+        )
+    if not ledger_value and (authorized_max_value or request_limit_value):
+        raise OpenAIGameServerSidecarConfigurationError(
+            "OpenAI budget ceiling and request limit require a ledger and cap"
+        )
+    try:
+        cap_usd = float(cap_value) if cap_value else None
+        authorized_max_usd = float(authorized_max_value) if authorized_max_value else 5.0
+        max_requests = int(request_limit_value) if request_limit_value else None
+    except ValueError as exc:
+        raise OpenAIGameServerSidecarConfigurationError(
+            "OpenAI budget cap, ceiling, and request limit must be numeric"
+        ) from exc
+    if cap_usd is not None and cap_usd > 5 and max_requests is None:
+        raise OpenAIGameServerSidecarConfigurationError(
+            "a budget above $5 requires an absolute request limit"
         )
     return BindingOpenAIGameServerConfig(
         sidecar=sidecar,
@@ -173,7 +191,8 @@ def binding_openai_game_server_config_from_environment(
         budget=(
             OpenAIRunBudget(
                 Path(environment["COMMANDER_GYM_OPENAI_BUDGET_LEDGER"]).expanduser().resolve(),
-                float(environment["COMMANDER_GYM_OPENAI_BUDGET_CAP_USD"]),
+                cap_usd, authorized_max_usd=authorized_max_usd,
+                max_requests=max_requests,
             )
             if ledger_value and cap_value
             else None
