@@ -568,6 +568,195 @@ class OpenAIResponsesPilotTests(unittest.TestCase):
             pilot.choose(observation)
         self.assertEqual(len(client.responses.calls), 1)
 
+    def test_native_response_spec_wire_shapes_table(self):
+        # Each distinct response DTO in Argentum DecisionResponseSpec.kt. Native
+        # state still decides card counts, ordering, amounts, and other legality.
+        cases = [
+            ("TargetsResponse", {"selectedTargets": "MAP"},
+             {"selectedTargets": {"0": ["target-1"]}}, {"selectedTargets": {"0": "target-1"}}),
+            ("CardsSelectedResponse", {"selectedCards": "ENTITY_ID_ARRAY"},
+             {"selectedCards": ["card-1"]}, {"selectedCards": [1]}),
+            ("YesNoResponse", {"choice": "BOOLEAN"}, {"choice": True}, {"choice": 1}),
+            ("BatchYesNoResponse", {"choice": "BOOLEAN", "applyToAll": "BOOLEAN"},
+             {"choice": False, "applyToAll": True}, {"choice": False, "applyToAll": 1}),
+            ("ModesChosenResponse", {"selectedModes": "INTEGER_ARRAY"},
+             {"selectedModes": [0]}, {"selectedModes": [True]}),
+            ("ColorChosenResponse", {"color": "STRING"},
+             {"color": "BLUE"}, {"color": 1}),
+            ("NumberChosenResponse", {"number": "INTEGER"},
+             {"number": 0}, {"number": True}),
+            ("DistributionResponse", {"distribution": "MAP"},
+             {"distribution": {"target-1": 1}}, {"distribution": {"target-1": "1"}}),
+            ("OrderedResponse", {"orderedObjects": "ENTITY_ID_ARRAY"},
+             {"orderedObjects": ["card-1"]}, {"orderedObjects": [1]}),
+            ("PilesSplitResponse", {"piles": "ENTITY_ID_ARRAY_ARRAY"},
+             {"piles": [["card-1"], []]}, {"piles": ["card-1"]}),
+            ("OptionChosenResponse", {"optionIndex": "INTEGER"},
+             {"optionIndex": 0}, {"optionIndex": False}),
+            ("ReplacementChosenResponse", {"fromIndex": "INTEGER", "toIndex": "INTEGER"},
+             {"fromIndex": 0, "toIndex": 1}, {"fromIndex": 0, "toIndex": "1"}),
+            ("BudgetModalResponse", {"selectedModeIndices": "INTEGER_ARRAY"},
+             {"selectedModeIndices": [0]}, {"selectedModeIndices": ["0"]}),
+            ("DamageAssignmentResponse", {"assignments": "MAP"},
+             {"assignments": {"target-1": 1}}, {"assignments": {"target-1": True}}),
+            ("CombatResolutionResponse", {"edges": "DAMAGE_EDGE_AMOUNT_ARRAY"},
+             {"edges": [{"edgeId": "edge-1", "amount": 1}]},
+             {"edges": [{"edgeId": "edge-1", "amount": "1"}]}),
+            ("ManaSourcesSelectedResponse", {
+                "selectedSources": "ENTITY_ID_ARRAY", "autoPay": "BOOLEAN",
+                "waterbendPermanents": "ENTITY_ID_ARRAY", "declined": "BOOLEAN",
+             }, {"selectedSources": ["source-1"], "autoPay": False,
+                 "waterbendPermanents": [], "declined": False},
+             {"selectedSources": ["source-1"], "autoPay": False,
+              "waterbendPermanents": [1], "declined": False}),
+        ]
+        for response_type, fields, valid, invalid in cases:
+            with self.subTest(response_type=response_type):
+                observation = structured_observation()
+                pending = observation["pendingDecision"]
+                pending["responseSpec"] = {"responseType": response_type, "requiredFields": fields}
+                if response_type == "ManaSourcesSelectedResponse":
+                    pending["availableSources"] = [{"entityId": "source-1"}]
+
+                def answer(values):
+                    return FakeResponse(json.dumps({
+                        "channel": "decision", "response": {"type": response_type, **values},
+                    }))
+
+                client = FakeClient(answer(valid))
+                choice = OpenAIResponsesPilot(client=client, model="gpt-test").choose(observation)
+                self.assertEqual({k: choice.response[k] for k in fields}, valid)
+                response_schema = client.responses.calls[0]["text"]["format"]["schema"]
+                response_schema = response_schema["properties"]["response"]
+                optional = {"orderedBlockers", "orderedAttackers"} if response_type == "CombatResolutionResponse" else set()
+                self.assertEqual(set(response_schema["properties"]), {"type", *fields, *optional})
+                self.assertEqual(set(response_schema["required"]), {"type", *fields})
+                self.assertEqual(response_schema["properties"]["type"]["const"], response_type)
+
+                bad_client = FakeClient(answer(invalid))
+                with self.assertRaises(OpenAIResponsesPilotError):
+                    OpenAIResponsesPilot(
+                        client=bad_client, model="gpt-test", max_attempts=1,
+                    ).choose(observation)
+                self.assertEqual(len(bad_client.responses.calls), 1)
+
+    def test_nested_native_response_schema_values(self):
+        for response_type, field in (
+            ("DistributionResponse", "distribution"),
+            ("DamageAssignmentResponse", "assignments"),
+        ):
+            with self.subTest(response_type=response_type):
+                observation = structured_observation()
+                observation["pendingDecision"]["responseSpec"] = {
+                    "responseType": response_type, "requiredFields": {field: "MAP"},
+                }
+                client = FakeClient(FakeResponse(json.dumps({
+                    "channel": "decision", "response": {"type": response_type, field: {}},
+                })))
+                OpenAIResponsesPilot(client=client, model="gpt-test").choose(observation)
+                schema = client.responses.calls[0]["text"]["format"]["schema"]
+                nested = schema["properties"]["response"]["properties"][field]
+                self.assertEqual(nested, {"type": "object"})
+
+        observation = structured_observation()
+        observation["pendingDecision"]["responseSpec"] = {
+            "responseType": "CombatResolutionResponse",
+            "requiredFields": {"edges": "DAMAGE_EDGE_AMOUNT_ARRAY"},
+        }
+        client = FakeClient(FakeResponse(json.dumps({
+            "channel": "decision", "response": {"type": "CombatResolutionResponse", "edges": []},
+        })))
+        OpenAIResponsesPilot(client=client, model="gpt-test").choose(observation)
+        schema = client.responses.calls[0]["text"]["format"]["schema"]
+        edge = schema["properties"]["response"]["properties"]["edges"]["items"]
+        self.assertEqual(set(edge["required"]), {"edgeId", "amount"})
+        self.assertEqual(edge["properties"]["amount"]["type"], "integer")
+
+    def test_native_nested_wire_rejects_kotlin_decoder_failures(self):
+        bad = [
+            ("DistributionResponse", "distribution", {"e12": "one"}),
+            ("DamageAssignmentResponse", "assignments", {"e12": True}),
+            ("CombatResolutionResponse", "edges", ["e12"]),
+            ("CombatResolutionResponse", "edges", [{}]),
+            ("CombatResolutionResponse", "edges", [{"edgeId": "edge-1", "amount": 2**31}]),
+            ("ColorChosenResponse", "color", "chartreuse"),
+            ("NumberChosenResponse", "number", 2**31),
+            ("ModesChosenResponse", "selectedModes", [-(2**31) - 1]),
+        ]
+        for response_type, field, value in bad:
+            with self.subTest(response_type=response_type, value=value):
+                observation = structured_observation()
+                observation["pendingDecision"]["responseSpec"] = {
+                    "responseType": response_type,
+                    "requiredFields": {field: {
+                        "distribution": "MAP", "assignments": "MAP",
+                        "edges": "DAMAGE_EDGE_AMOUNT_ARRAY", "color": "STRING",
+                        "number": "INTEGER", "selectedModes": "INTEGER_ARRAY",
+                    }[field]},
+                }
+                client = FakeClient(FakeResponse(json.dumps({
+                    "channel": "decision", "response": {"type": response_type, field: value},
+                })))
+                with self.assertRaises(OpenAIResponsesPilotError):
+                    OpenAIResponsesPilot(
+                        client=client, model="gpt-test", max_attempts=1,
+                    ).choose(observation)
+
+    def test_combat_optional_order_maps_match_native_dto(self):
+        observation = structured_observation()
+        observation["pendingDecision"]["responseSpec"] = {
+            "responseType": "CombatResolutionResponse",
+            "requiredFields": {"edges": "DAMAGE_EDGE_AMOUNT_ARRAY"},
+        }
+        def answer(ordered):
+            return FakeResponse(json.dumps({
+                "channel": "decision", "response": {
+                    "type": "CombatResolutionResponse", "edges": [],
+                    "orderedBlockers": ordered, "orderedAttackers": {},
+                },
+            }))
+        client = FakeClient(answer({"attacker-1": ["blocker-1"]}))
+        choice = OpenAIResponsesPilot(client=client, model="gpt-test").choose(observation)
+        self.assertEqual(choice.response["orderedBlockers"], {"attacker-1": ["blocker-1"]})
+        schema = client.responses.calls[0]["text"]["format"]["schema"]
+        nested = schema["properties"]["response"]["properties"]["orderedBlockers"]
+        self.assertEqual(nested, {"type": "object"})
+        with self.assertRaisesRegex(OpenAIResponsesPilotError, "ENTITY_ID_ARRAY_MAP"):
+            OpenAIResponsesPilot(
+                client=FakeClient(answer({"attacker-1": "blocker-1"})),
+                model="gpt-test", max_attempts=1,
+            ).choose(observation)
+
+    def test_cancel_response_requires_native_cancel_allowed(self):
+        for response_type, fields in (
+            ("TargetsResponse", {"selectedTargets": "MAP"}),
+            ("OptionChosenResponse", {"optionIndex": "INTEGER"}),
+        ):
+            for allowed in (True, False):
+                with self.subTest(response_type=response_type, allowed=allowed):
+                    observation = structured_observation()
+                    observation["pendingDecision"]["responseSpec"] = {
+                        "responseType": response_type, "requiredFields": fields,
+                        "cancelAllowed": allowed,
+                    }
+                    client = FakeClient(FakeResponse(json.dumps({
+                        "channel": "decision",
+                        "response": {"type": "CancelDecisionResponse"},
+                    })))
+                    pilot = OpenAIResponsesPilot(client=client, model="gpt-test", max_attempts=1)
+                    if allowed:
+                        choice = pilot.choose(observation)
+                        self.assertEqual(choice.response, {
+                            "type": "CancelDecisionResponse", "decisionId": "routing-live-9",
+                        })
+                        schema = client.responses.calls[0]["text"]["format"]["schema"]
+                        self.assertEqual(schema["type"], "object")
+                        self.assertEqual(schema["properties"]["response"]["anyOf"][1]
+                                         ["properties"]["type"]["const"], "CancelDecisionResponse")
+                    else:
+                        with self.assertRaisesRegex(OpenAIResponsesPilotError, "requires native"):
+                            pilot.choose(observation)
+
     def test_unknown_semantic_id_fails_closed(self):
         client = FakeClient(
             FakeResponse(
