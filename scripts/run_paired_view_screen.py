@@ -152,9 +152,11 @@ def main() -> int:
         manifest["schemaVersion"] != 1 or manifest["maxNewRequests"] != 24
         or manifest["wallSeconds"] != 360 or manifest["model"] != "gpt-6-luna"
         or manifest["maxOutputTokens"] != 2048
-        or manifest["absoluteLedgerRequestLimit"] != manifest["expectedLedgerRequests"] + 24
-        or len(manifest["traceIndices"]) != 12
-        or len(set(manifest["traceIndices"])) != 12
+        or manifest["expectedLedgerRequests"] != 586
+        or manifest["absoluteLedgerRequestLimit"] != 610
+        or manifest["startingCapUsd"] != 5
+        or manifest["authorizedCapUsd"] != 6
+        or manifest["traceIndices"] != [2, 13, 31, 76, 114, 192, 7, 20, 44, 65, 93, 174]
     ):
         raise ValueError("paired screen manifest violates its reviewed limits")
     if not all(path.is_absolute() for path in (args.trace, args.ledger, args.output)):
