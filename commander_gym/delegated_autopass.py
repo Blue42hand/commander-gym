@@ -65,7 +65,13 @@ def _nonmana_ability_keys(observation: Mapping[str, Any]) -> tuple[tuple[str, st
         # Argentum exposes some currently unaffordable abilities for inspection.
         # Like Forge's actionability certificate, they need no strategic deferral;
         # becoming affordable changes this exact executable set and wakes the pilot.
-        if offered.get("kind") == "ActivateAbility" and offered.get("affordable") is False:
+        if (
+            offered.get("kind") == "ActivateAbility"
+            and offered.get("isManaAbility") is False
+            and offered.get("affordable") is False
+            and offered.get("isAffordable") is False
+            and offered.get("isDecisionOption") is not True
+        ):
             continue
         action = offered.get("action")
         if (

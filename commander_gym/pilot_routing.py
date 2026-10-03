@@ -208,6 +208,7 @@ class StandingManaOnlyPassHandler:
                 and kind == "ActivateAbility"
                 and action.get("isManaAbility") is False
                 and action.get("affordable") is False
+                and action.get("isAffordable") is False
             ):
                 # Forge's actionability path ignored actions certified unavailable.
                 # If Argentum later marks this ability affordable, this handler

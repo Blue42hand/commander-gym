@@ -172,7 +172,7 @@ class RoutingPilotTests(unittest.TestCase):
         passed = {**pass_action(), "isManaAbility": False,
                   "action": {"type": "PassPriority", "playerId": "player-1"}}
         ability = {"actionId": 1, "semanticId": "native-ability", "kind": "ActivateAbility",
-                   "isManaAbility": False, "affordable": False,
+                   "isManaAbility": False, "affordable": False, "isAffordable": False,
                    "action": {"type": "ActivateAbility", "playerId": "player-1"}}
         current = observation(passed)
         current["legalActions"] = [passed, ability]
@@ -185,6 +185,7 @@ class RoutingPilotTests(unittest.TestCase):
         self.assertEqual(new.choose(current).action_id, passed["actionId"])
         for changed in (
             {**ability, "affordable": True},
+            {**ability, "isAffordable": True},
             {**ability, "affordable": None},
             {**ability, "kind": "CastSpell", "action": {"type": "CastSpell", "playerId": "player-1"}},
         ):
