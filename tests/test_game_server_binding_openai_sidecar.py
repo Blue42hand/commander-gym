@@ -33,6 +33,7 @@ from commander_gym.identity import Binding, Deck, Pilot
 from commander_gym.pilot_composition import PilotSubsystemSpec
 from commander_gym.delegated_autopass import DelegatedAutopassPilot
 from commander_gym.pilot_routing import AllUnaffordablePassHandler
+from commander_gym.openai_run_budget import OpenAIRunBudget
 
 
 class FakeClient:
@@ -289,6 +290,35 @@ class BindingOpenAIGameServerSidecarTests(unittest.TestCase):
             )
             self.assertEqual(config.catalog_path, catalog.resolve())
             self.assertEqual(config.instance_root, root.resolve())
+
+    def test_above_default_budget_requires_explicit_ceiling_and_request_limit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            catalog = synthetic_catalog(root)
+            ledger = root / "budget.json"
+            OpenAIRunBudget(ledger, 5).snapshot()
+            base = {
+                "COMMANDER_GYM_SIDECAR_TOKEN": "sidecar-secret",
+                "OPENAI_API_KEY": "sk-test-secret",
+                "COMMANDER_GYM_BINDING_CATALOG": str(catalog),
+                "COMMANDER_GYM_INSTANCE_ROOT": str(root),
+                "COMMANDER_GYM_OPENAI_BUDGET_LEDGER": str(ledger),
+                "COMMANDER_GYM_OPENAI_BUDGET_CAP_USD": "6",
+            }
+            with self.assertRaisesRegex(OpenAIGameServerSidecarConfigurationError,
+                                        "absolute request limit"):
+                binding_openai_game_server_config_from_environment(base)
+            with self.assertRaises(ValueError):
+                binding_openai_game_server_config_from_environment({
+                    **base, "COMMANDER_GYM_OPENAI_BUDGET_MAX_REQUESTS": "610",
+                })
+            configured = binding_openai_game_server_config_from_environment({
+                **base, "COMMANDER_GYM_OPENAI_BUDGET_AUTHORIZED_MAX_USD": "6",
+                "COMMANDER_GYM_OPENAI_BUDGET_MAX_REQUESTS": "610",
+            })
+            self.assertEqual(configured.budget.cap_usd, 6)
+            self.assertEqual(configured.budget.max_requests, 610)
+            self.assertEqual(json.loads(ledger.read_text())["capUsd"], 5)
 
     def test_binding_catalog_executes_exact_declared_pilot_graph_without_fallback(self):
         with tempfile.TemporaryDirectory() as directory:

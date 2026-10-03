@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import fcntl
 import json
+import math
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
@@ -24,21 +25,40 @@ class OpenAIRunBudget:
     SAFETY_MULTIPLIER = 2.2
     MAX_OUTPUT_TOKENS = 2048
 
-    def __init__(self, path: Path, cap_usd: float) -> None:
+    def __init__(
+        self, path: Path, cap_usd: float, *, authorized_max_usd: float = 5.0,
+        max_requests: int | None = None,
+    ) -> None:
         if not isinstance(path, Path) or not path.is_absolute():
             raise ValueError("budget ledger path must be absolute")
-        if cap_usd <= 0 or cap_usd > 5:
-            raise ValueError("run budget must be positive and at most $5")
+        if (
+            type(cap_usd) not in (int, float) or not math.isfinite(cap_usd)
+            or type(authorized_max_usd) not in (int, float)
+            or not math.isfinite(authorized_max_usd)
+            or cap_usd <= 0 or authorized_max_usd <= 0
+            or cap_usd > authorized_max_usd
+        ):
+            raise ValueError("run budget must be positive and within the authorized ceiling")
+        if max_requests is not None and (type(max_requests) is not int or max_requests < 0):
+            raise ValueError("max_requests must be a nonnegative absolute ledger count")
         if not path.parent.is_dir():
             raise ValueError("budget ledger parent must exist")
         self.path = path
         self.cap_usd = float(cap_usd)
+        self.authorized_max_usd = float(authorized_max_usd)
+        self.max_requests = max_requests
 
-    def _transact(self, update: Callable[[dict[str, Any]], Any]) -> Any:
+    def _transact(
+        self, update: Callable[[dict[str, Any]], Any], *, require_existing: bool = False,
+    ) -> Any:
         with self.path.open("a+", encoding="utf-8") as ledger:
             fcntl.flock(ledger.fileno(), fcntl.LOCK_EX)
             ledger.seek(0)
             content = ledger.read()
+            if require_existing and not content:
+                raise OpenAIRunBudgetError("cap increase requires an existing ledger")
+            if not content and self.cap_usd > 5:
+                raise OpenAIRunBudgetError("a new ledger cannot start above the default $5 cap")
             data = json.loads(content) if content else {
                 "schemaVersion": 1,
                 "capUsd": self.cap_usd,
@@ -60,6 +80,28 @@ class OpenAIRunBudget:
     def snapshot(self) -> dict[str, Any]:
         return self._transact(lambda data: dict(data))
 
+    def increase_cap(self, new_cap_usd: float) -> dict[str, Any]:
+        """Explicitly raise an existing ledger cap within a separately set ceiling.
+
+        Call only while run processes are stopped, after fresh spending authority.
+        The locked update preserves requests, token totals, and unsettled reserves.
+        """
+        if (
+            type(new_cap_usd) not in (int, float) or not math.isfinite(new_cap_usd)
+            or new_cap_usd <= self.cap_usd
+            or new_cap_usd > self.authorized_max_usd
+        ):
+            raise ValueError("new cap must exceed the current cap within the authorized ceiling")
+        new_cap = float(new_cap_usd)
+
+        def update(data: dict[str, Any]) -> dict[str, Any]:
+            data["capUsd"] = new_cap
+            return dict(data)
+
+        result = self._transact(update, require_existing=True)
+        self.cap_usd = new_cap
+        return result
+
     @classmethod
     def _cost(cls, input_tokens: int, output_tokens: int) -> float:
         return cls.SAFETY_MULTIPLIER * (
@@ -79,6 +121,8 @@ class OpenAIRunBudget:
         reserved = self._cost(request_bytes + 4096, self.MAX_OUTPUT_TOKENS)
 
         def reserve(data: dict[str, Any]) -> None:
+            if self.max_requests is not None and data["requests"] >= self.max_requests:
+                raise OpenAIRunBudgetError("absolute request limit reached before dispatch")
             if data["estimatedUsd"] + reserved > self.cap_usd:
                 raise OpenAIRunBudgetError("the next OpenAI request exceeds the cumulative run cap")
             data["estimatedUsd"] += reserved
