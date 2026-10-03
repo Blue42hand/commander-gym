@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -111,6 +112,13 @@ def structured_observation():
 
 
 class OpenAIResponsesPilotTests(unittest.TestCase):
+    def test_default_prompt_retains_qualified_provider_identity(self):
+        pilot = OpenAIResponsesPilot(client=FakeClient(), model="gpt-test")
+        self.assertEqual(
+            hashlib.sha256(pilot.instructions.encode()).hexdigest(),
+            "7222009a07b4509944793052c74beba9d1bdb7f5b80c4ab710238a7cdc0b640c",
+        )
+
     def test_priority_delegation_requires_opt_in_and_exact_pass(self):
         directive = {"until": "phase_end", "reason": "Reviewed this main phase"}
         output = json.dumps({
