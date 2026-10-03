@@ -28,6 +28,7 @@ from typing import Any, Mapping
 
 from .pilot import ArgentumActionChoice, ArgentumDecisionChoice, PilotChoice
 from .openai_run_budget import OpenAIRunBudget, OpenAIRunBudgetError
+from .observation_projection import compact_seat_observation
 
 MODEL_IO_SCHEMA_VERSION = 1
 
@@ -719,6 +720,7 @@ class OpenAIResponsesPilot:
     allow_priority_delegation: bool = False
     allow_named_deferrals: bool = False
     require_nonempty_named_deferrals: bool = False
+    compact_model_observation: bool = False
     name: str = "openai-responses"
     version: str = "1"
 
@@ -731,6 +733,8 @@ class OpenAIResponsesPilot:
             raise OpenAIResponsesPilotError(
                 "nonempty named deferrals require the named-deferral Pilot"
             )
+        if type(self.compact_model_observation) is not bool:
+            raise OpenAIResponsesPilotError("compact_model_observation must be boolean")
         if self.strategy is not None:
             _require_string(self.strategy, "OpenAI pilot strategy")
         if type(self.max_attempts) is not int or self.max_attempts < 1:
@@ -750,6 +754,8 @@ class OpenAIResponsesPilot:
             require_nonempty_named_deferrals=self.require_nonempty_named_deferrals,
         )
         model_observation = _without_live_routing(observation)
+        if self.compact_model_observation:
+            model_observation = compact_seat_observation(model_observation)
         base_input = "Return one JSON object for this observation:\n" + json.dumps(
             model_observation,
             sort_keys=True,
@@ -765,6 +771,15 @@ class OpenAIResponsesPilot:
             "text": {"format": decision_format or action_format or {"type": "json_object"}},
             "store": False,
         }
+        if self.compact_model_observation:
+            request["instructions"] += (
+                "\n\nThis request uses argentum-seat-sparse-cards-v1. The observation "
+                "is inside observation; cardDefaults lists exact values for omitted "
+                "fields on every state.cards entry. Restore those fields mentally "
+                "before choosing. No other state fields or legal choices are "
+                "omitted. Ephemeral routing handles are omitted as usual. Use "
+                "semanticId from observation.legalActions."
+            )
         if self.budget is not None:
             request["max_output_tokens"] = self.budget.MAX_OUTPUT_TOKENS
         pending = observation.get("pendingDecision")

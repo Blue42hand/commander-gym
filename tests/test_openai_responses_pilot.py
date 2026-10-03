@@ -15,6 +15,7 @@ from commander_gym.pilot import (
     choose_for_observation,
 )
 from commander_gym.openai_run_budget import OpenAIRunBudget
+from commander_gym.observation_projection import expand_seat_observation
 
 
 class FakeResponse:
@@ -112,6 +113,28 @@ def structured_observation():
 
 
 class OpenAIResponsesPilotTests(unittest.TestCase):
+    def test_compact_model_view_preserves_exact_native_observation_in_provenance(self):
+        obs = action_observation()
+        obs["state"] = {"cards": {
+            "visible": {"id": "visible", "name": "Card", "isTapped": False,
+                        "targets": [], "rider": None},
+        }}
+        output = json.dumps({"channel": "action", "semanticId": "argentum-action-v1:pass",
+                             "params": {}})
+        client = FakeClient(FakeResponse(output))
+        pilot = OpenAIResponsesPilot(client=client, model="gpt-test",
+                                    compact_model_observation=True)
+        choice = pilot.choose(obs)
+        request = client.responses.calls[0]
+        compact = json.loads(request["input"].split("\n", 1)[1])
+        restored = expand_seat_observation(compact)
+        self.assertEqual(restored["state"], obs["state"])
+        self.assertEqual(restored["legalActions"][0].get("actionId"), None)
+        self.assertEqual(obs["legalActions"][0]["actionId"], 2)
+        self.assertEqual(choice.action_id, 2)
+        self.assertEqual(choice.metadata["modelIo"]["attempts"][0]["request"], request)
+        self.assertIn("sparse-cards-v1", request["instructions"])
+
     def test_default_prompt_retains_qualified_provider_identity(self):
         pilot = OpenAIResponsesPilot(client=FakeClient(), model="gpt-test")
         self.assertEqual(
