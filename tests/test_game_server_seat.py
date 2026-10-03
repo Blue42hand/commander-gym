@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 
 from commander_gym.game_server_seat import (
@@ -8,6 +9,7 @@ from commander_gym.game_server_seat import (
     NativeActionResponse,
     NativeDecisionResponse,
 )
+from commander_gym.openai_responses_pilot import OpenAIResponsesPilot
 from commander_gym.pilot import (
     ArgentumActionChoice,
     ArgentumDecisionChoice,
@@ -79,6 +81,50 @@ class GameServerSeatAdapterTests(unittest.TestCase):
         self.assertIsInstance(result, NativeDecisionResponse)
         self.assertEqual(result.player_id, "ai")
         self.assertEqual(result.response, choice.response)
+
+    def test_pending_mana_payment_accepts_only_offered_mana_ability_action(self):
+        pending = {
+            "decisionId": "payment-1", "kind": "SelectManaSourcesDecision",
+            "responseSpec": {"responseType": "ManaSourcesSelectedResponse"},
+        }
+        mana_action = {
+            "actionType": "ActivateAbility", "isManaAbility": True,
+            "description": "Activate Springleaf Drum for mana",
+            "semanticId": "native-drum-mana", "parameterSpec": {"allowedFields": {}},
+            "action": {"type": "ActivateAbility", "playerId": "ai", "sourceId": "drum-1"},
+        }
+        nonmana_action = {
+            "actionType": "ActivateAbility", "isManaAbility": False,
+            "action": {"type": "ActivateAbility", "playerId": "ai", "sourceId": "other-1"},
+        }
+        result = GameServerSeatAdapter(
+            ScriptedPilot(ArgentumActionChoice(0)), "ai",
+        ).choose_action(self.state, [mana_action, nonmana_action], pending)
+        self.assertIsInstance(result, NativeActionResponse)
+        self.assertEqual(result.action, mana_action["action"])
+
+        with self.assertRaisesRegex(PilotContractError, "offered mana ability"):
+            GameServerSeatAdapter(
+                ScriptedPilot(ArgentumActionChoice(1)), "ai",
+            ).choose_action(self.state, [mana_action, nonmana_action], pending)
+
+        class Responses:
+            def create(self, **_request):
+                return type("Response", (), {
+                    "status": "completed",
+                    "output_text": json.dumps({
+                        "channel": "action", "semanticId": "native-drum-mana", "params": {},
+                    }),
+                })()
+
+        provider = OpenAIResponsesPilot(
+            client=type("Client", (), {"responses": Responses()})(), model="gpt-test",
+        )
+        native = GameServerSeatAdapter(provider, "ai").choose_action(
+            self.state, [mana_action, nonmana_action], pending,
+        )
+        self.assertIsInstance(native, NativeActionResponse)
+        self.assertEqual(native.action, mana_action["action"])
 
     def test_mulligan_and_bottom_card_callbacks_use_same_pilot(self):
         pilot = ScriptedPilot(

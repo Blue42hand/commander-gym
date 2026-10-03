@@ -391,6 +391,16 @@ def _native_mana_source_format(observation: Mapping[str, Any]) -> dict[str, Any]
     spec = pending.get("responseSpec")
     if not isinstance(spec, Mapping) or spec.get("responseType") != "ManaSourcesSelectedResponse":
         return None
+    legal = observation.get("legalActions")
+    if isinstance(legal, list) and any(
+        isinstance(action, Mapping)
+        and action.get("kind") == "ActivateAbility"
+        and action.get("isManaAbility") is True
+        for action in legal
+    ):
+        # A mixed payment window permits a native mana action before answering
+        # the decision; a decision-only schema would hide that legal channel.
+        return None
     fields = spec.get("requiredFields")
     if fields != {
         "autoPay": "BOOLEAN", "declined": "BOOLEAN",
@@ -575,6 +585,19 @@ class OpenAIResponsesPilot:
                 "pendingDecision.responseSpec into response.type and provide every "
                 "requiredFields entry with its declared JSON value kind."
             )
+            spec = pending.get("responseSpec")
+            legal_actions = observation.get("legalActions")
+            if isinstance(spec, Mapping) and spec.get("responseType") == "ManaSourcesSelectedResponse" and isinstance(legal_actions, list) and any(
+                isinstance(action, Mapping)
+                and action.get("kind") == "ActivateAbility"
+                and action.get("isManaAbility") is True
+                for action in legal_actions
+            ):
+                request["instructions"] += (
+                    " You may instead choose an offered native mana ability via "
+                    "channel action before answering this payment decision. "
+                    "For selectedSources, use only IDs in pendingDecision.availableSources."
+                )
 
         validation_error: OpenAIResponsesPilotError | None = None
         attempts: list[dict[str, Any]] = []

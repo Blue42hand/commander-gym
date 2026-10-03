@@ -459,11 +459,6 @@ class OpenAIResponsesPilotTests(unittest.TestCase):
                 },
             },
         })
-        observation["legalActions"] = [{
-            "actionId": 0, "semanticId": "native-mana-ability", "parameterSpec": {
-                "allowedFields": {},
-            },
-        }]
         def answer(sources):
             return FakeResponse(json.dumps({
                 "channel": "decision", "response": {
@@ -488,6 +483,35 @@ class OpenAIResponsesPilotTests(unittest.TestCase):
             response_schema["properties"]["response"]["properties"]
             ["selectedSources"]["items"]["enum"], ["e170"],
         )
+
+    def test_mixed_mana_payment_window_keeps_native_mana_action_channel(self):
+        observation = structured_observation()
+        observation["pendingDecision"].update({
+            "kind": "SelectManaSourcesDecision",
+            "availableSources": [{"entityId": "e170", "name": "Mountain"}],
+            "responseSpec": {
+                "responseType": "ManaSourcesSelectedResponse",
+                "requiredFields": {
+                    "autoPay": "BOOLEAN", "declined": "BOOLEAN",
+                    "selectedSources": "ENTITY_ID_ARRAY",
+                    "waterbendPermanents": "ENTITY_ID_ARRAY",
+                },
+            },
+        })
+        observation["legalActions"] = [{
+            "actionId": 0, "kind": "ActivateAbility", "isManaAbility": True,
+            "semanticId": "native-mana-ability",
+            "parameterSpec": {"allowedFields": {}},
+        }]
+        client = FakeClient(FakeResponse(json.dumps({
+            "channel": "action", "semanticId": "native-mana-ability", "params": {},
+        })))
+        choice = choose_for_observation(
+            OpenAIResponsesPilot(client=client, model="gpt-test"), observation,
+        )
+        self.assertEqual(choice.action_id, 0)
+        self.assertEqual(client.responses.calls[0]["text"]["format"], {"type": "json_object"})
+        self.assertIn("offered native mana ability", client.responses.calls[0]["instructions"])
 
     def test_rejects_wrong_native_array_element_kind_before_submission(self):
         observation = structured_observation()
