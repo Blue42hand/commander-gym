@@ -459,6 +459,11 @@ class OpenAIResponsesPilotTests(unittest.TestCase):
                 },
             },
         })
+        observation["legalActions"] = [{
+            "actionId": 0, "semanticId": "native-mana-ability", "parameterSpec": {
+                "allowedFields": {},
+            },
+        }]
         def answer(sources):
             return FakeResponse(json.dumps({
                 "channel": "decision", "response": {
@@ -472,6 +477,12 @@ class OpenAIResponsesPilotTests(unittest.TestCase):
         self.assertEqual(choice.response["selectedSources"], ["e170"])
         self.assertEqual(choice.metadata["modelIo"]["selectedAttempt"], 1)
         self.assertIn("must be offered", client.responses.calls[1]["input"])
+        response_schema = client.responses.calls[0]["text"]["format"]["schema"]
+        self.assertEqual(response_schema["properties"]["channel"]["const"], "decision")
+        self.assertEqual(
+            response_schema["properties"]["response"]["properties"]
+            ["selectedSources"]["items"]["enum"], ["e170"],
+        )
 
     def test_rejects_wrong_native_array_element_kind_before_submission(self):
         observation = structured_observation()

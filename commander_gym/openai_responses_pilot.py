@@ -325,6 +325,9 @@ def _native_action_format(
     """Constrain each semantic action to its own Argentum-authored parameter fields."""
 
     legal = observation.get("legalActions")
+    pending = observation.get("pendingDecision")
+    if isinstance(pending, Mapping) and pending.get("requiresStructuredResponse") is True:
+        return None
     if not isinstance(legal, list) or not legal:
         return None
     variants: list[dict[str, Any]] = []
@@ -373,6 +376,55 @@ def _native_action_format(
             "type": "object",
             "properties": root_properties,
             "required": ["channel", "choice"],
+            "additionalProperties": False,
+        },
+    }
+
+
+def _native_mana_source_format(observation: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Constrain a native mana-source response to this decision's offered IDs."""
+
+    pending = observation.get("pendingDecision")
+    if not isinstance(pending, Mapping) or pending.get("requiresStructuredResponse") is not True:
+        return None
+    spec = pending.get("responseSpec")
+    if not isinstance(spec, Mapping) or spec.get("responseType") != "ManaSourcesSelectedResponse":
+        return None
+    fields = spec.get("requiredFields")
+    if fields != {
+        "autoPay": "BOOLEAN", "declined": "BOOLEAN",
+        "selectedSources": "ENTITY_ID_ARRAY", "waterbendPermanents": "ENTITY_ID_ARRAY",
+    }:
+        return None
+    available = pending.get("availableSources")
+    if not isinstance(available, list) or any(
+        not isinstance(source, Mapping) or not isinstance(source.get("entityId"), str)
+        for source in available
+    ):
+        return None
+    offered_ids = list(dict.fromkeys(source["entityId"] for source in available))
+    return {
+        "type": "json_schema", "name": "commander_gym_native_mana_sources", "strict": False,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "channel": {"type": "string", "const": "decision"},
+                "response": {
+                    "type": "object",
+                    "properties": {
+                        "type": {"type": "string", "const": "ManaSourcesSelectedResponse"},
+                        "autoPay": {"type": "boolean"},
+                        "declined": {"type": "boolean"},
+                        "selectedSources": {
+                            "type": "array", "items": {"type": "string", "enum": offered_ids},
+                        },
+                        "waterbendPermanents": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "required": ["type", *fields],
+                    "additionalProperties": False,
+                },
+            },
+            "required": ["channel", "response"],
             "additionalProperties": False,
         },
     }
@@ -472,7 +524,8 @@ class OpenAIResponsesPilot:
             )
 
     def choose(self, observation: Mapping[str, Any]) -> PilotChoice:
-        action_format = _native_action_format(
+        mana_source_format = _native_mana_source_format(observation)
+        action_format = None if mana_source_format is not None else _native_action_format(
             observation, allow_priority_delegation=self.allow_priority_delegation,
         )
         model_observation = _without_live_routing(observation)
@@ -488,7 +541,7 @@ class OpenAIResponsesPilot:
             # The Responses JSON-object mode requires the user input itself to name
             # JSON; mentioning it only in instructions is not sufficient.
             "input": base_input,
-            "text": {"format": action_format or {"type": "json_object"}},
+            "text": {"format": mana_source_format or action_format or {"type": "json_object"}},
             "store": False,
         }
         if self.budget is not None:
