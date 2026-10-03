@@ -97,17 +97,17 @@ class ForcedParameterlessChoiceHandler:
 class NativeNoChoiceHandler:
     """Port Forge's certified no-action and empty-combat fast paths to Argentum.
 
-    Argentum's legal actions are native, so a menu containing only PassPriority and
-    mana abilities certifies that there is no nonmana action to choose. Empty native
-    attacker/blocker candidate lists similarly certify an empty declaration. Any
-    missing or unfamiliar field defers to the strategic Pilot.
+    Argentum's legal actions are native. A sole PassPriority action is forced; empty
+    native attacker/blocker candidate lists similarly certify an empty declaration.
+    Even an otherwise simple mana activation remains a player choice: the recorded
+    early-game replay contains a mana activation in a pass-plus-mana menu.
 
     This is a new component identity: the qualified foundation Pilot still resolves
     its original ForcedParameterlessChoiceHandler unchanged.
     """
 
     name: str = "native-no-choice"
-    version: str = "2"
+    version: str = "3"
 
     def choose(self, observation: Mapping[str, Any]) -> PilotChoice | None:
         forced = ForcedParameterlessChoiceHandler().choose(observation)
@@ -120,15 +120,6 @@ class NativeNoChoiceHandler:
             return None
         if any(not isinstance(action, Mapping) for action in legal):
             return None
-
-        passes = [action for action in legal if action.get("kind") == "PassPriority"]
-        if len(passes) == 1 and type(passes[0].get("actionId")) is int:
-            if passes[0].get("affordable") is not False and all(
-                action is passes[0]
-                or self._ordinary_mana_action(action)
-                for action in legal
-            ):
-                return ArgentumActionChoice(action_id=passes[0]["actionId"])
 
         if len(legal) != 1:
             return None
@@ -153,30 +144,6 @@ class NativeNoChoiceHandler:
         if native.get(field) != {}:
             return None
         return ArgentumActionChoice(action_id=action["actionId"])
-
-    @staticmethod
-    def _ordinary_mana_action(action: Mapping[str, Any]) -> bool:
-        """Accept only Argentum's parameter-free mana activation template.
-
-        Mana abilities with a target, alternate payment, repeated activation, or
-        another-permanent cost need a strategic choice even when they are the only
-        alternatives to passing priority. Native legality remains authoritative.
-        """
-
-        native = action.get("action")
-        return (
-            action.get("kind") == "ActivateAbility"
-            and action.get("isManaAbility") is True
-            and action.get("isDecisionOption") is not True
-            and isinstance(native, Mapping)
-            and native.get("type") == "ActivateAbility"
-            and isinstance(native.get("abilityId"), str)
-            and native.get("targets") == []
-            and native.get("costPayment") is None
-            and native.get("alternativePayment") is None
-            and native.get("repeatCount") == 1
-            and native.get("opponentTargetsChosen") is False
-        )
 
 
 def _annotate(choice: PilotChoice, routing: Mapping[str, Any]) -> PilotChoice:

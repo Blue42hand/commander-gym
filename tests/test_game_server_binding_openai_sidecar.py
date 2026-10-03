@@ -114,7 +114,7 @@ def synthetic_catalog(
 
 
 class BindingOpenAIGameServerSidecarTests(unittest.TestCase):
-    def test_versioned_native_no_choice_component_avoids_model_for_mana_only_menu(self):
+    def test_versioned_native_no_choice_component_avoids_model_for_empty_combat(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             pilot = Pilot(
@@ -137,18 +137,14 @@ class BindingOpenAIGameServerSidecarTests(unittest.TestCase):
                 result = seat.choose_action(
                     {"viewingPlayerId": "ai-one"},
                     [
-                        {"kind": "PassPriority", "actionType": "PassPriority", "affordable": True,
-                         "action": {"type": "PassPriority", "playerId": "ai-one"}},
-                        {"kind": "ActivateAbility", "actionType": "ActivateAbility",
-                         "isManaAbility": True,
-                         "action": {"type": "ActivateAbility", "playerId": "ai-one",
-                                    "abilityId": "intrinsic_mana_U", "targets": [],
-                                    "costPayment": None, "alternativePayment": None,
-                                    "repeatCount": 1, "opponentTargetsChosen": False}},
+                        {"kind": "DeclareAttackers", "actionType": "DeclareAttackers",
+                         "validAttackers": [],
+                         "action": {"type": "DeclareAttackers", "playerId": "ai-one",
+                                    "attackers": {}}},
                     ],
                     None,
                 )
-                self.assertEqual(result.action["type"], "PassPriority")
+                self.assertEqual(result.action["type"], "DeclareAttackers")
                 self.assertEqual(result.metadata["routing"]["handledBy"]["component"]["artifactId"], "native-no-choice")
                 self.assertEqual(result.metadata["pilot"]["revision"], "r2")
             finally:

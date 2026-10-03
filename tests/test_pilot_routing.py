@@ -52,7 +52,7 @@ class CountingPilot:
 
 
 class RoutingPilotTests(unittest.TestCase):
-    def test_native_no_choice_passes_only_with_mana_abilities(self):
+    def test_native_no_choice_never_suppresses_a_mana_choice(self):
         handler = NativeNoChoiceHandler()
         pass_only = observation(pass_action())
         pass_only["legalActions"].append({
@@ -64,7 +64,10 @@ class RoutingPilotTests(unittest.TestCase):
                 "repeatCount": 1, "opponentTargetsChosen": False,
             },
         })
-        self.assertEqual(handler.choose(pass_only).action_id, 0)
+        # Replay regression: in an own-main pass-plus-mana window the strategic
+        # pilot chose to add mana. Legal mana actions are not a forced pass.
+        pass_only["state"] = {"turnNumber": 3, "currentStep": "PRECOMBAT_MAIN"}
+        self.assertIsNone(handler.choose(pass_only))
         for change in (
             {"isManaAbility": False},
             {"kind": "CastSpell"},
@@ -74,17 +77,6 @@ class RoutingPilotTests(unittest.TestCase):
                 altered = {**pass_only, "legalActions": [pass_action(), {**pass_only["legalActions"][1], **change}]}
                 self.assertIsNone(handler.choose(altered))
         self.assertIsNone(handler.choose({**pass_only, "pendingDecision": {"kind": "SelectCards"}}))
-        for native_change in (
-            {"targets": ["e1"]},
-            {"costPayment": {"type": "TapPermanent"}},
-            {"alternativePayment": {"type": "Other"}},
-            {"repeatCount": 2},
-            {"opponentTargetsChosen": True},
-        ):
-            with self.subTest(native_change=native_change):
-                mana = dict(pass_only["legalActions"][1])
-                mana["action"] = {**mana["action"], **native_change}
-                self.assertIsNone(handler.choose({**pass_only, "legalActions": [pass_action(), mana]}))
 
     def test_native_no_choice_confirms_only_empty_combat(self):
         handler = NativeNoChoiceHandler()

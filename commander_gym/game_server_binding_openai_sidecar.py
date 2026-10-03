@@ -64,8 +64,8 @@ BUILTIN_FORCED_PARAMETERLESS_COMPONENT_REF = ArtifactRef(
 BUILTIN_NATIVE_NO_CHOICE_COMPONENT_REF = ArtifactRef(
     kind="deterministic-policy",
     artifact_id="native-no-choice",
-    version="2",
-    digest="sha256:de41bc585fbb0e67014503086bb76cd3d30296ecb59c65b09de147d3407bbc93",
+    version="3",
+    digest="sha256:16580bbe6cf9b073f02083a5480bf3f376d1250f438ab02ed0414ca5d70a272a",
 )
 BUILTIN_OPENAI_RESPONSES_COMPONENT_REF = ArtifactRef(
     kind="provider",
