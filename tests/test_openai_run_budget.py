@@ -15,11 +15,15 @@ class OpenAIRunBudgetTests(unittest.TestCase):
             path = Path(temporary) / "budget.json"
             with self.assertRaises(ValueError):
                 OpenAIRunBudget(path, 6)
+            with self.assertRaisesRegex(ValueError, "absolute request limit"):
+                OpenAIRunBudget(path, 6, authorized_max_usd=6)
             with self.assertRaisesRegex(OpenAIRunBudgetError, "new ledger"):
-                OpenAIRunBudget(path, 6, authorized_max_usd=6).snapshot()
+                OpenAIRunBudget(path, 6, authorized_max_usd=6, max_requests=10).snapshot()
 
-            budget = OpenAIRunBudget(path, 5, authorized_max_usd=6)
+            budget = OpenAIRunBudget(path, 5, authorized_max_usd=6, max_requests=10)
             budget.snapshot()
+            with self.assertRaisesRegex(ValueError, "absolute request limit"):
+                OpenAIRunBudget(path, 5, authorized_max_usd=6).increase_cap(6)
             def failure(**_request):
                 raise RuntimeError("ambiguous provider outcome")
             with self.assertRaises(RuntimeError):
@@ -33,7 +37,9 @@ class OpenAIRunBudgetTests(unittest.TestCase):
                 self.assertEqual(after[key], before[key])
             with self.assertRaisesRegex(OpenAIRunBudgetError, "cap does not match"):
                 OpenAIRunBudget(path, 5).snapshot()
-            self.assertEqual(OpenAIRunBudget(path, 6, authorized_max_usd=6).snapshot(), after)
+            self.assertEqual(OpenAIRunBudget(
+                path, 6, authorized_max_usd=6, max_requests=10,
+            ).snapshot(), after)
 
     def test_absolute_request_limit_counts_ambiguous_attempts_across_restarts(self):
         with TemporaryDirectory() as temporary:

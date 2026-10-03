@@ -41,6 +41,8 @@ class OpenAIRunBudget:
             raise ValueError("run budget must be positive and within the authorized ceiling")
         if max_requests is not None and (type(max_requests) is not int or max_requests < 0):
             raise ValueError("max_requests must be a nonnegative absolute ledger count")
+        if cap_usd > 5 and max_requests is None:
+            raise ValueError("a budget above $5 requires an absolute request limit")
         if not path.parent.is_dir():
             raise ValueError("budget ledger parent must exist")
         self.path = path
@@ -92,6 +94,8 @@ class OpenAIRunBudget:
             or new_cap_usd > self.authorized_max_usd
         ):
             raise ValueError("new cap must exceed the current cap within the authorized ceiling")
+        if new_cap_usd > 5 and self.max_requests is None:
+            raise ValueError("a cap increase above $5 requires an absolute request limit")
         new_cap = float(new_cap_usd)
 
         def update(data: dict[str, Any]) -> dict[str, Any]:
