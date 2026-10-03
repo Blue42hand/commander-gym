@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "baseManifestSha256": "36e9f110218cc8d590b9885838dd0f1b8b300aefe935ff4adf657362358dbe9a",
+  "sourceSetSha256": "ef2dec32b22f4f65d0cb3968ea4bf1349877c46156e88877fa838f0a5a31808e",
+  "priorResultsName": "scripted-paired-screen-reviewed-7c4ef98.jsonl",
+  "priorResultsSha256": "7470b488421641ac78cf84cfb59f8deb8b215d4d46066b07d9a2ec52755a80c8",
+  "priorSummaryName": "scripted-paired-screen-summary-reviewed-7c4ef98.json",
+  "priorSummarySha256": "09413db06cd0ce8710526ef48c77b30ef037e479f184a051b213e209703980d6",
+  "priorModelIoSha256": [
+    "9ce2a18dcd4c7f95fc866d5313725d0082ff5f9cb1f8c59bb59aeb9527d35949",
+    "f543f6bd8851fb247fec7c0bcf19be42711d9e9fbb6b9d911541e7728f5593d8",
+    "f4389e2909e2615106ea8f3a5d4edd385fa2c5cae27f6885f06c39e3a6478e63",
+    "36f0c815c57555816c59aa84c87d6d209eaeb7422a2309945ca88be94b69b3fa",
+    "afa620e49c4804a655d47c4b03aca5f9a0d8d4caf34db0eaa08c2fffcb2f25b8",
+    "e8d27e72600de163c37e3e4225ffc12b5ea900f6db0f688db3bab8391cc5f38d"
+  ],
+  "previousRequestCount": 6,
+  "startPosition": 3,
+  "remainingPositions": 5,
+  "maxNewRequests": 10,
+  "expectedLedgerRequests": 596,
+  "expectedLedgerUnsettledRequests": 3,
+  "expectedLedgerEstimatedUsd": 5.0120125,
+  "maximumLedgerRequestsAfter": 606,
+  "absoluteLedgerRequestLimit": 610,
+  "authorizedCapUsd": 6,
+  "wallSeconds": 360,
+  "model": "gpt-6-luna",
+  "maxOutputTokens": 2048
+}
