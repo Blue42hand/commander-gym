@@ -38,6 +38,10 @@ ERROR_RE = re.compile(
     r"External AI action failed|Error handling AI action",
     re.IGNORECASE,
 )
+FATAL_EXTERNAL_ACTION_RE = re.compile(
+    r"External AI action failed for seat \S+ in game (?P<game>\S+): "
+    r"(?P<reason>.+?) — refusing server-side strategic fallback"
+)
 
 
 def _request_json(
@@ -338,6 +342,32 @@ class _ProgressGuard:
         return now - self.last_change >= self.stall_seconds
 
 
+@dataclass
+class _FatalActionWatch:
+    """Read new server-log lines and stop only for this game's unrecoverable action."""
+
+    path: Path | None
+    offset: int = 0
+    partial: bytes = b""
+    failures: list[tuple[str, str]] | None = None
+
+    def scan(self, game_ids: list[str]) -> str | None:
+        if self.path is None or not self.path.exists():
+            return None
+        if self.failures is None:
+            self.failures = []
+        with self.path.open("rb") as stream:
+            stream.seek(self.offset)
+            added = stream.read()
+            self.offset = stream.tell()
+        *lines, self.partial = (self.partial + added).split(b"\n")
+        for raw in lines:
+            match = FATAL_EXTERNAL_ACTION_RE.search(raw.decode("utf-8", errors="replace"))
+            if match:
+                self.failures.append((match["game"], match["reason"]))
+        return next((reason for game, reason in self.failures if game in game_ids), None)
+
+
 def _provenance_size(path: Path | None) -> int | None:
     if path is None:
         return None
@@ -558,6 +588,7 @@ def run(args: argparse.Namespace) -> int:
 
     deadline = time.monotonic() + args.timeout
     progress_guard = _ProgressGuard(args.stall_seconds, time.monotonic())
+    fatal_action_watch = _FatalActionWatch(Path(args.server_log) if args.server_log else None)
     provenance_path = Path(args.provenance) if args.provenance else None
     game_ids: list[str] = []
     max_turn = 0
@@ -565,6 +596,7 @@ def run(args: argparse.Namespace) -> int:
     completed = False
     terminal_evidence: dict[str, Any] | None = None
     stop_reason = "emergency_ceiling"
+    fatal_action_failure: str | None = None
     final_status: Mapping[str, Any] = {}
 
     while time.monotonic() < deadline:
@@ -610,6 +642,10 @@ def run(args: argparse.Namespace) -> int:
             completed = terminal_evidence is not None
             stop_reason = "native_complete" if completed else "native_complete_without_terminal"
             break
+        fatal_action_failure = fatal_action_watch.scan(game_ids)
+        if fatal_action_failure is not None:
+            stop_reason = "external_ai_action_rejected"
+            break
         # A native callback can advance inside one turn without changing the
         # tournament status. Provenance growth captures it; request reservations
         # capture an API attempt before any response or provenance write. Old
@@ -638,6 +674,8 @@ def run(args: argparse.Namespace) -> int:
     )
     result["terminalEvidence"] = terminal_evidence
     result["stopReason"] = stop_reason
+    if fatal_action_failure is not None:
+        result["fatalActionFailure"] = fatal_action_failure
     if final_status.get("complete") is True and args.terminal_evidence_dir:
         result["terminalArtifact"] = _terminal_artifact_result(
             base, final_status.get("completedGames"), Path(args.terminal_evidence_dir),

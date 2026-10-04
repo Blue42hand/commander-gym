@@ -13,13 +13,71 @@ from unittest.mock import ANY, patch
 
 from commander_gym.openai_run_budget import OpenAIRunBudget, OpenAIRunBudgetError
 from commander_gym.two_luna_debug import (
-    _ProgressGuard, _capture_terminal_replay, _natural_terminal_game,
+    _FatalActionWatch, _ProgressGuard, _capture_terminal_replay, _natural_terminal_game,
     _provenance_size, _request_json, _run_budget, _summarize, run,
     _terminal_artifact_result, _write_private_json,
 )
 
 
 class TwoLunaDebugReportTests(unittest.TestCase):
+    def test_fatal_action_watch_matches_active_game_only_after_complete_log_line(self):
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / "server.log"
+            watch = _FatalActionWatch(log)
+            log.write_text(
+                "ERROR External AI action failed for seat ai-x in game other: "
+                "illegal block — refusing server-side strategic fallback\n"
+                "ERROR External AI action failed for seat ai-a in game game-1: "
+                "Goblin Piledriver has protection from blue"
+            )
+            self.assertIsNone(watch.scan(["game-1"]))
+            with log.open("a") as output:
+                output.write(" — refusing server-side strategic fallback\n")
+            self.assertEqual(
+                watch.scan(["game-1"]),
+                "Goblin Piledriver has protection from blue",
+            )
+            self.assertIsNone(watch.scan(["unrelated-game"]))
+
+    def test_run_stops_on_fatal_external_action_without_waiting_for_stall(self):
+        profiles = {"profiles": [
+            {"id": "a", "deck": {"commander": "Krenko", "cards": {"Mountain": 99}}},
+            {"id": "b", "deck": {"commander": "Talrand", "cards": {"Island": 99}}},
+        ]}
+        status = {"complete": False, "state": "TOURNAMENT_ACTIVE", "round": 1,
+                  "liveGames": [{"gameSessionId": "game-1", "turnNumber": 10}],
+                  "completedGames": []}
+        snapshot = {"capUsd": 18, "estimatedUsd": 7.5, "requests": 975,
+                    "inputTokens": 1680321, "outputTokens": 22672,
+                    "unsettledRequests": 3}
+        budget = type("Budget", (), {"snapshot": lambda self: snapshot})()
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / "server.log"
+            log.write_text(
+                "ERROR External AI action failed for seat ai-a in game game-1: "
+                "illegal block — refusing server-side strategic fallback\n"
+            )
+            args = Namespace(
+                profile_a="a", profile_b="b", sidecar_url="http://127.0.0.1:1235",
+                server_url="http://127.0.0.1:1234", timeout=3600, stall_seconds=600,
+                poll_seconds=1, provenance=None, server_log=str(log),
+                terminal_evidence_dir=directory,
+            )
+            output = io.StringIO()
+            with patch.dict(os.environ, {"COMMANDER_GYM_SIDECAR_TOKEN": "local-test"}), \
+                    patch("commander_gym.two_luna_debug._request_json",
+                          side_effect=[profiles, {"lobbyId": "lobby"}, status]) as request, \
+                    patch("commander_gym.two_luna_debug._run_budget", return_value=budget), \
+                    patch("commander_gym.two_luna_debug.time.sleep"), redirect_stdout(output):
+                exit_code = run(args)
+            result = json.loads(next(s.partition("=")[2] for s in output.getvalue().splitlines()
+                                     if s.startswith("TWO_LUNA_DEBUG_RESULT=")))
+            self.assertEqual(exit_code, 1)
+            self.assertEqual(request.call_count, 3)
+            self.assertEqual(result["stopReason"], "external_ai_action_rejected")
+            self.assertEqual(result["fatalActionFailure"], "illegal block")
+            self.assertIsNone(result["terminalEvidence"])
+
     def test_captures_replay_and_native_terminal_frame_before_server_cleanup(self):
         replay = {"metadata": {"gameId": "game-1", "snapshotCount": 3,
                                "stateReproducible": True},
