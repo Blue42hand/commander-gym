@@ -158,12 +158,16 @@ class GameServerAcceptanceTest {
                 }
             }
 
-            val policyObservation = evidenceLines().drop(evidenceOffset).first { line ->
+            val isAiActionProvenance: (String) -> Boolean = { line ->
                 evidenceField(line, "event") == "provenance" &&
                     evidenceField(line, "callback") == "chooseAction" &&
-                    json.parseToJsonElement(line).jsonObject["observation"]!!
-                        .jsonObject["agentToAct"]!!.jsonPrimitive.contentOrNull == seatId
+                    runCatching {
+                        json.parseToJsonElement(line).jsonObject["observation"]!!
+                            .jsonObject["agentToAct"]!!.jsonPrimitive.contentOrNull == seatId
+                    }.getOrDefault(false)
             }
+            awaitEvidence(evidenceOffset, Duration.ofSeconds(20), isAiActionProvenance)
+            val policyObservation = evidenceLines().drop(evidenceOffset).first(isAiActionProvenance)
             assertOpponentHandMasked(policyObservation, seatId)
             // Assert the exact sidecar callback shape, including opaque library slots.
             assertOpponentLibraryMasked(policyObservation, seatId)
