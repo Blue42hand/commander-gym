@@ -416,7 +416,11 @@ def _native_attack_targets(action: Mapping[str, Any]) -> tuple[list[str], list[s
     """Read the current native attacker and defender candidates as one offer."""
     if action.get("kind", action.get("actionType")) != "DeclareAttackers":
         return None
-    attackers, targets = action.get("validAttackers"), action.get("validAttackTargets")
+    if "validAttackers" not in action or "validAttackTargets" not in action:
+        raise OpenAIResponsesPilotError("native attacker candidates are malformed")
+    # Argentum uses null for an empty candidate list in GameServer legal actions.
+    attackers = [] if action["validAttackers"] is None else action["validAttackers"]
+    targets = [] if action["validAttackTargets"] is None else action["validAttackTargets"]
     if not all(
         isinstance(ids, list) and all(isinstance(entity_id, str) and entity_id for entity_id in ids)
         for ids in (attackers, targets)
@@ -432,7 +436,7 @@ def _native_action_field_schema(action: Mapping[str, Any], name: str, kind: str)
             attackers, targets = offered
             return {"type": "object", "properties": {
                 attacker: {"type": "string", "enum": list(dict.fromkeys(targets))}
-                for attacker in attackers
+                for attacker in attackers if targets
             }, "additionalProperties": False}
     if name == "blockers" and kind == "ENTITY_ID_ARRAY_MAP":
         targets = _native_block_targets(action)
@@ -455,6 +459,17 @@ def _native_card_options(pending: Mapping[str, Any]) -> list[str] | None:
     ):
         raise OpenAIResponsesPilotError("native card options are malformed")
     return options
+
+
+def _offered_id_array_schema(ids: list[str]) -> dict[str, Any]:
+    """Keep an empty native offer satisfiable only by [], without enum: []."""
+    offered = list(dict.fromkeys(ids))
+    schema: dict[str, Any] = {"type": "array", "items": {"type": "string"}}
+    if offered:
+        schema["items"]["enum"] = offered
+    else:
+        schema["maxItems"] = 0
+    return schema
 
 
 def _native_action_format(
@@ -618,9 +633,7 @@ def _native_mana_source_format(observation: Mapping[str, Any]) -> dict[str, Any]
                             {"const": False} if can_auto_pay is False else {}
                         )},
                         "declined": {"type": "boolean"},
-                        "selectedSources": {
-                            "type": "array", "items": {"type": "string", "enum": offered_ids},
-                        },
+                        "selectedSources": _offered_id_array_schema(offered_ids),
                         "waterbendPermanents": {"type": "array", "items": {"type": "string"}},
                     },
                     "required": ["type", *fields],
@@ -665,7 +678,7 @@ def _native_targets_format(observation: Mapping[str, Any]) -> dict[str, Any] | N
                         "selectedTargets": {
                             "type": "object",
                             "properties": {
-                                index: {"type": "array", "items": {"type": "string", "enum": list(dict.fromkeys(ids))}}
+                                index: _offered_id_array_schema(ids)
                                 for index, ids in legal_targets.items()
                             },
                             "additionalProperties": False,
@@ -708,9 +721,7 @@ def _native_decision_format(observation: Mapping[str, Any]) -> dict[str, Any] | 
         if schema is None:
             return None
         if field == "selectedCards" and kind == "ENTITY_ID_ARRAY" and card_options is not None:
-            schema = {"type": "array", "items": {
-                "type": "string", "enum": list(dict.fromkeys(card_options)),
-            }}
+            schema = _offered_id_array_schema(card_options)
         properties[field] = schema
     for field, kind in _NATIVE_OPTIONAL_RESPONSE_FIELDS.get(response_type, {}).items():
         properties[field] = _native_response_field_schema(response_type, field, kind)
