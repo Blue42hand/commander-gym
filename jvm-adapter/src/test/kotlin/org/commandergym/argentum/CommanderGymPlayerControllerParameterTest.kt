@@ -3,6 +3,7 @@ package org.commandergym.argentum
 import com.sun.net.httpserver.HttpServer
 import com.wingedsheep.ai.ActionResponse
 import com.wingedsheep.engine.core.DeclareAttackers
+import com.wingedsheep.engine.core.DeclareBlockers
 import com.wingedsheep.engine.core.YesNoDecision
 import com.wingedsheep.engine.core.DecisionContext
 import com.wingedsheep.engine.view.ClientGameState
@@ -121,6 +122,62 @@ class CommanderGymPlayerControllerParameterTest {
                 policyAction["parameterSpec"]!!.jsonObject["allowedFields"]!!
                     .jsonObject["attackers"]!!.jsonPrimitive.content,
             )
+        } finally {
+            server.stop(0)
+        }
+    }
+
+    @Test
+    fun nativeBlockPairsReachTheGymPolicyWithoutFlatteningGlobalBlockRules() {
+        val playerId = EntityId.of("ai")
+        val drake = EntityId.of("drake")
+        val bear = EntityId.of("bear")
+        val piledriver = EntityId.of("piledriver")
+        val legal = LegalActionInfo(
+            actionType = "DeclareBlockers",
+            description = "Declare blockers",
+            action = DeclareBlockers(playerId, emptyMap()),
+            validBlockers = listOf(drake),
+            validBlockTargets = mapOf(drake to listOf(bear)),
+            blockerMaxBlockCounts = mapOf(drake to 1),
+            parameterSpec = ActionParameterSpec(
+                mapOf("blockers" to ActionParameterFieldKind.ENTITY_ID_ARRAY_MAP),
+            ),
+        )
+        var requestBody: String? = null
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        server.createContext("/v1/choose-action") { exchange ->
+            requestBody = exchange.requestBody.bufferedReader().use { it.readText() }
+            val response = """{"kind":"action","actionId":0,"action":
+                {"type":"DeclareBlockers","playerId":"ai","blockers":{}},
+                "params":{"blockers":{"drake":["bear"]}},"metadata":{}}"""
+                .trimIndent().toByteArray(StandardCharsets.UTF_8)
+            exchange.sendResponseHeaders(200, response.size.toLong())
+            exchange.responseBody.use { it.write(response) }
+        }
+        server.start()
+        try {
+            val controller = CommanderGymPlayerController(
+                playerId = playerId,
+                endpoint = URI.create("http://127.0.0.1:${server.address.port}"),
+                token = "test-token",
+                timeout = Duration.ofSeconds(2),
+                parameterize = { offered, params ->
+                    (offered.action as DeclareBlockers).copy(blockers = params.blockers)
+                },
+            )
+            val chosen = controller.chooseAction(
+                state = minimalState(playerId), legalActions = listOf(legal),
+                pendingDecision = null, recentGameLog = emptyList(),
+            ) as ActionResponse.SubmitAction
+            assertEquals(mapOf(drake to listOf(bear)), (chosen.action as DeclareBlockers).blockers)
+            val offer = Json.parseToJsonElement(checkNotNull(requestBody)).jsonObject
+                .getValue("legalActions").jsonArray.single().jsonObject
+            val pairs = offer.getValue("validBlockTargets").jsonObject
+            assertEquals(listOf("bear"), pairs.getValue("drake").jsonArray.map { it.jsonPrimitive.content })
+            assertTrue(piledriver.value !in pairs.getValue("drake").toString())
+            assertEquals("1", offer.getValue("blockerMaxBlockCounts").jsonObject
+                .getValue("drake").jsonPrimitive.content)
         } finally {
             server.stop(0)
         }

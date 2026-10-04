@@ -100,6 +100,41 @@ class GameServerSeatAdapterTests(unittest.TestCase):
             "targets": ["spell-1"], "exiledCards": ["blue-card-1"],
         })
 
+    def test_native_block_pair_offer_survives_seat_and_model_serialization(self):
+        requests = []
+
+        class Responses:
+            def create(self, **request):
+                requests.append(request)
+                return type("Response", (), {
+                    "status": "completed",
+                    "output_text": json.dumps({"channel": "action", "choice": {
+                        "semanticId": "native-declare-blockers",
+                        "params": {"blockers": {"drake": ["bear"]}},
+                    }}),
+                })()
+
+        action = {
+            "actionType": "DeclareBlockers", "semanticId": "native-declare-blockers",
+            "parameterSpec": {"allowedFields": {"blockers": "ENTITY_ID_ARRAY_MAP"}},
+            "validBlockers": ["drake"],
+            "validBlockTargets": {"drake": ["bear"]},
+            "blockerMaxBlockCounts": {"drake": 1},
+            "action": {"type": "DeclareBlockers", "playerId": "ai", "blockers": {}},
+        }
+        provider = OpenAIResponsesPilot(
+            client=type("Client", (), {"responses": Responses()})(), model="gpt-test",
+            compact_model_observation=True,
+        )
+        result = GameServerSeatAdapter(provider, "ai").choose_action(self.state, [action], None)
+
+        self.assertEqual(result.params, {"blockers": {"drake": ["bear"]}})
+        compact = json.loads(requests[0]["input"].split("\n", 1)[1])
+        offered = compact["observation"]["legalActions"][0]
+        self.assertEqual(offered["validBlockTargets"], {"drake": ["bear"]})
+        self.assertEqual(offered["blockerMaxBlockCounts"], {"drake": 1})
+        self.assertNotIn("actionId", offered)
+
     def test_native_structured_decision_round_trip(self):
         pending = {
             "decisionId": "decision-7",

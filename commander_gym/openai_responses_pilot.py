@@ -397,6 +397,32 @@ def _native_action_param_fields(action: Mapping[str, Any]) -> Mapping[str, str] 
     return fields
 
 
+def _native_block_targets(action: Mapping[str, Any]) -> dict[str, list[str]] | None:
+    """Read native pairwise block offers; absence keeps older engine contracts usable."""
+    if action.get("kind", action.get("actionType")) != "DeclareBlockers" or "validBlockTargets" not in action:
+        return None
+    offered = action["validBlockTargets"]
+    if not isinstance(offered, Mapping) or not all(
+        isinstance(blocker, str) and blocker
+        and isinstance(attackers, list) and attackers
+        and all(isinstance(attacker, str) and attacker for attacker in attackers)
+        for blocker, attackers in offered.items()
+    ):
+        raise OpenAIResponsesPilotError("native validBlockTargets is malformed")
+    return {blocker: list(attackers) for blocker, attackers in offered.items()}
+
+
+def _native_action_field_schema(action: Mapping[str, Any], name: str, kind: str) -> dict[str, Any]:
+    if name == "blockers" and kind == "ENTITY_ID_ARRAY_MAP":
+        targets = _native_block_targets(action)
+        if targets is not None:
+            return {"type": "object", "properties": {
+                blocker: {"type": "array", "items": {"type": "string", "enum": attackers}}
+                for blocker, attackers in targets.items()
+            }, "additionalProperties": False}
+    return _ACTION_PARAM_SCHEMAS[kind]
+
+
 def _native_action_format(
     observation: Mapping[str, Any], *, allow_priority_delegation: bool = False,
     allow_named_deferrals: bool = False,
@@ -426,7 +452,8 @@ def _native_action_format(
                 "params": {
                     "type": "object",
                     "properties": {
-                        name: _ACTION_PARAM_SCHEMAS[kind] for name, kind in fields.items()
+                        name: _native_action_field_schema(action, name, kind)
+                        for name, kind in fields.items()
                     },
                     "additionalProperties": False,
                 },
@@ -706,6 +733,12 @@ def _validate_native_action_params(
         kind = fields[name]
         if not _matches_action_param_kind(value, kind):
             raise OpenAIResponsesPilotError(f"ActionParams.{name} requires {kind}")
+    targets = _native_block_targets(action)
+    if targets is not None and "blockers" in params and any(
+        blocker not in targets or any(attacker not in targets[blocker] for attacker in attackers)
+        for blocker, attackers in params["blockers"].items()
+    ):
+        raise OpenAIResponsesPilotError("ActionParams.blockers contains a pair outside native validBlockTargets")
     return dict(params)
 
 

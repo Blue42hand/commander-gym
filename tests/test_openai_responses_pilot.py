@@ -113,6 +113,52 @@ def structured_observation():
 
 
 class OpenAIResponsesPilotTests(unittest.TestCase):
+    def test_native_block_pairs_constrain_schema_and_retry_an_impossible_pair(self):
+        obs = action_observation()
+        obs["legalActions"] = [{
+            "actionId": 4, "semanticId": "argentum-action-v1:declare-blockers",
+            "kind": "DeclareBlockers", "actionType": "DeclareBlockers",
+            "parameterSpec": {"allowedFields": {"blockers": "ENTITY_ID_ARRAY_MAP"}},
+            "validBlockers": ["drake", "lion"],
+            "validBlockTargets": {"drake": ["bear"], "lion": ["piledriver", "bear"]},
+            "blockerMaxBlockCounts": {"drake": 1, "lion": 1},
+        }]
+        invalid = {"channel": "action", "choice": {
+            "semanticId": "argentum-action-v1:declare-blockers",
+            "params": {"blockers": {"drake": ["piledriver"]}},
+        }}
+        valid = {"channel": "action", "choice": {
+            "semanticId": "argentum-action-v1:declare-blockers",
+            "params": {"blockers": {"drake": ["bear"]}},
+        }}
+        client = FakeClient([FakeResponse(json.dumps(invalid)), FakeResponse(json.dumps(valid))])
+        choice = OpenAIResponsesPilot(client=client, model="gpt-test").choose(obs)
+        self.assertEqual(choice.action_id, 4)
+        self.assertEqual(choice.params, valid["choice"]["params"])
+        self.assertEqual(choice.metadata["retryCount"], 1)
+        self.assertEqual(len(client.responses.calls), 2)
+        block_schema = client.responses.calls[0]["text"]["format"]["schema"]["properties"] \
+            ["choice"]["anyOf"][0]["properties"]["params"]["properties"]["blockers"]
+        self.assertEqual(block_schema["properties"]["drake"]["items"]["enum"], ["bear"])
+        self.assertEqual(block_schema["properties"]["lion"]["items"]["enum"],
+                         ["piledriver", "bear"])
+        self.assertFalse(block_schema["additionalProperties"])
+        self.assertIn("validBlockTargets", client.responses.calls[0]["input"])
+        self.assertIn("outside native validBlockTargets", client.responses.calls[1]["input"])
+
+    def test_native_block_pair_contract_fails_closed_when_malformed(self):
+        obs = action_observation()
+        obs["legalActions"] = [{
+            "actionId": 4, "semanticId": "argentum-action-v1:declare-blockers",
+            "kind": "DeclareBlockers", "actionType": "DeclareBlockers",
+            "parameterSpec": {"allowedFields": {"blockers": "ENTITY_ID_ARRAY_MAP"}},
+            "validBlockTargets": {"drake": "piledriver"},
+        }]
+        client = FakeClient(FakeResponse("{}"))
+        with self.assertRaisesRegex(OpenAIResponsesPilotError, "validBlockTargets is malformed"):
+            OpenAIResponsesPilot(client=client, model="gpt-test").choose(obs)
+        self.assertEqual(client.responses.calls, [])
+
     def test_compact_model_view_preserves_exact_native_observation_in_provenance(self):
         obs = action_observation()
         obs["state"] = {"cards": {
