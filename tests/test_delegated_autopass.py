@@ -122,7 +122,9 @@ class DelegatedAutopassTests(unittest.TestCase):
                 "modeDamageDistribution": {}, "wasWaterbendPaid": False,
                 "xValue": None, "paymentStrategy": {"type": "AutoPay"},
                 "useAlternativeCost": False, "useWithoutPayingManaCost": False,
-                "castFaceDown": False,
+                "castFaceDown": False, "castPrototyped": False,
+                "additionalCostChoices": {}, "additionalManaForCounters": 0,
+                "declaredCostIndices": [], "declaredCostTimes": 1,
             },
         }
         start = observation(step="UPKEEP", legal=[passed])
@@ -353,13 +355,14 @@ class DelegatedAutopassTests(unittest.TestCase):
         class LandPilot:
             name, version = "planned-land", "1"
 
-            def __init__(self):
+            def __init__(self, card_id="h2"):
                 self.calls = 0
+                self.card_id = card_id
 
             def choose(self, observation):
                 self.calls += 1
                 return ArgentumActionChoice(0, metadata={"thenCast": {
-                    "cardId": "h2", "reason": "Cast the selected spell after land",
+                    "cardId": self.card_id, "reason": "Cast the selected spell after land",
                 }}) if self.calls == 1 else ArgentumActionChoice(0)
 
         start = observation(legal=[
@@ -393,13 +396,15 @@ class DelegatedAutopassTests(unittest.TestCase):
                 "modeDamageDistribution": {}, "wasWaterbendPaid": False,
                 "xValue": None, "paymentStrategy": {"type": "AutoPay"},
                 "useAlternativeCost": False, "useWithoutPayingManaCost": False,
-                "castFaceDown": False,
+                "castFaceDown": False, "castPrototyped": False,
+                "additionalCostChoices": {}, "additionalManaForCounters": 0,
+                "declaredCostIndices": [], "declaredCostTimes": 1,
             },
         }
         later["legalActions"] = [cast]
 
-        def run(first, second, *, enabled=True):
-            strategic = LandPilot()
+        def run(first, second, *, enabled=True, card_id="h2"):
+            strategic = LandPilot(card_id)
             pilot = DelegatedAutopassPilot(
                 strategic, allow_named_deferrals=True,
                 guarded_then_cast_templates=enabled,
@@ -411,6 +416,37 @@ class DelegatedAutopassTests(unittest.TestCase):
         result, calls = run(start, later)
         self.assertEqual((result.action_id, result.params, calls), (7, {}, 1))
         self.assertEqual(run(start, later, enabled=False)[1], 2)
+
+        # The eight saved game intents cover seven isolated land transitions
+        # (including one command-zone cast) and one visible effect change.
+        # Card IDs are local to that trace; the fixture contains no deck data.
+        for row, card_id, command, changed_effect in (
+            (4, "e30", False, False), (15, "e82", False, False),
+            (23, "e144", False, False), (36, "e4", False, False),
+            (50, "e100", True, False), (59, "e10", False, False),
+            (102, "e157", False, False), (129, "e10", False, True),
+        ):
+            with self.subTest(trace_row=row):
+                first, second = copy.deepcopy(start), copy.deepcopy(later)
+                second["legalActions"][0]["action"]["cardId"] = card_id
+                if command:
+                    first["state"]["zones"][0]["cardIds"] = ["h1"]
+                    second["state"]["zones"][0]["cardIds"] = []
+                    for item in (first, second):
+                        item["state"]["zones"].insert(1, {
+                            "zoneId": {"ownerId": "p1", "zoneType": "Command"},
+                            "cardIds": [card_id],
+                        })
+                    second["legalActions"][0]["sourceZone"] = "COMMAND"
+                else:
+                    first["state"]["zones"][0]["cardIds"] = ["h1", card_id]
+                    second["state"]["zones"][0]["cardIds"] = [card_id]
+                if changed_effect:
+                    second["state"]["cards"]["b1"]["activeEffects"] = [
+                        {"description": "artifact count changed"},
+                    ]
+                _, calls = run(first, second, card_id=card_id)
+                self.assertEqual(calls, 2 if changed_effect else 1)
 
         # A missing empty Battlefield zone and reordered existing permanents
         # are representation differences, not new game decisions.
@@ -430,6 +466,23 @@ class DelegatedAutopassTests(unittest.TestCase):
             })
         commander_after["legalActions"][0]["sourceZone"] = "COMMAND"
         self.assertEqual(run(commander_before, commander_after)[1], 1)
+
+        for field, value in (
+            ("additionalCostChoices", {"cost": "selected"}),
+            ("additionalManaForCounters", 1),
+            ("additionalManaForCounters", False),
+            ("castPrototyped", True),
+            ("declaredCostIndices", [0]), ("declaredCostTimes", 2),
+            ("declaredCostTimes", True),
+            ("unexpectedNativeField", None),
+        ):
+            with self.subTest(nondefault=field):
+                interrupted = copy.deepcopy(later)
+                interrupted["legalActions"][0]["action"][field] = value
+                self.assertEqual(run(start, interrupted)[1], 2)
+        missing_default = copy.deepcopy(later)
+        missing_default["legalActions"][0]["action"].pop("declaredCostTimes")
+        self.assertEqual(run(start, missing_default)[1], 2)
 
         for change in ("targets", "x", "mode", "delve", "extra_cost", "other_variant",
                        "second_cast",
@@ -523,7 +576,12 @@ class DelegatedAutopassTests(unittest.TestCase):
                                              "paymentStrategy": {"type": "AutoPay"},
                                              "useAlternativeCost": False,
                                              "useWithoutPayingManaCost": False,
-                                             "castFaceDown": False}}]
+                                             "castFaceDown": False,
+                                             "castPrototyped": False,
+                                             "additionalCostChoices": {},
+                                             "additionalManaForCounters": 0,
+                                             "declaredCostIndices": [],
+                                             "declaredCostTimes": 1}}]
         result = pilot.choose(later)
         self.assertEqual(result.action_id, 7)
         self.assertEqual(result.metadata["forgeThenCast"]["cardId"], "h2")

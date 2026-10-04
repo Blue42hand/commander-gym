@@ -406,10 +406,16 @@ def _parameterless_native_cast(
     ):
         return False
     defaults = {
+        # Argentum's native CastSpell wire action includes these fields even
+        # when the cast uses none of the corresponding optional costs. Match
+        # their exact defaults; a real choice still requires a model wake.
+        "additionalCostChoices": {}, "additionalManaForCounters": 0,
         "additionalCostPayment": None, "alternativeCostType": None,
         "alternativePayment": None, "castFaceDown": False,
+        "castPrototyped": False,
         "casualtyCreature": None, "chosenModes": [], "conspiredCreatures": [],
-        "damageDistribution": None, "declaredCostSlot": None,
+        "damageDistribution": None, "declaredCostIndices": [],
+        "declaredCostSlot": None, "declaredCostTimes": 1,
         "faceIndex": None, "giftRecipient": None,
         "graveyardCastRider": None, "graveyardLifeCost": 0,
         "modeDamageDistribution": {}, "modeTargetsOrdered": [],
@@ -417,7 +423,10 @@ def _parameterless_native_cast(
         "useWithoutPayingManaCost": False, "wasWaterbendPaid": False,
         "xValue": None,
     }
-    if any(action.get(field) != value for field, value in defaults.items()):
+    if any(
+        type(action.get(field)) is not type(value) or action.get(field) != value
+        for field, value in defaults.items()
+    ):
         return False
     return (
         action.get("paymentStrategy") == {"type": "AutoPay"}
