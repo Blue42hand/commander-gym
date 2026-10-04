@@ -390,10 +390,10 @@ class GameServerAcceptanceTest {
         }
         assertEquals(1, opponentLibraries.size)
         val library = opponentLibraries.single()
+        assertTrue(library["size"]!!.jsonPrimitive.content.toInt() > 0)
         val cardIds = library["cardIds"]!!.jsonArray.map { it.jsonPrimitive.contentOrNull!! }
-        assertTrue(cardIds.isNotEmpty())
-        assertTrue(cardIds.all { it.startsWith("client-hidden-library-slot:") })
-        assertTrue(cardIds.none { it in state["cards"]!!.jsonObject })
+        assertTrue(cardIds.isEmpty(), "unrevealed opponent library IDs reached the AI callback")
+        assertTrue(library["positions"]!!.jsonArray.isEmpty())
     }
 
     private fun await(timeout: Duration, description: String, predicate: () -> Boolean) {

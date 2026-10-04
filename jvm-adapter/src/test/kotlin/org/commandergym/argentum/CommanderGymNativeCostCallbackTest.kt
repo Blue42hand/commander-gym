@@ -5,6 +5,7 @@ import com.wingedsheep.ai.ActionResponse
 import com.wingedsheep.engine.core.ActionParameterizer
 import com.wingedsheep.engine.core.ActionParams
 import com.wingedsheep.engine.core.ActivateAbility
+import com.wingedsheep.engine.handlers.PredicateEvaluator
 import com.wingedsheep.engine.state.GameState
 import com.wingedsheep.engine.legalactions.AdditionalCostData
 import com.wingedsheep.engine.legalactions.LegalAction
@@ -38,7 +39,7 @@ class CommanderGymNativeCostCallbackTest {
             "tappedPermanents", "sacrificedPermanents", "discardedCards", "exiledCards",
         )
         val registry = CardRegistry()
-        val enricher = LegalActionEnricher(ManaSolver(registry), registry)
+        val enricher = LegalActionEnricher(ManaSolver(registry, PredicateEvaluator(registry)), registry)
         var selectedField = fields.first()
         var requestBody = ""
         val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
