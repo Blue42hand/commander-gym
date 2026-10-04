@@ -412,7 +412,28 @@ def _native_block_targets(action: Mapping[str, Any]) -> dict[str, list[str]] | N
     return {blocker: list(attackers) for blocker, attackers in offered.items()}
 
 
+def _native_attack_targets(action: Mapping[str, Any]) -> tuple[list[str], list[str]] | None:
+    """Read the current native attacker and defender candidates as one offer."""
+    if action.get("kind", action.get("actionType")) != "DeclareAttackers":
+        return None
+    attackers, targets = action.get("validAttackers"), action.get("validAttackTargets")
+    if not all(
+        isinstance(ids, list) and all(isinstance(entity_id, str) and entity_id for entity_id in ids)
+        for ids in (attackers, targets)
+    ):
+        raise OpenAIResponsesPilotError("native attacker candidates are malformed")
+    return attackers, targets
+
+
 def _native_action_field_schema(action: Mapping[str, Any], name: str, kind: str) -> dict[str, Any]:
+    if name == "attackers" and kind == "ENTITY_ID_MAP":
+        offered = _native_attack_targets(action)
+        if offered is not None:
+            attackers, targets = offered
+            return {"type": "object", "properties": {
+                attacker: {"type": "string", "enum": list(dict.fromkeys(targets))}
+                for attacker in attackers
+            }, "additionalProperties": False}
     if name == "blockers" and kind == "ENTITY_ID_ARRAY_MAP":
         targets = _native_block_targets(action)
         if targets is not None:
@@ -421,6 +442,19 @@ def _native_action_field_schema(action: Mapping[str, Any], name: str, kind: str)
                 for blocker, attackers in targets.items()
             }, "additionalProperties": False}
     return _ACTION_PARAM_SCHEMAS[kind]
+
+
+def _native_card_options(pending: Mapping[str, Any]) -> list[str] | None:
+    if pending.get("responseSpec", {}).get("responseType") != "CardsSelectedResponse":
+        return None
+    if "options" not in pending and pending.get("kind") != "SelectCardsDecision":
+        return None  # Older fixtures may carry the response shape without native candidates.
+    options = pending.get("options")
+    if not isinstance(options, list) or not all(
+        isinstance(entity_id, str) and entity_id for entity_id in options
+    ):
+        raise OpenAIResponsesPilotError("native card options are malformed")
+    return options
 
 
 def _native_action_format(
@@ -665,6 +699,7 @@ def _native_decision_format(observation: Mapping[str, Any]) -> dict[str, Any] | 
         return None
     if response_type == "ManaSourcesSelectedResponse":
         return None  # Preserve the mixed mana-action channel.
+    card_options = _native_card_options(pending)
     properties: dict[str, Any] = {"type": {"type": "string", "const": response_type}}
     for field, kind in fields.items():
         if not isinstance(field, str) or not isinstance(kind, str):
@@ -672,6 +707,10 @@ def _native_decision_format(observation: Mapping[str, Any]) -> dict[str, Any] | 
         schema = _native_response_field_schema(response_type, field, kind)
         if schema is None:
             return None
+        if field == "selectedCards" and kind == "ENTITY_ID_ARRAY" and card_options is not None:
+            schema = {"type": "array", "items": {
+                "type": "string", "enum": list(dict.fromkeys(card_options)),
+            }}
         properties[field] = schema
     for field, kind in _NATIVE_OPTIONAL_RESPONSE_FIELDS.get(response_type, {}).items():
         properties[field] = _native_response_field_schema(response_type, field, kind)
@@ -750,6 +789,14 @@ def _validate_native_action_params(
         for blocker, attackers in params["blockers"].items()
     ):
         raise OpenAIResponsesPilotError("ActionParams.blockers contains a pair outside native validBlockTargets")
+    attack_offer = _native_attack_targets(action)
+    if attack_offer is not None and "attackers" in params:
+        attackers, targets = attack_offer
+        if any(attacker not in attackers or target not in targets
+               for attacker, target in params["attackers"].items()):
+            raise OpenAIResponsesPilotError(
+                "ActionParams.attackers contains an ID outside native validAttackers or validAttackTargets"
+            )
     return dict(params)
 
 
@@ -1394,6 +1441,13 @@ class OpenAIResponsesPilot:
                     raise OpenAIResponsesPilotError(
                         "native response selectedTargets requires arrays of offered target IDs"
                     )
+        card_options = _native_card_options(pending)
+        if card_options is not None and "selectedCards" in response and any(
+            card_id not in card_options for card_id in response["selectedCards"]
+        ):
+            raise OpenAIResponsesPilotError(
+                "native response selectedCards must be offered in options"
+            )
 
         submitted = dict(response)
         submitted["decisionId"] = decision_id

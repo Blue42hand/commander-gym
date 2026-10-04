@@ -113,6 +113,75 @@ def structured_observation():
 
 
 class OpenAIResponsesPilotTests(unittest.TestCase):
+    def test_saved_turn_13_attack_target_typo_retries_against_native_offer(self):
+        observation = action_observation()
+        observation["legalActions"] = [{
+            "actionId": 0, "semanticId": "argentum-action-v1:declare-attackers",
+            "kind": "DeclareAttackers", "parameterSpec": {
+                "allowedFields": {"attackers": "ENTITY_ID_MAP"},
+            },
+            "validAttackers": ["e212", "e217", "e218", "e219", "e220", "e221"],
+            "validAttackTargets": ["ai-f65bc7f7"],
+        }]
+        def answer(target):
+            return json.dumps({"channel": "action", "choice": {
+                "semanticId": "argentum-action-v1:declare-attackers",
+                "params": {"attackers": {"e212": target}},
+            }})
+        client = FakeClient([
+            FakeResponse(answer("ai-f65bcf7f7")),  # Saved failure: one extra 'f'.
+            FakeResponse(answer("ai-f65bc7f7")),
+        ])
+        choice = OpenAIResponsesPilot(client=client, model="gpt-test").choose(observation)
+        self.assertEqual(choice.params, {"attackers": {"e212": "ai-f65bc7f7"}})
+        self.assertEqual(choice.metadata["retryCount"], 1)
+        self.assertIn("validAttackTargets", client.responses.calls[1]["input"])
+        attacker_schema = client.responses.calls[0]["text"]["format"]["schema"]["properties"] \
+            ["choice"]["anyOf"][0]["properties"]["params"]["properties"]["attackers"]
+        self.assertEqual(attacker_schema["properties"]["e212"]["enum"], ["ai-f65bc7f7"])
+        self.assertFalse(attacker_schema["additionalProperties"])
+
+    def test_attackers_reject_unoffered_or_stale_entity_ids(self):
+        observation = action_observation()
+        observation["legalActions"] = [{
+            "actionId": 0, "semanticId": "native-attack", "kind": "DeclareAttackers",
+            "parameterSpec": {"allowedFields": {"attackers": "ENTITY_ID_MAP"}},
+            "validAttackers": ["current-creature"],
+            "validAttackTargets": ["current-opponent"],
+        }]
+        for attackers in (
+            {"old-creature": "current-opponent"},
+            {"current-creature": "old-opponent"},
+            {"current-creature": "current-oppnonent"},
+        ):
+            with self.subTest(attackers=attackers):
+                client = FakeClient(FakeResponse(json.dumps({"channel": "action", "choice": {
+                    "semanticId": "native-attack", "params": {"attackers": attackers},
+                }})))
+                with self.assertRaisesRegex(OpenAIResponsesPilotError, "outside native validAttackers"):
+                    OpenAIResponsesPilot(client=client, model="gpt-test", max_attempts=1).choose(observation)
+                self.assertEqual(len(client.responses.calls), 1)
+
+    def test_malformed_native_attack_candidates_fail_before_provider_call(self):
+        for field, value in (
+            ("validAttackers", "current-creature"),
+            ("validAttackTargets", [None]),
+            ("validAttackTargets", None),
+        ):
+            with self.subTest(field=field, value=value):
+                observation = action_observation()
+                observation["legalActions"] = [{
+                    "actionId": 0, "semanticId": "native-attack", "kind": "DeclareAttackers",
+                    "parameterSpec": {"allowedFields": {"attackers": "ENTITY_ID_MAP"}},
+                    "validAttackers": ["current-creature"],
+                    "validAttackTargets": ["current-opponent"],
+                    field: value,
+                }]
+                client = FakeClient(FakeResponse("{}"))
+                with self.assertRaisesRegex(OpenAIResponsesPilotError, "attacker candidates are malformed"):
+                    OpenAIResponsesPilot(client=client, model="gpt-test").choose(observation)
+                self.assertEqual(client.responses.calls, [])
+
     def test_native_block_pairs_constrain_schema_and_retry_an_impossible_pair(self):
         obs = action_observation()
         obs["legalActions"] = [{
@@ -738,6 +807,43 @@ class OpenAIResponsesPilotTests(unittest.TestCase):
                     OpenAIResponsesPilot(
                         client=client, model="gpt-test", max_attempts=1,
                     ).choose(structured_observation())
+
+    def test_card_selection_uses_current_native_options(self):
+        observation = structured_observation()
+        observation["pendingDecision"].update({
+            "kind": "SelectCardsDecision", "options": ["current-card"],
+            "responseSpec": {
+                "responseType": "CardsSelectedResponse",
+                "requiredFields": {"selectedCards": "ENTITY_ID_ARRAY"},
+            },
+        })
+        def answer(card_id):
+            return json.dumps({"channel": "decision", "response": {
+                "type": "CardsSelectedResponse", "selectedCards": [card_id],
+            }})
+        client = FakeClient([FakeResponse(answer("old-card")),
+                             FakeResponse(answer("current-card"))])
+        choice = OpenAIResponsesPilot(client=client, model="gpt-test").choose(observation)
+        self.assertEqual(choice.response["selectedCards"], ["current-card"])
+        self.assertEqual(choice.metadata["retryCount"], 1)
+        selected_schema = client.responses.calls[0]["text"]["format"]["schema"] \
+            ["properties"]["response"]["properties"]["selectedCards"]
+        self.assertEqual(selected_schema["items"]["enum"], ["current-card"])
+        self.assertIn("offered in options", client.responses.calls[1]["input"])
+
+    def test_malformed_native_card_options_fail_before_provider_call(self):
+        observation = structured_observation()
+        observation["pendingDecision"].update({
+            "kind": "SelectCardsDecision", "options": "current-card",
+            "responseSpec": {
+                "responseType": "CardsSelectedResponse",
+                "requiredFields": {"selectedCards": "ENTITY_ID_ARRAY"},
+            },
+        })
+        client = FakeClient(FakeResponse("{}"))
+        with self.assertRaisesRegex(OpenAIResponsesPilotError, "card options are malformed"):
+            OpenAIResponsesPilot(client=client, model="gpt-test").choose(observation)
+        self.assertEqual(client.responses.calls, [])
 
     def test_retries_response_that_violates_native_decision_spec(self):
         observation = structured_observation()
