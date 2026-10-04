@@ -176,7 +176,8 @@ class RoutingPilotTests(unittest.TestCase):
             ("hasHarmonize", True), ("hasTapForGeneric", True),
             ("tapForPower", True), ("xConstrainsTargetCount", True),
             ("tapForPowerRequired", 2), ("tapForGenericAmount", 1),
-            ("minDelveNeeded", 1), ("minX", 1),
+            ("minDelveNeeded", 1), ("minX", 1), ("minX", False),
+            ("minX", 0.0), ("minX", None),
             ("minimumManaCostString", "{1}"),
             ("manaCostPerExtraTarget", "{1}"),
             ("additionalCostInfo", {"kind": "discard"}),
@@ -228,6 +229,17 @@ class RoutingPilotTests(unittest.TestCase):
                 "zoneId": {"ownerId": "player-1", "zoneType": "Hand"},
                 "cardIds": ["hand-1", "hand-1"],
             }]},
+            {"priorityPlayerId": "player-1", "zones": [
+                *current["state"]["zones"], {"zoneId": {}, "cardIds": []},
+            ]},
+            {"priorityPlayerId": "player-1", "zones": [
+                *current["state"]["zones"],
+                {"zoneId": {"ownerId": 123, "zoneType": []}, "cardIds": []},
+            ]},
+            {"priorityPlayerId": "player-1", "zones": [
+                *current["state"]["zones"],
+                {"zoneId": {"ownerId": "", "zoneType": "Hand"}, "cardIds": []},
+            ]},
         ):
             with self.subTest(state=state):
                 self.assertIsNone(handler.choose({**current, "state": state}))
