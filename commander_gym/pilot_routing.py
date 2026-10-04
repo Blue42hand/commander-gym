@@ -311,6 +311,10 @@ class AllUnaffordablePassHandler:
                 if any(
                     not isinstance(zone, Mapping)
                     or not isinstance(zone.get("zoneId"), Mapping)
+                    or not isinstance(zone["zoneId"].get("ownerId"), str)
+                    or not zone["zoneId"]["ownerId"]
+                    or not isinstance(zone["zoneId"].get("zoneType"), str)
+                    or not zone["zoneId"]["zoneType"]
                     or not isinstance(zone.get("cardIds"), list)
                     or any(not isinstance(entry, str) or not entry
                            for entry in zone["cardIds"])
@@ -326,7 +330,8 @@ class AllUnaffordablePassHandler:
                     or offer.get("isManaAbility") is not False
                     or offer.get("hasXCost") is not False
                     or offer.get("maxAffordableX") is not None
-                    or offer.get("minX", 0) != 0
+                    or type(offer.get("minX")) is not int
+                    or offer["minX"] != 0
                     or offer.get("minimumManaCostString") is not None
                     or offer.get("manaCostPerExtraTarget") is not None
                     or offer.get("additionalCostInfo") is not None
