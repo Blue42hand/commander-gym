@@ -210,6 +210,8 @@ class _PendingCast:
     land_id: str
     cast_id: str
     reason: str
+    guarded_template: bool = False
+    cast_zone: str = "Hand"
 
 
 def _own_battlefield(checkpoint: Mapping[str, Any]) -> list[str] | None:
@@ -218,17 +220,44 @@ def _own_battlefield(checkpoint: Mapping[str, Any]) -> list[str] | None:
     return zones[0]["ids"] if len(zones) == 1 else None
 
 
-def _parameterless_native_cast(offered: Mapping[str, Any]) -> bool:
-    """Require an explicit native no-ActionParams certificate and default cast shape."""
+def _own_command_zone(checkpoint: Mapping[str, Any]) -> list[str] | None:
+    zones = [zone for zone in checkpoint["zones"]
+             if zone["owner"] == checkpoint["seat"] and zone["kind"] == "Command"]
+    return zones[0]["ids"] if len(zones) == 1 else ([] if not zones else None)
+
+
+def _parameterless_native_cast(
+    offered: Mapping[str, Any], *, guarded_template: bool = False,
+) -> bool:
+    """Accept only a default cast; opt-in supports Argentum's optional field template."""
     spec = offered.get("parameterSpec")
     action = offered.get("action")
     if (
         not isinstance(spec, Mapping) or set(spec) != {"allowedFields"}
-        or spec.get("allowedFields") != {}
         or not isinstance(action, Mapping) or action.get("type") != "CastSpell"
         or offered.get("hasXCost") is not False
         or offered.get("additionalCostInfo") is not None
         or offered.get("isDecisionOption") is True
+    ):
+        return False
+    fields = spec.get("allowedFields")
+    if fields != {}:
+        if (
+            not guarded_template
+            or fields != {"targets": "ENTITY_ID_ARRAY", "xValue": "INTEGER"}
+            or offered.get("requiresTargets") is not False
+            or offered.get("validTargets") not in (None, [])
+            or offered.get("targetRequirements") is not None
+            or offered.get("requiresDamageDistribution") is not False
+            or offered.get("requiresManaColorChoice") is not False
+            or offered.get("modalEnumeration") is not None
+            or offered.get("maxAffordableX") is not None
+        ):
+            return False
+    if guarded_template and any(
+        offered.get(field) is not False for field in (
+            "hasDelve", "hasConvoke", "hasHarmonize", "hasTapForGeneric",
+        )
     ):
         return False
     defaults = {
@@ -263,21 +292,43 @@ def _ready_followup_cast(
         now["seat"] != before["seat"] or now["turn"] != before["turn"]
         or now["phase"] != before["phase"] or now["active"] != now["seat"]
         or now["stack"] != before["stack"] or now["mana"] != before["mana"]
-        or now["life"] != before["life"] or pending.cast_id not in now["hand"]
+        or now["life"] != before["life"]
+        or (pending.guarded_template and now["step"] != before["step"])
     ):
+        return None
+    if pending.cast_zone == "Command" and pending.guarded_template:
+        command = _own_command_zone(now)
+        if command is None or pending.cast_id not in command:
+            return None
+    elif pending.cast_id not in now["hand"]:
         return None
     old_hand = list(before["hand"])
     if pending.land_id not in old_hand:
         return None
     old_hand.remove(pending.land_id)
     old_board, new_board = _own_battlefield(before), _own_battlefield(now)
+    if pending.guarded_template:
+        # Native views omit empty zones. The land must be the sole battlefield
+        # addition; ordering of pre-existing permanents is not meaningful.
+        old_board = old_board if old_board is not None else (
+            [] if not any(z["kind"] == "Battlefield" and z["owner"] == before["seat"]
+                          for z in before["zones"]) else None
+        )
+        new_board = new_board if new_board is not None else (
+            [] if not any(z["kind"] == "Battlefield" and z["owner"] == now["seat"]
+                          for z in now["zones"]) else None
+        )
     if old_board is None or new_board is None or pending.land_id in old_board:
         return None
     added = list(new_board)
     if pending.land_id not in added:
         return None
     added.remove(pending.land_id)
-    if now["hand"] != old_hand or added != old_board:
+    board_matches = (
+        len(added) == len(old_board) and len(set(added)) == len(added)
+        and len(set(old_board)) == len(old_board) and set(added) == set(old_board)
+    ) if pending.guarded_template else added == old_board
+    if now["hand"] != old_hand or not board_matches:
         return None
     if [z for z in now["zones"] if z["kind"] != "Battlefield" or z["owner"] != now["seat"]] != [
         z for z in before["zones"] if z["kind"] != "Battlefield" or z["owner"] != before["seat"]
@@ -293,6 +344,23 @@ def _ready_followup_cast(
     legal = observation.get("legalActions")
     if not isinstance(legal, list):
         return None
+    if pending.guarded_template and any(
+        isinstance(offered, Mapping)
+        and isinstance(offered.get("action"), Mapping)
+        and offered["action"].get("cardId") == pending.cast_id
+        and offered.get("kind") != "CastSpell"
+        for offered in legal
+    ):
+        # A second cost, face, or timing variant needs a new strategic choice.
+        return None
+    if pending.guarded_template and sum(
+        isinstance(offered, Mapping)
+        and offered.get("kind") == "CastSpell"
+        and isinstance(offered.get("action"), Mapping)
+        and offered["action"].get("cardId") == pending.cast_id
+        for offered in legal
+    ) != 1:
+        return None
     casts = [action for action in legal if isinstance(action, Mapping)
              and action.get("kind") == "CastSpell"
              and isinstance(action.get("action"), Mapping)
@@ -300,7 +368,10 @@ def _ready_followup_cast(
              and action["action"].get("playerId") == now["seat"]
              and action.get("affordable") is True
              and action.get("isAffordable") is True
-             and _parameterless_native_cast(action)
+             and (not pending.guarded_template or (
+                 action.get("sourceZone") == ("COMMAND" if pending.cast_zone == "Command" else None)
+             ))
+             and _parameterless_native_cast(action, guarded_template=pending.guarded_template)
              and type(action.get("actionId")) is int]
     return casts[0] if len(casts) == 1 else None
 
@@ -314,6 +385,7 @@ class DelegatedAutopassPilot:
     version: str = "1"
     max_passes: int = 16
     allow_named_deferrals: bool = False
+    guarded_then_cast_templates: bool = False
     _leases: dict[str, _Lease] = field(default_factory=dict, init=False, repr=False)
     _pending_casts: dict[str, _PendingCast] = field(default_factory=dict, init=False, repr=False)
     _lock: Lock = field(default_factory=Lock, init=False, repr=False)
@@ -371,7 +443,10 @@ class DelegatedAutopassPilot:
                 and isinstance(then_cast.get("reason"), str) and then_cast["reason"].strip()
                 and isinstance(action, Mapping) and action.get("kind") == "PlayLand"
                 and isinstance(land_id, str) and land_id in current["hand"]
-                and then_cast["cardId"] in current["hand"] and then_cast["cardId"] != land_id
+                and (then_cast["cardId"] in current["hand"] or (
+                    self.guarded_then_cast_templates
+                    and then_cast["cardId"] in (_own_command_zone(current) or [])
+                )) and then_cast["cardId"] != land_id
                 and current["active"] == seat and not current["stack"]
                 and choice.params == {}
             )
@@ -384,6 +459,8 @@ class DelegatedAutopassPilot:
                 self._pending_casts[seat] = _PendingCast(
                     before=current, land_id=land_id, cast_id=then_cast["cardId"],
                     reason=then_cast["reason"],
+                    guarded_template=self.guarded_then_cast_templates,
+                    cast_zone=("Command" if then_cast["cardId"] not in current["hand"] else "Hand"),
                 )
             return choice
         # A wake discards the old lease. A new lease needs a fresh checkpoint

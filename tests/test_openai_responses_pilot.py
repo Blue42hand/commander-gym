@@ -201,6 +201,16 @@ class OpenAIResponsesPilotTests(unittest.TestCase):
         self.assertEqual(pilot.choose(obs).metadata["thenCast"]["cardId"], "hand-2")
         self.assertIn("thenCast", client.responses.calls[0]["text"]["format"]["schema"]["properties"])
 
+        guarded_client = FakeClient(FakeResponse(output))
+        guarded = OpenAIResponsesPilot(
+            client=guarded_client, model="gpt-test", allow_priority_delegation=True,
+            allow_named_deferrals=True, guarded_then_cast_templates=True,
+        )
+        self.assertEqual(guarded.choose(obs).metadata["thenCast"]["cardId"], "hand-2")
+        instructions = guarded_client.responses.calls[0]["instructions"]
+        self.assertIn("hand or command zone", instructions)
+        self.assertIn("Never guess a payment or target", instructions)
+
     def test_native_action_schema_exposes_delegation_only_for_opt_in(self):
         obs = action_observation()
         for action in obs["legalActions"]:

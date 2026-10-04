@@ -14,6 +14,7 @@ from commander_gym.game_server_binding_openai_sidecar import (
     BUILTIN_FORGE_CONDITIONAL_WAIT_COMPONENT_REF,
     BUILTIN_FORGE_CONDITIONAL_WAIT_V3_COMPONENT_REF,
     BUILTIN_FORGE_CONDITIONAL_WAIT_COMPACT_COMPONENT_REF,
+    BUILTIN_FORGE_GUARDED_THEN_CAST_COMPONENT_REF,
     BUILTIN_FORCED_PARAMETERLESS_COMPONENT_REF,
     BUILTIN_NATIVE_NO_CHOICE_COMPONENT_REF,
     BUILTIN_NATIVE_UNAFFORDABLE_PASS_COMPONENT_REF,
@@ -239,6 +240,19 @@ class BindingOpenAIGameServerSidecarTests(unittest.TestCase):
         ))
         self.assertTrue(compact.player.strategic_pilot.compact_model_observation)
         self.assertFalse(v3.player.strategic_pilot.compact_model_observation)
+
+        guarded = resolver.resolve(PilotSubsystemSpec(
+            role="frontier_escalation", ordinal=0,
+            ref=BUILTIN_FORGE_GUARDED_THEN_CAST_COMPONENT_REF,
+        ))
+        self.assertNotEqual(
+            BUILTIN_FORGE_GUARDED_THEN_CAST_COMPONENT_REF,
+            BUILTIN_FORGE_CONDITIONAL_WAIT_COMPACT_COMPONENT_REF,
+        )
+        self.assertTrue(guarded.player.guarded_then_cast_templates)
+        self.assertTrue(guarded.player.strategic_pilot.guarded_then_cast_templates)
+        self.assertTrue(guarded.player.strategic_pilot.compact_model_observation)
+        self.assertFalse(compact.player.guarded_then_cast_templates)
 
     def test_versioned_native_no_choice_component_avoids_model_for_empty_combat(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -721,6 +721,7 @@ class OpenAIResponsesPilot:
     allow_named_deferrals: bool = False
     require_nonempty_named_deferrals: bool = False
     compact_model_observation: bool = False
+    guarded_then_cast_templates: bool = False
     name: str = "openai-responses"
     version: str = "1"
 
@@ -809,12 +810,25 @@ class OpenAIResponsesPilot:
                     "while later menus have pass and mana abilities. Never delegate "
                     "with floating mana or an unreviewed event you need to answer."
                     " You may attach thenCast only to a selected PlayLand action: "
-                    "name one exact cardId already in your hand and a reason to "
+                    "name one exact cardId already in your "
+                    + ("hand or command zone" if self.guarded_then_cast_templates else "hand")
+                    + " and a reason to "
                     "cast it immediately after the land. Gym will execute that "
                     "specific cast only if the land transition is isolated and "
                     "Argentum then offers one affordable CastSpell for that card. "
                     "A changed state or unavailable cast wakes you instead."
                 )
+                if self.guarded_then_cast_templates:
+                    request["instructions"] += (
+                        " When choosing PlayLand, attach thenCast if you already "
+                        "intend to cast one exact card from your hand or your "
+                        "commander from the command zone immediately afterward. "
+                        "This is only a conditional plan: Gym checks the fresh native "
+                        "offer and visible state before acting. Omit it if the cast "
+                        "needs targets, X, modes, alternative payment, or an "
+                        "additional cost; you will choose those after the land. "
+                        "Never guess a payment or target in thenCast."
+                    )
                 if self.require_nonempty_named_deferrals:
                     request["instructions"] += (
                         "\n\nFor turn_end only: deferAbilities must contain at least one "

@@ -63,6 +63,128 @@ class ScriptedPilot:
 
 
 class DelegatedAutopassTests(unittest.TestCase):
+    def test_guarded_then_cast_optional_native_template_and_abort_conditions(self):
+        class LandPilot:
+            name, version = "planned-land", "1"
+
+            def __init__(self):
+                self.calls = 0
+
+            def choose(self, observation):
+                self.calls += 1
+                return ArgentumActionChoice(0, metadata={"thenCast": {
+                    "cardId": "h2", "reason": "Cast the selected spell after land",
+                }}) if self.calls == 1 else ArgentumActionChoice(0)
+
+        start = observation(legal=[
+            {"actionId": 0, "kind": "PlayLand", "action": {"cardId": "h1"}},
+        ])
+        start["state"]["zones"][0]["cardIds"] = ["h1", "h2"]
+        later = copy.deepcopy(start)
+        later["state"]["zones"][0]["cardIds"] = ["h2"]
+        later["state"]["zones"][1]["cardIds"] = ["b1", "h1"]
+        later["state"]["cards"]["h1"] = {"name": "Played Land", "tapped": False}
+        later["state"]["gameLog"] = [{"type": "permanentEntered"}]
+        cast = {
+            "actionId": 7, "kind": "CastSpell", "sourceZone": None,
+            "affordable": True, "isAffordable": True,
+            "hasXCost": False, "additionalCostInfo": None,
+            "requiresTargets": False, "requiresDamageDistribution": False,
+            "requiresManaColorChoice": False, "hasDelve": False,
+            "hasConvoke": False, "hasHarmonize": False, "hasTapForGeneric": False,
+            "parameterSpec": {"allowedFields": {
+                "targets": "ENTITY_ID_ARRAY", "xValue": "INTEGER",
+            }},
+            "action": {
+                "type": "CastSpell", "playerId": "p1", "cardId": "h2",
+                "additionalCostPayment": None, "alternativeCostType": None,
+                "alternativePayment": None, "casualtyCreature": None,
+                "chosenModes": [], "targets": [], "modeTargetsOrdered": [],
+                "splicedCardIds": [], "conspiredCreatures": [],
+                "damageDistribution": None, "declaredCostSlot": None,
+                "faceIndex": None, "giftRecipient": None,
+                "graveyardCastRider": None, "graveyardLifeCost": 0,
+                "modeDamageDistribution": {}, "wasWaterbendPaid": False,
+                "xValue": None, "paymentStrategy": {"type": "AutoPay"},
+                "useAlternativeCost": False, "useWithoutPayingManaCost": False,
+                "castFaceDown": False,
+            },
+        }
+        later["legalActions"] = [cast]
+
+        def run(first, second, *, enabled=True):
+            strategic = LandPilot()
+            pilot = DelegatedAutopassPilot(
+                strategic, allow_named_deferrals=True,
+                guarded_then_cast_templates=enabled,
+            )
+            pilot.choose(first)
+            choice = pilot.choose(second)
+            return choice, strategic.calls
+
+        result, calls = run(start, later)
+        self.assertEqual((result.action_id, result.params, calls), (7, {}, 1))
+        self.assertEqual(run(start, later, enabled=False)[1], 2)
+
+        # A missing empty Battlefield zone and reordered existing permanents
+        # are representation differences, not new game decisions.
+        empty_before, empty_after = copy.deepcopy(start), copy.deepcopy(later)
+        empty_before["state"]["zones"].pop(1)
+        empty_after["state"]["zones"][1]["cardIds"] = ["h1"]
+        empty_before["state"]["cards"].pop("b1")
+        empty_after["state"]["cards"].pop("b1")
+        self.assertEqual(run(empty_before, empty_after)[1], 1)
+
+        commander_before, commander_after = copy.deepcopy(start), copy.deepcopy(later)
+        commander_before["state"]["zones"][0]["cardIds"] = ["h1"]
+        commander_after["state"]["zones"][0]["cardIds"] = []
+        for item in (commander_before, commander_after):
+            item["state"]["zones"].insert(1, {
+                "zoneId": {"ownerId": "p1", "zoneType": "Command"}, "cardIds": ["h2"],
+            })
+        commander_after["legalActions"][0]["sourceZone"] = "COMMAND"
+        self.assertEqual(run(commander_before, commander_after)[1], 1)
+
+        for change in ("targets", "x", "mode", "delve", "extra_cost", "other_variant",
+                       "second_cast",
+                       "opponent", "stack", "hand", "life", "mana", "decision", "log"):
+            with self.subTest(change=change):
+                interrupted = copy.deepcopy(later)
+                offer = interrupted["legalActions"][0]
+                if change == "targets":
+                    offer["requiresTargets"] = True
+                elif change == "x":
+                    offer["hasXCost"] = True
+                elif change == "mode":
+                    offer["action"]["chosenModes"] = ["first"]
+                elif change == "delve":
+                    offer["hasDelve"] = True
+                elif change == "extra_cost":
+                    offer["additionalCostInfo"] = {"kind": "discard"}
+                elif change == "other_variant":
+                    interrupted["legalActions"].append({
+                        "actionId": 8, "kind": "CastAlternative", "action": {"cardId": "h2"},
+                    })
+                elif change == "second_cast":
+                    interrupted["legalActions"].append({
+                        **copy.deepcopy(offer), "actionId": 8, "affordable": False,
+                    })
+                elif change == "opponent":
+                    interrupted["state"]["zones"][2]["cardIds"] = ["new"]
+                elif change == "stack":
+                    interrupted["state"]["zones"][-1]["cardIds"] = ["spell"]
+                elif change == "hand":
+                    interrupted["state"]["zones"][0]["cardIds"].append("new")
+                elif change == "life":
+                    interrupted["state"]["players"][0]["life"] = 39
+                elif change == "mana":
+                    interrupted["state"]["players"][0]["manaPool"]["red"] = 1
+                elif change == "decision":
+                    interrupted["pendingDecision"] = {"decisionId": "d1"}
+                else:
+                    interrupted["state"]["gameLog"].append({"type": "other"})
+                self.assertEqual(run(start, interrupted)[1], 2)
+
     def test_versioned_short_wait_uses_same_opponent_watch_on_both_callbacks(self):
         for boundary in ("phase_end", "next_own_main"):
             with self.subTest(boundary=boundary):
