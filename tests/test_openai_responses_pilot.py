@@ -229,6 +229,7 @@ class OpenAIResponsesPilotTests(unittest.TestCase):
         self.assertEqual(pilot.choose(obs).metadata["continuation"]["steps"], [step])
         self.assertIn("continuation", client.responses.calls[0]["text"]["format"]
                       ["schema"]["properties"])
+        self.assertIn("Choose at most one of continuation", client.responses.calls[0]["instructions"])
         with self.assertRaises(OpenAIResponsesPilotError):
             OpenAIResponsesPilot(client=FakeClient(FakeResponse(json.dumps(output))),
                                  model="gpt-test").choose(obs)

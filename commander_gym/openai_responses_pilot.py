@@ -891,7 +891,8 @@ class OpenAIResponsesPilot:
         if self.allow_declarative_continuation:
             request["instructions"] += (
                 "\n\nYou may attach one declarative continuation to a chosen PlayLand "
-                "or PassPriority. For PlayLand, choose one exact cast cardId. "
+                "or PassPriority. Choose at most one of continuation, thenCast, "
+                "and priorityDelegation. For PlayLand, choose one exact cast cardId. "
                 "For PassPriority, choose a bounded wait, optionally followed "
                 "by one exact land cardId and one exact cast cardId. An optional "
                 "final bounded wait after the cast applies only if you regain "
