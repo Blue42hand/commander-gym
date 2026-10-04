@@ -159,9 +159,20 @@ class GameServerAcceptanceTest {
             }
 
             val fullStatesBefore = client.fullStateCount()
-            client.send(ClientMessage.RequestResync)
-            await(Duration.ofSeconds(10), "human resync after AI action") {
-                client.fullStateCount() > fullStatesBefore
+            var nextResyncAt = 0L
+            await(Duration.ofSeconds(10), "human state showing the AI land") {
+                val observed = client.fullStateCount() > fullStatesBefore &&
+                    client.latestFullState()?.zones?.any {
+                        it.zoneId.zoneType == Zone.BATTLEFIELD && it.size > 0
+                    } == true
+                // The sidecar records its choice before the server applies it. A resync requested
+                // immediately can therefore return the pre-action board; retry until it is visible.
+                val now = System.nanoTime()
+                if (!observed && now >= nextResyncAt) {
+                    client.send(ClientMessage.RequestResync)
+                    nextResyncAt = now + Duration.ofMillis(250).toNanos()
+                }
+                observed
             }
             val state = client.latestFullState()
             assertNotNull(state, "human client never received a full game state")
