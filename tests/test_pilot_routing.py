@@ -132,6 +132,17 @@ class RoutingPilotTests(unittest.TestCase):
             "hasXCost": False, "maxAffordableX": None, "manaCostString": "{2}",
             "hasConvoke": False, "hasDelve": False, "hasHarmonize": False,
             "hasTapForGeneric": False, "additionalCostInfo": None,
+            "tapForPower": False, "xConstrainsTargetCount": False,
+            "xConstrainsTargetManaValue": False,
+            "xConstrainsTargetManaValueExactly": False,
+            "xConstrainsTargetPower": False,
+            "tapForPowerCreatures": None, "tapForPowerRequired": None,
+            "tapForGenericAmount": None, "tapForGenericLabel": None,
+            "minDelveNeeded": None, "validConvokeCreatures": None,
+            "validDelveCards": None, "validHarmonizeCreatures": None,
+            "validTapForGenericPermanents": None,
+            "minX": 0, "minimumManaCostString": None,
+            "manaCostPerExtraTarget": None,
             "sourceZone": None, "requiresTargets": False, "validTargets": None,
             "requiresManaColorChoice": False,
             "requiresDamageDistribution": False, "modalEnumeration": None,
@@ -163,6 +174,11 @@ class RoutingPilotTests(unittest.TestCase):
             ("hasXCost", True), ("maxAffordableX", 0),
             ("hasDelve", True), ("hasConvoke", True),
             ("hasHarmonize", True), ("hasTapForGeneric", True),
+            ("tapForPower", True), ("xConstrainsTargetCount", True),
+            ("tapForPowerRequired", 2), ("tapForGenericAmount", 1),
+            ("minDelveNeeded", 1), ("minX", 1),
+            ("minimumManaCostString", "{1}"),
+            ("manaCostPerExtraTarget", "{1}"),
             ("additionalCostInfo", {"kind": "discard"}),
             ("sourceZone", "EXILE"), ("requiresTargets", True),
             ("validTargets", ["target"]),
@@ -171,6 +187,8 @@ class RoutingPilotTests(unittest.TestCase):
             ("modalEnumeration", {}),
             ("parameterSpec", {"allowedFields": {"xValue": "INTEGER"}}),
             ("parameterSpec", None), ("manaCostString", ""),
+            ("manaCostString", "garbage"), ("manaCostString", " {2}"),
+            ("manaCostString", "{X}"), ("manaCostString", "{2} "),
             ("kind", "TypecycleCard"), ("actionType", "TypecycleCard"),
             ("semanticId", ""),
         ):
@@ -199,6 +217,17 @@ class RoutingPilotTests(unittest.TestCase):
             {"priorityPlayerId": "player-1", "zones": [
                 *current["state"]["zones"], *current["state"]["zones"],
             ]},
+            {"priorityPlayerId": "player-1", "zones": [
+                *current["state"]["zones"], None,
+            ]},
+            {"priorityPlayerId": "player-1", "zones": [{
+                "zoneId": {"ownerId": "player-1", "zoneType": "Hand"},
+                "cardIds": ["hand-1", None],
+            }]},
+            {"priorityPlayerId": "player-1", "zones": [{
+                "zoneId": {"ownerId": "player-1", "zoneType": "Hand"},
+                "cardIds": ["hand-1", "hand-1"],
+            }]},
         ):
             with self.subTest(state=state):
                 self.assertIsNone(handler.choose({**current, "state": state}))

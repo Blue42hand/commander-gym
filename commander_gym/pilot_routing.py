@@ -13,6 +13,7 @@ the normal pilot validator still checks the returned choice before execution.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Any, Mapping, Protocol, Sequence
 
 from .pilot import (
@@ -307,6 +308,15 @@ class AllUnaffordablePassHandler:
                 zones = state.get("zones")
                 if not isinstance(zones, list):
                     return None
+                if any(
+                    not isinstance(zone, Mapping)
+                    or not isinstance(zone.get("zoneId"), Mapping)
+                    or not isinstance(zone.get("cardIds"), list)
+                    or any(not isinstance(entry, str) or not entry
+                           for entry in zone["cardIds"])
+                    for zone in zones
+                ):
+                    return None
                 hand = [zone for zone in zones
                         if isinstance(zone, Mapping)
                         and zone.get("zoneId") == {"ownerId": seat, "zoneType": "Hand"}]
@@ -316,6 +326,9 @@ class AllUnaffordablePassHandler:
                     or offer.get("isManaAbility") is not False
                     or offer.get("hasXCost") is not False
                     or offer.get("maxAffordableX") is not None
+                    or offer.get("minX", 0) != 0
+                    or offer.get("minimumManaCostString") is not None
+                    or offer.get("manaCostPerExtraTarget") is not None
                     or offer.get("additionalCostInfo") is not None
                     or offer.get("sourceZone") is not None
                     or offer.get("requiresTargets") is not False
@@ -325,10 +338,19 @@ class AllUnaffordablePassHandler:
                     or offer.get("modalEnumeration") is not None
                     or any(offer.get(field) is not False for field in (
                         "hasConvoke", "hasDelve", "hasHarmonize", "hasTapForGeneric",
+                        "tapForPower", "xConstrainsTargetCount", "xConstrainsTargetManaValue",
+                        "xConstrainsTargetManaValueExactly", "xConstrainsTargetPower",
+                    ))
+                    or any(offer.get(field) is not None for field in (
+                        "tapForPowerCreatures", "tapForPowerRequired", "tapForGenericAmount",
+                        "tapForGenericLabel", "minDelveNeeded", "validConvokeCreatures",
+                        "validDelveCards", "validHarmonizeCreatures",
+                        "validTapForGenericPermanents",
                     ))
                     or offer.get("parameterSpec") != {"allowedFields": {}}
                     or not isinstance(offer.get("manaCostString"), str)
-                    or not offer["manaCostString"]
+                    or re.fullmatch(r"(?:\{(?:[1-9][0-9]*|[WUBRGC])\})+",
+                                    offer["manaCostString"]) is None
                     or set(action) != {"type", "playerId", "cardId", "paymentStrategy", "xValue"}
                     or not isinstance(card_id, str) or not card_id
                     or action.get("paymentStrategy") != {"type": "AutoPay"}
@@ -336,6 +358,7 @@ class AllUnaffordablePassHandler:
                     or len(hand) != 1
                     or not isinstance(hand[0].get("cardIds"), list)
                     or hand[0]["cardIds"].count(card_id) != 1
+                    or len(hand[0]["cardIds"]) != len(set(hand[0]["cardIds"]))
                 ):
                     return None
         previous = StandingManaOnlyPassHandler(
