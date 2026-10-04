@@ -2,7 +2,8 @@
 
 Uses canonical Binding decks and Knowledge for the roster, but deliberately replaces their
 Pilot with a small scripted legal-action selector. No OpenAI client or credential is loaded.
-The script stops on a structured decision after capturing its exact HTTP body.
+By default the script stops on a structured decision after capturing its exact HTTP body.
+The pass-only mode drives a bounded native deck-out to check terminal status and replay capture.
 """
 from __future__ import annotations
 
@@ -25,6 +26,7 @@ from commander_gym.binding_catalog import load_binding_catalog
 from commander_gym.game_server_bindings import GameServerBindingRegistry
 from commander_gym.game_server_sidecar import GameServerSidecarConfig, GameServerSidecarServer
 from commander_gym.pilot import ArgentumActionChoice, ArgentumDecisionChoice, PilotContractError
+from commander_gym.two_luna_debug import _natural_terminal_game, _terminal_artifact_result
 from game_server_acceptance_sidecar import _CaptureHandler
 
 
@@ -66,8 +68,9 @@ class ScriptedPrivacyPilot:
     name = "offline-scripted-privacy-fixture"
     version = "1"
 
-    def __init__(self, *, continue_decisions: bool = False) -> None:
+    def __init__(self, *, continue_decisions: bool = False, pass_only: bool = False) -> None:
         self.continue_decisions = continue_decisions
+        self.pass_only = pass_only
 
     def choose(self, observation: Mapping[str, Any]):
         state = observation.get("state")
@@ -77,7 +80,7 @@ class ScriptedPrivacyPilot:
         if isinstance(pending, Mapping) and pending.get("kind") == "BottomCards":
             raise PilotContractError("scripted privacy fixture stops at bottom-card decision")
         if isinstance(pending, Mapping) and pending.get("requiresStructuredResponse") is True:
-            if not self.continue_decisions:
+            if not (self.continue_decisions or self.pass_only):
                 raise PilotContractError("scripted privacy fixture stops at structured decision")
             spec = pending.get("responseSpec")
             response_type = spec.get("responseType") if isinstance(spec, Mapping) else None
@@ -120,6 +123,11 @@ class ScriptedPrivacyPilot:
                 if action.get("mandatoryBlockerAssignments"):
                     raise PilotContractError("mandatory blocker choices need a dedicated fixture")
                 return choose(action)
+        if self.pass_only:
+            for action in legal:
+                if action.get("actionType") == "PassPriority":
+                    return choose(action)
+            raise PilotContractError("pass-only fixture found no native priority pass")
         for wanted in ("PlayLand", "CastSpell", "CastSpellMode"):
             for action in legal:
                 if action.get("actionType") != wanted or action.get("affordable") is False:
@@ -149,6 +157,8 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=180)
     parser.add_argument("--max-callbacks", type=int, default=180)
     parser.add_argument("--continue-decisions", action="store_true")
+    parser.add_argument("--pass-only", action="store_true",
+                        help="offline native deck-out fixture; checks terminal HTTP artifacts, not pilot quality")
     args = parser.parse_args()
     if args.profile_a == args.profile_b or args.timeout <= 0 or args.max_callbacks <= 0:
         parser.error("distinct profiles and positive bounds are required")
@@ -156,7 +166,8 @@ def main() -> int:
     root = args.instance_root.resolve(strict=True)
     loaded = load_binding_catalog(args.catalog, instance_root=root,
                                   pilot_factory=lambda _pilot, _binding: ScriptedPrivacyPilot(
-                                      continue_decisions=args.continue_decisions))
+                                      continue_decisions=args.continue_decisions,
+                                      pass_only=args.pass_only))
     registry = GameServerBindingRegistry(loaded.resolver, loaded.binding_ids)
     selected = []
     profiles = {p.binding_id: p for p in registry.profiles}
@@ -175,6 +186,7 @@ def main() -> int:
     token = secrets.token_hex(32)
     os.environ["COMMANDER_GYM_HTTP_CAPTURE_DIR"] = str(capture)
     lock = threading.Lock()
+    terminal_artifact = None
 
     def sink(player_id: str, record):
         with lock:
@@ -242,15 +254,20 @@ def main() -> int:
             if len(files) >= args.max_callbacks:
                 stop_reason = "max_callbacks"
                 break
-            bodies = [json.loads(p.read_text()) for p in files]
-            if not args.continue_decisions and any(
-                "state" in body and isinstance(body.get("pendingDecision"), dict)
-                for body in bodies
-            ):
-                stop_reason = "first_structured_decision"
-                break
+            if not args.pass_only and not args.continue_decisions:
+                bodies = [json.loads(p.read_text()) for p in files]
+                if any(
+                    "state" in body and isinstance(body.get("pendingDecision"), dict)
+                    for body in bodies
+                ):
+                    stop_reason = "first_structured_decision"
+                    break
             if last_status.get("complete") is True:
                 stop_reason = "native_complete"
+                if args.pass_only:
+                    terminal_artifact = _terminal_artifact_result(
+                        base, last_status.get("completedGames"), output,
+                    )
                 break
             if time.monotonic() - last_change > 12:
                 stop_reason = "no_callback_progress"
@@ -271,9 +288,16 @@ def main() -> int:
                "profiles": [args.profile_a, args.profile_b], "stopReason": stop_reason,
                "httpCallbacks": len(list(capture.glob("*.json"))), "status": last_status,
                "providerCalls": 0}
+    if args.pass_only:
+        summary["terminalEvidence"] = _natural_terminal_game(last_status.get("completedGames"))
+        summary["terminalArtifact"] = terminal_artifact
     (output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     print(json.dumps({k: summary[k] for k in ("engineCommit", "gymCommit", "stopReason", "httpCallbacks", "providerCalls")}))
-    return 0
+    return 0 if not args.pass_only or (
+        summary["terminalEvidence"] is not None
+        and isinstance(terminal_artifact, dict)
+        and "error" not in terminal_artifact
+    ) else 1
 
 
 if __name__ == "__main__":

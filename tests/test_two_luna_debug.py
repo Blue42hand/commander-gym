@@ -130,8 +130,8 @@ class TwoLunaDebugReportTests(unittest.TestCase):
         ]}
         status = {"complete": True, "state": "TOURNAMENT_COMPLETE", "round": 1,
                   "liveGames": [], "completedGames": [{
-                      "gameSessionId": "game-1", "winnerId": "ai-a", "isDraw": False,
-                      "isSimulated": False, "nativeGameOver": True, "finalTurnNumber": 13,
+                      "gameSessionId": "game-1", "winnerId": "ai-a", "draw": False,
+                      "simulated": False, "nativeGameOver": True, "finalTurnNumber": 13,
                   }]}
         budget_snapshot = {"capUsd": 8, "estimatedUsd": 1, "requests": 5,
                            "inputTokens": 20, "outputTokens": 3, "unsettledRequests": 0}
@@ -199,8 +199,8 @@ class TwoLunaDebugReportTests(unittest.TestCase):
         played = {
             "gameSessionId": "game-1",
             "winnerId": "ai-a",
-            "isDraw": False,
-            "isSimulated": False,
+            "draw": False,
+            "simulated": False,
             "nativeGameOver": True,
             "finalTurnNumber": 8,
         }
@@ -210,12 +210,16 @@ class TwoLunaDebugReportTests(unittest.TestCase):
         for change in (
             {"gameSessionId": None},
             {"nativeGameOver": False},
-            {"isSimulated": True},
+            {"simulated": True},
             {"winnerId": None},
+            {"finalTurnNumber": None},
+            {"draw": None},
+            {"simulated": None},
         ):
             with self.subTest(change=change):
                 self.assertIsNone(_natural_terminal_game([{**played, **change}]))
-        self.assertIsNotNone(_natural_terminal_game([{**played, "winnerId": None, "isDraw": True}]))
+        self.assertIsNotNone(_natural_terminal_game([{**played, "winnerId": None, "draw": True}]))
+        self.assertIsNone(_natural_terminal_game([{**played, "simulated": None, "isSimulated": False}]))
 
     def test_reports_mechanical_wakes_provider_usage_and_clean_qualification(self):
         records = [
@@ -279,7 +283,9 @@ class TwoLunaDebugReportTests(unittest.TestCase):
             "callback": "chooseAction", "playerId": "ai-a",
             "observation": records[0]["observation"],
             "choice": {"channel": "action", "metadata": {
-                "routing": {"path": "composed"},
+                "routing": {"path": "composed", "handledBy": {
+                    "role": "deterministic", "implementation": "delegated-pass",
+                }},
                 "delegatedPass": {"leaseId": "lease-1", "strategicWakeAvoided": True},
             }},
         })
@@ -303,13 +309,55 @@ class TwoLunaDebugReportTests(unittest.TestCase):
         self.assertEqual(summary["strategicWakesAvoided"], 2)
         self.assertEqual(summary["delegatedPasses"], 1)
         self.assertEqual(summary["strategicByKind"], {"chooseAction": 1})
-        self.assertEqual(summary["mechanicalByHandler"], {"certified-native-decision": 1})
+        self.assertEqual(summary["mechanicalByHandler"], {
+            "certified-native-decision": 1, "delegated-pass": 1,
+        })
+        self.assertEqual(summary["routingClassificationErrors"], 0)
         self.assertEqual(summary["inputTokens"], 20)
         self.assertEqual(summary["cachedInputTokens"], 8)
         self.assertEqual(summary["outputTokens"], 4)
         self.assertEqual(summary["wallTimeSeconds"], 12.5)
         self.assertEqual(summary["communicationErrors"], [])
         self.assertEqual(summary["avoidableStrategicWakes"], [])
+
+    def test_composed_frontier_forced_pass_is_an_avoidable_wake(self):
+        route = {"path": "composed", "handledBy": {
+            "role": "frontier_escalation", "implementation": "openai-frontier",
+        }}
+        records = [
+            {
+                "callback": "chooseAction", "playerId": "ai-a",
+                "observation": {"agentToAct": "ai-a", "knownDeck": {},
+                                "legalActions": [{"actionId": 1, "kind": "PassPriority"}]},
+                "choice": {"channel": "action", "actionId": 1,
+                           "metadata": {"routing": route, "provider": "openai"}},
+            },
+            {
+                "callback": "chooseAction", "playerId": "ai-b",
+                "observation": {"agentToAct": "ai-b", "knownDeck": {},
+                                "legalActions": [{"actionId": 2, "kind": "PassPriority"}]},
+                "choice": {"channel": "action", "actionId": 2,
+                           "metadata": {"routing": {"path": "composed", "handledBy": {
+                               "role": "deterministic", "implementation": "native-no-choice",
+                           }}}},
+            },
+        ]
+        summary = _summarize(records, completed=True, lobby_id="lobby", game_ids=["game"],
+                             max_turn=1, log_path=None, wall_time_seconds=1)
+        self.assertEqual(summary["routing"], {"strategic": 1, "mechanical": 1})
+        self.assertEqual(summary["strategicByKind"], {"PassPriority": 1})
+        self.assertEqual(summary["mechanicalByHandler"], {"native-no-choice": 1})
+        self.assertEqual(len(summary["avoidableStrategicWakes"]), 1)
+        self.assertFalse(summary["technicalQualified"])
+
+    def test_malformed_composed_route_cannot_qualify(self):
+        records = [{"callback": "chooseAction", "choice": {"metadata": {
+            "provider": "openai", "routing": {"path": "composed"},
+        }}}]
+        summary = _summarize(records, completed=True, lobby_id="lobby", game_ids=["game"],
+                             max_turn=1, log_path=None, wall_time_seconds=1)
+        self.assertEqual(summary["routingClassificationErrors"], 1)
+        self.assertFalse(summary["technicalQualified"])
 
 
 if __name__ == "__main__":

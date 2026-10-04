@@ -196,13 +196,38 @@ def _metadata(record: Mapping[str, Any]) -> Mapping[str, Any]:
     return metadata if isinstance(metadata, Mapping) else {}
 
 
+def _route_kind(routing: Any) -> tuple[str, str | None]:
+    """Classify the selected canonical Pilot subsystem, preserving legacy receipts."""
+
+    if not isinstance(routing, Mapping):
+        return "unknown", None
+    path = routing.get("path")
+    if path == "mechanical":
+        return "mechanical", str(routing.get("handler", "unknown"))
+    if path == "strategic":
+        return "strategic", None
+    if path == "composed":
+        handled = routing.get("handledBy")
+        if not isinstance(handled, Mapping):
+            return "unknown", None
+        role = handled.get("role")
+        implementation = handled.get("implementation")
+        if not isinstance(role, str) or not role or not isinstance(implementation, str) or not implementation:
+            return "unknown", None
+        if role == "deterministic":
+            return "mechanical", implementation
+        if role in {"skill", "specialist", "local_generalist", "frontier_escalation"}:
+            return "strategic", None
+    return "unknown", None
+
+
 def _avoidable_strategic_wakes(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     handlers = (ForcedParameterlessChoiceHandler(),)
     findings: list[dict[str, Any]] = []
     for record in records:
         metadata = _metadata(record)
         routing = metadata.get("routing")
-        if not isinstance(routing, Mapping) or routing.get("path") != "strategic":
+        if _route_kind(routing)[0] != "strategic":
             continue
         observation = record.get("observation")
         if not isinstance(observation, Mapping):
@@ -283,9 +308,16 @@ def _natural_terminal_game(finished: Any) -> dict[str, Any] | None:
         return None
     if not isinstance(game.get("gameSessionId"), str) or not game["gameSessionId"]:
         return None
-    if game.get("nativeGameOver") is not True or game.get("isSimulated") is not False:
+    # Spring/Jackson exposes Kotlin isDraw/isSimulated properties as draw/simulated.
+    # Check the actual HTTP wire names, not the Kotlin source property names.
+    if game.get("nativeGameOver") is not True or game.get("simulated") is not False:
         return None
-    if not (isinstance(game.get("winnerId"), str) or game.get("isDraw") is True):
+    if type(game.get("finalTurnNumber")) is not int or game["finalTurnNumber"] < 1:
+        return None
+    winner = game.get("winnerId")
+    draw = game.get("draw")
+    if not ((isinstance(winner, str) and bool(winner) and draw is False)
+            or (winner is None and draw is True)):
         return None
     return dict(game)
 
@@ -329,8 +361,10 @@ def _summarize(
     routes = Counter()
     strategic_by_kind = Counter()
     mechanical_by_handler = Counter()
+    routing_classification_errors = 0
     provider_calls = 0
     delegated_passes = 0
+    delegated_non_mechanical = 0
     retries = 0
     input_tokens = 0
     output_tokens = 0
@@ -340,43 +374,47 @@ def _summarize(
 
     for record in records:
         metadata = _metadata(record)
-        if isinstance(metadata.get("delegatedPass"), Mapping):
+        delegated = isinstance(metadata.get("delegatedPass"), Mapping)
+        if delegated:
             delegated_passes += 1
         routing = metadata.get("routing")
-        if isinstance(routing, Mapping):
-            route_path = str(routing.get("path", "unknown"))
-            routes[route_path] += 1
-            if route_path == "mechanical":
-                mechanical_by_handler[str(routing.get("handler", "unknown"))] += 1
-            elif route_path == "strategic":
-                callback = str(record.get("callback", "unknown"))
-                observation = record.get("observation")
-                kind = callback
-                if isinstance(observation, Mapping):
-                    pending = observation.get("pendingDecision")
-                    if isinstance(pending, Mapping):
-                        kind = str(pending.get("type") or pending.get("kind") or callback)
-                    elif callback == "chooseAction":
-                        choice = record.get("choice")
-                        legal = observation.get("legalActions")
-                        if isinstance(choice, Mapping) and isinstance(legal, list):
-                            action_id = choice.get("actionId")
-                            selected = next(
-                                (
-                                    action
-                                    for action in legal
-                                    if isinstance(action, Mapping)
-                                    and action.get("actionId") == action_id
-                                ),
-                                None,
+        route_path, handler = _route_kind(routing)
+        if delegated and route_path != "mechanical":
+            delegated_non_mechanical += 1
+        routes[route_path] += 1
+        if route_path == "unknown":
+            routing_classification_errors += 1
+        elif route_path == "mechanical":
+            mechanical_by_handler[handler or "unknown"] += 1
+        elif route_path == "strategic":
+            callback = str(record.get("callback", "unknown"))
+            observation = record.get("observation")
+            kind = callback
+            if isinstance(observation, Mapping):
+                pending = observation.get("pendingDecision")
+                if isinstance(pending, Mapping):
+                    kind = str(pending.get("type") or pending.get("kind") or callback)
+                elif callback == "chooseAction":
+                    choice = record.get("choice")
+                    legal = observation.get("legalActions")
+                    if isinstance(choice, Mapping) and isinstance(legal, list):
+                        action_id = choice.get("actionId")
+                        selected = next(
+                            (
+                                action
+                                for action in legal
+                                if isinstance(action, Mapping)
+                                and action.get("actionId") == action_id
+                            ),
+                            None,
+                        )
+                        if isinstance(selected, Mapping):
+                            kind = str(
+                                selected.get("kind")
+                                or selected.get("actionType")
+                                or "chooseAction"
                             )
-                            if isinstance(selected, Mapping):
-                                kind = str(
-                                    selected.get("kind")
-                                    or selected.get("actionType")
-                                    or "chooseAction"
-                                )
-                strategic_by_kind[kind] += 1
+            strategic_by_kind[kind] += 1
         if metadata.get("provider") == "openai":
             provider_calls += 1
             wall_time = metadata.get("providerWallTimeMs")
@@ -428,6 +466,7 @@ def _summarize(
         and provider_calls > 0
         and retries == 0
         and not communication_errors
+        and routing_classification_errors == 0
         and not avoidable
         and not skill_flags
     )
@@ -445,6 +484,7 @@ def _summarize(
         "provenanceComplete": provenance_complete,
         "callbacks": dict(callbacks),
         "routing": dict(routes),
+        "routingClassificationErrors": routing_classification_errors,
         "strategicByKind": dict(strategic_by_kind),
         "mechanicalByHandler": dict(mechanical_by_handler),
         "providerCalls": provider_calls,
@@ -456,7 +496,7 @@ def _summarize(
         "inputTokens": input_tokens,
         "cachedInputTokens": cached_input_tokens,
         "outputTokens": output_tokens,
-        "strategicWakesAvoided": routes.get("mechanical", 0) + delegated_passes,
+        "strategicWakesAvoided": routes.get("mechanical", 0) + delegated_non_mechanical,
         "avoidableStrategicWakes": avoidable,
         "communicationErrors": communication_errors[:20],
         "skillReviewFlags": skill_flags,

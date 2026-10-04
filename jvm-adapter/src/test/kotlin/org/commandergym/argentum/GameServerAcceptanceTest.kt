@@ -168,6 +168,7 @@ class GameServerAcceptanceTest {
             // Assert the exact sidecar callback shape, including opaque library slots.
             assertOpponentLibraryMasked(policyObservation, seatId)
             assertEquals("false", context.environment.getProperty("game.debug-mode"))
+            assertEquals("127.0.0.1", context.environment.getProperty("server.address"))
 
             val fullStatesBefore = client.fullStateCount()
             client.send(ClientMessage.RequestResync)

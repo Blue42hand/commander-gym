@@ -15,6 +15,8 @@ internal fun localGuiServerArgs(
     token: String,
     sidecarTimeoutMs: Long,
 ): Array<String> = arrayOf(
+    // The local dev tournament endpoint is unauthenticated; keep this launcher on loopback.
+    "--server.address=127.0.0.1",
     "--server.port=$serverPort",
     "--spring.profiles.active=local",
     // The local profile is useful for development but defaults to omniscient game views.
