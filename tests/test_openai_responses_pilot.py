@@ -797,7 +797,7 @@ class OpenAIResponsesPilotTests(unittest.TestCase):
         def answer(sources):
             return FakeResponse(json.dumps({
                 "channel": "decision", "response": {
-                    "type": "ManaSourcesSelectedResponse", "autoPay": True,
+                    "type": "ManaSourcesSelectedResponse", "autoPay": False,
                     "declined": False, "selectedSources": sources,
                     "waterbendPermanents": [],
                 },
@@ -847,6 +847,90 @@ class OpenAIResponsesPilotTests(unittest.TestCase):
         self.assertEqual(choice.action_id, 0)
         self.assertEqual(client.responses.calls[0]["text"]["format"], {"type": "json_object"})
         self.assertIn("offered native mana ability", client.responses.calls[0]["instructions"])
+
+    def test_native_autopay_false_retries_into_offered_mana_ability(self):
+        observation = structured_observation()
+        observation["pendingDecision"].update({
+            "kind": "SelectManaSourcesDecision", "canAutoPayNow": False,
+            "availableSources": [{"entityId": "mountain", "name": "Mountain"}],
+            "responseSpec": {"responseType": "ManaSourcesSelectedResponse", "requiredFields": {
+                "autoPay": "BOOLEAN", "declined": "BOOLEAN",
+                "selectedSources": "ENTITY_ID_ARRAY", "waterbendPermanents": "ENTITY_ID_ARRAY",
+            }},
+        })
+        observation["legalActions"] = [{
+            "actionId": 0, "kind": "ActivateAbility", "isManaAbility": True,
+            "semanticId": "treasure-mana", "parameterSpec": {"allowedFields": {}},
+        }]
+        invalid = FakeResponse(json.dumps({"channel": "decision", "response": {
+            "type": "ManaSourcesSelectedResponse", "autoPay": True,
+            "declined": False, "selectedSources": [], "waterbendPermanents": [],
+        }}))
+        mana_action = FakeResponse(json.dumps({
+            "channel": "action", "semanticId": "treasure-mana", "params": {},
+        }))
+        client = FakeClient([invalid, mana_action])
+        choice = choose_for_observation(OpenAIResponsesPilot(client=client, model="gpt-test"), observation)
+        self.assertEqual(choice.action_id, 0)
+        self.assertEqual(len(client.responses.calls), 2)
+        self.assertIn("canAutoPayNow is false", client.responses.calls[1]["input"])
+        self.assertIn("canAutoPayNow is false", client.responses.calls[0]["instructions"])
+
+    def test_native_autopay_true_requires_empty_selected_sources(self):
+        observation = structured_observation()
+        observation["pendingDecision"].update({
+            "kind": "SelectManaSourcesDecision", "canAutoPayNow": True,
+            "availableSources": [{"entityId": "mountain", "name": "Mountain"}],
+            "responseSpec": {"responseType": "ManaSourcesSelectedResponse", "requiredFields": {
+                "autoPay": "BOOLEAN", "declined": "BOOLEAN",
+                "selectedSources": "ENTITY_ID_ARRAY", "waterbendPermanents": "ENTITY_ID_ARRAY",
+            }},
+        })
+        def answer(sources):
+            return FakeResponse(json.dumps({"channel": "decision", "response": {
+                "type": "ManaSourcesSelectedResponse", "autoPay": True,
+                "declined": False, "selectedSources": sources, "waterbendPermanents": [],
+            }}))
+        client = FakeClient([answer(["mountain"]), answer([])])
+        choice = OpenAIResponsesPilot(client=client, model="gpt-test").choose(observation)
+        self.assertEqual(choice.response["selectedSources"], [])
+        self.assertTrue(choice.response["autoPay"])
+        self.assertIn("cannot be combined", client.responses.calls[1]["input"])
+
+    def test_native_autopay_false_constrains_decision_only_schema(self):
+        observation = structured_observation()
+        observation["pendingDecision"].update({
+            "kind": "SelectManaSourcesDecision", "canAutoPayNow": False,
+            "availableSources": [{"entityId": "mountain", "name": "Mountain"}],
+            "responseSpec": {"responseType": "ManaSourcesSelectedResponse", "requiredFields": {
+                "autoPay": "BOOLEAN", "declined": "BOOLEAN",
+                "selectedSources": "ENTITY_ID_ARRAY", "waterbendPermanents": "ENTITY_ID_ARRAY",
+            }},
+        })
+        client = FakeClient(FakeResponse(json.dumps({"channel": "decision", "response": {
+            "type": "ManaSourcesSelectedResponse", "autoPay": False,
+            "declined": True, "selectedSources": [], "waterbendPermanents": [],
+        }})))
+        OpenAIResponsesPilot(client=client, model="gpt-test").choose(observation)
+        schema = client.responses.calls[0]["text"]["format"]["schema"]
+        self.assertEqual(schema["properties"]["response"]["properties"]["autoPay"]["const"], False)
+
+    def test_native_autopay_unknown_keeps_legacy_decision_usable(self):
+        observation = structured_observation()
+        observation["pendingDecision"].update({
+            "kind": "SelectManaSourcesDecision", "canAutoPayNow": None,
+            "availableSources": [],
+            "responseSpec": {"responseType": "ManaSourcesSelectedResponse", "requiredFields": {
+                "autoPay": "BOOLEAN", "declined": "BOOLEAN",
+                "selectedSources": "ENTITY_ID_ARRAY", "waterbendPermanents": "ENTITY_ID_ARRAY",
+            }},
+        })
+        client = FakeClient(FakeResponse(json.dumps({"channel": "decision", "response": {
+            "type": "ManaSourcesSelectedResponse", "autoPay": True,
+            "declined": False, "selectedSources": [], "waterbendPermanents": [],
+        }})))
+        choice = OpenAIResponsesPilot(client=client, model="gpt-test").choose(observation)
+        self.assertTrue(choice.response["autoPay"])
 
     def test_rejects_wrong_native_array_element_kind_before_submission(self):
         observation = structured_observation()

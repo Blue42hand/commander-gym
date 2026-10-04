@@ -5,6 +5,7 @@ import com.wingedsheep.ai.ActionResponse
 import com.wingedsheep.engine.core.DeclareAttackers
 import com.wingedsheep.engine.core.DeclareBlockers
 import com.wingedsheep.engine.core.YesNoDecision
+import com.wingedsheep.engine.core.SelectManaSourcesDecision
 import com.wingedsheep.engine.core.DecisionContext
 import com.wingedsheep.engine.view.ClientGameState
 import com.wingedsheep.engine.view.LegalActionInfo
@@ -239,6 +240,49 @@ class CommanderGymPlayerControllerParameterTest {
                 false,
                 responseSpec["cancelAllowed"]!!.jsonPrimitive.content.toBooleanStrict(),
             )
+        } finally {
+            server.stop(0)
+        }
+    }
+
+    @Test
+    fun nativeAutoPayFeasibilityReachesGymPolicyCallback() {
+        val playerId = EntityId.of("ai")
+        val pending = SelectManaSourcesDecision(
+            id = "payment-1", playerId = playerId, prompt = "Produce mana for Krenko, Mob Boss",
+            context = DecisionContext(), availableSources = emptyList(),
+            requiredCost = "{2}{R}{R}", autoPaySuggestion = emptyList(),
+            canAutoPayNow = false, canDecline = true,
+        )
+        var requestBody: String? = null
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        server.createContext("/v1/choose-action") { exchange ->
+            requestBody = exchange.requestBody.bufferedReader().use { it.readText() }
+            val response = """
+                {"kind":"decision","playerId":"ai",
+                 "response":{"type":"ManaSourcesSelectedResponse","decisionId":"payment-1",
+                             "selectedSources":[],"autoPay":false,"declined":true,
+                             "waterbendPermanents":[]},"metadata":{"provider":"test"}}
+            """.trimIndent().toByteArray(StandardCharsets.UTF_8)
+            exchange.sendResponseHeaders(200, response.size.toLong())
+            exchange.responseBody.use { it.write(response) }
+        }
+        server.start()
+        try {
+            val controller = CommanderGymPlayerController(
+                playerId = playerId,
+                endpoint = URI.create("http://127.0.0.1:${server.address.port}"),
+                token = "test-token", timeout = Duration.ofSeconds(2),
+                parameterize = { offered, _ -> offered.action },
+            )
+            assertTrue(controller.chooseAction(
+                state = minimalState(playerId), legalActions = emptyList(),
+                pendingDecision = pending, recentGameLog = emptyList(),
+            ) is ActionResponse.SubmitDecision)
+            val policyPending = Json.parseToJsonElement(checkNotNull(requestBody))
+                .jsonObject["pendingDecision"]!!.jsonObject
+            assertEquals(false, policyPending["canAutoPayNow"]!!.jsonPrimitive.content.toBooleanStrict())
+            assertEquals("{2}{R}{R}", policyPending["requiredCost"]!!.jsonPrimitive.content)
         } finally {
             server.stop(0)
         }

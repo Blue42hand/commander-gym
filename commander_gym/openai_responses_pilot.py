@@ -529,6 +529,14 @@ def _native_action_format(
     }
 
 
+def _native_auto_pay_available(pending: Mapping[str, Any]) -> bool | None:
+    """Use the engine's payment verdict; older and context-sensitive windows remain unknown."""
+    value = pending.get("canAutoPayNow")
+    if value is not None and type(value) is not bool:
+        raise OpenAIResponsesPilotError("native canAutoPayNow must be boolean or null")
+    return value
+
+
 def _native_mana_source_format(observation: Mapping[str, Any]) -> dict[str, Any] | None:
     """Constrain a native mana-source response to this decision's offered IDs."""
 
@@ -538,6 +546,7 @@ def _native_mana_source_format(observation: Mapping[str, Any]) -> dict[str, Any]
     spec = pending.get("responseSpec")
     if not isinstance(spec, Mapping) or spec.get("responseType") != "ManaSourcesSelectedResponse":
         return None
+    can_auto_pay = _native_auto_pay_available(pending)
     legal = observation.get("legalActions")
     if isinstance(legal, list) and any(
         isinstance(action, Mapping)
@@ -571,7 +580,9 @@ def _native_mana_source_format(observation: Mapping[str, Any]) -> dict[str, Any]
                     "type": "object",
                     "properties": {
                         "type": {"type": "string", "const": "ManaSourcesSelectedResponse"},
-                        "autoPay": {"type": "boolean"},
+                        "autoPay": {"type": "boolean", **(
+                            {"const": False} if can_auto_pay is False else {}
+                        )},
                         "declined": {"type": "boolean"},
                         "selectedSources": {
                             "type": "array", "items": {"type": "string", "enum": offered_ids},
@@ -963,6 +974,17 @@ class OpenAIResponsesPilot:
                     "channel action before answering this payment decision. "
                     "For selectedSources, use only IDs in pendingDecision.availableSources."
                 )
+            if isinstance(spec, Mapping) and spec.get("responseType") == "ManaSourcesSelectedResponse":
+                can_auto_pay = _native_auto_pay_available(pending)
+                request["instructions"] += (
+                    " AutoPay and selectedSources are exclusive: if autoPay is true, "
+                    "selectedSources must be empty."
+                )
+                if can_auto_pay is False:
+                    request["instructions"] += (
+                        " Native canAutoPayNow is false, so do not submit autoPay true; "
+                        "activate an offered mana ability first or choose a valid manual/decline response."
+                    )
 
         validation_error: OpenAIResponsesPilotError | None = None
         attempts: list[dict[str, Any]] = []
@@ -1321,6 +1343,10 @@ class OpenAIResponsesPilot:
                 )
 
         if response_type == "ManaSourcesSelectedResponse":
+            if response.get("autoPay") is True and _native_auto_pay_available(pending) is False:
+                raise OpenAIResponsesPilotError("native canAutoPayNow is false; autoPay is unavailable")
+            if response.get("autoPay") is True and response.get("selectedSources"):
+                raise OpenAIResponsesPilotError("autoPay cannot be combined with selectedSources")
             available = pending.get("availableSources")
             selected_sources = response.get("selectedSources")
             if not isinstance(available, list) or any(

@@ -156,6 +156,7 @@ class GameServerSeatAdapterTests(unittest.TestCase):
     def test_pending_mana_payment_accepts_only_offered_mana_ability_action(self):
         pending = {
             "decisionId": "payment-1", "kind": "SelectManaSourcesDecision",
+            "canAutoPayNow": False,
             "responseSpec": {"responseType": "ManaSourcesSelectedResponse"},
         }
         mana_action = {
@@ -168,11 +169,13 @@ class GameServerSeatAdapterTests(unittest.TestCase):
             "actionType": "ActivateAbility", "isManaAbility": False,
             "action": {"type": "ActivateAbility", "playerId": "ai", "sourceId": "other-1"},
         }
-        result = GameServerSeatAdapter(
-            ScriptedPilot(ArgentumActionChoice(0)), "ai",
-        ).choose_action(self.state, [mana_action, nonmana_action], pending)
+        pilot = ScriptedPilot(ArgentumActionChoice(0))
+        result = GameServerSeatAdapter(pilot, "ai").choose_action(
+            self.state, [mana_action, nonmana_action], pending,
+        )
         self.assertIsInstance(result, NativeActionResponse)
         self.assertEqual(result.action, mana_action["action"])
+        self.assertIs(pilot.observations[0]["pendingDecision"]["canAutoPayNow"], False)
 
         with self.assertRaisesRegex(PilotContractError, "offered mana ability"):
             GameServerSeatAdapter(
