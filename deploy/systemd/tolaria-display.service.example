@@ -1,0 +1,19 @@
+[Unit]
+Description=Tolaria Commander Gym local display
+After=network.target
+
+[Service]
+Type=simple
+User=commander-gym
+WorkingDirectory=/opt/commander-gym
+Environment=TOLARIA_DISPLAY_HOST=127.0.0.1
+Environment=TOLARIA_DISPLAY_PORT=8090
+Environment=TOLARIA_PROVENANCE=/var/lib/commander-gym/policy-provenance.jsonl
+Environment=TOLARIA_COMMANDER_GYM_DIR=/opt/commander-gym
+Environment=TOLARIA_ARGENTUM_DIR=/opt/argentum-engine
+ExecStart=/usr/bin/python3 -m commander_gym.tolaria_dashboard
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
