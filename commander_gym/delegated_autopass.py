@@ -151,6 +151,8 @@ def _visible_checkpoint(
             return None
         owner = zone["zoneId"].get("ownerId")
         kind = zone["zoneId"].get("zoneType")
+        if not isinstance(kind, str):
+            return None
         if kind == "Hand" and owner == seat:
             ids = zone.get("cardIds")
             if not isinstance(ids, list):
@@ -719,8 +721,11 @@ class DelegatedAutopassPilot:
             if not isinstance(step, Mapping):
                 return False, "malformed-step"
             kind = step.get("type")
+            if not isinstance(kind, str):
+                return False, "invalid-step-type"
             if kind == "wait":
                 if (set(step) != {"type", "until", "maxPasses"}
+                    or not isinstance(step.get("until"), str)
                     or step.get("until") not in {"phase_end", "next_own_main"}
                     or type(step.get("maxPasses")) is not int
                     or not 1 <= step["maxPasses"] <= min(self.max_passes, 16)):
@@ -746,6 +751,8 @@ class DelegatedAutopassPilot:
                 return False, "unknown-step"
             kinds.append(kind)
         current_kind = selected.get("kind")
+        if not isinstance(current_kind, str):
+            return False, "uncertified-native-choice"
         if (current_kind == "PlayLand"
             and kinds not in (["cast"], ["cast", "wait"])
             or current_kind == "PassPriority"
@@ -832,6 +839,7 @@ class DelegatedAutopassPilot:
                 ), "continued"
             if not self._continues(
                 lease, now, observation, ignore_boundary=True, require_menu=False,
+                ignore_limit=True,
             ):
                 return None, "wait-changed-at-boundary"
             plan.lease = None
@@ -877,7 +885,7 @@ class DelegatedAutopassPilot:
             lease = _Lease(
                 start=deepcopy(now), previous=deepcopy(now), until=step["until"],
                 reason=plan.reason, lease_id=plan.plan_id,
-                watch_opponents=True, max_passes=step["maxPasses"],
+                watch_opponents=True, passes=1, max_passes=step["maxPasses"],
             )
             plan.lease = lease
             with self._lock:
@@ -886,7 +894,7 @@ class DelegatedAutopassPilot:
                 action_id=passed["actionId"],
                 metadata={"declarativeContinuation": {
                     "planId": plan.plan_id, "step": plan.index, "type": "wait",
-                    "ordinal": 0,
+                    "ordinal": 1,
                 }},
             ), "continued"
         step = plan.steps[plan.index]
@@ -912,8 +920,9 @@ class DelegatedAutopassPilot:
     def _continues(
         self, lease: _Lease, now: dict[str, Any], observation: Mapping[str, Any],
         *, ignore_boundary: bool = False, require_menu: bool = True,
+        ignore_limit: bool = False,
     ) -> bool:
-        if lease.passes >= min(self.max_passes, lease.max_passes):
+        if not ignore_limit and lease.passes >= min(self.max_passes, lease.max_passes):
             return False
         if lease.deferred_abilities is not None:
             if (

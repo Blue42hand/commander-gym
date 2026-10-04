@@ -1074,8 +1074,11 @@ class OpenAIResponsesPilot:
                     if not isinstance(step, Mapping):
                         raise OpenAIResponsesPilotError("continuation step must be an object")
                     kind = step.get("type")
+                    if not isinstance(kind, str):
+                        raise OpenAIResponsesPilotError("continuation step type must be a string")
                     if kind == "wait":
                         if (set(step) != {"type", "until", "maxPasses"}
+                            or not isinstance(step.get("until"), str)
                             or step.get("until") not in {"phase_end", "next_own_main"}
                             or type(step.get("maxPasses")) is not int
                             or not 1 <= step["maxPasses"] <= 16):
@@ -1096,13 +1099,16 @@ class OpenAIResponsesPilot:
                     else:
                         raise OpenAIResponsesPilotError("unsupported continuation step")
                     kinds.append(kind)
-                if (selected.get("kind") == "PlayLand"
+                selected_kind = selected.get("kind")
+                if not isinstance(selected_kind, str):
+                    raise OpenAIResponsesPilotError("continuation requires a native action kind")
+                if (selected_kind == "PlayLand"
                     and kinds not in (["cast"], ["cast", "wait"])
-                    or selected.get("kind") == "PassPriority"
+                    or selected_kind == "PassPriority"
                     and kinds not in (["wait"], ["wait", "playLand"],
                                       ["wait", "playLand", "cast"],
                                       ["wait", "playLand", "cast", "wait"])
-                    or selected.get("kind") not in {"PlayLand", "PassPriority"}):
+                    or selected_kind not in {"PlayLand", "PassPriority"}):
                     raise OpenAIResponsesPilotError("unsupported continuation order")
                 return ArgentumActionChoice(
                     action_id=choice.action_id, params=choice.params,

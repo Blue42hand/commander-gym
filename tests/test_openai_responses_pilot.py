@@ -240,6 +240,10 @@ class OpenAIResponsesPilotTests(unittest.TestCase):
             {**step, "when": {"phase": "MAGIC_PHASE"}},
             {**step, "cardId": ""},
             {**step, "extra": True},
+            {"type": []},
+            {"type": {"kind": "wait"}},
+            {"type": "wait", "until": {}, "maxPasses": 1},
+            {"type": "wait", "until": [], "maxPasses": 1},
             {"type": "python", "code": "pass"},
         ):
             with self.subTest(bad=bad):
@@ -251,6 +255,37 @@ class OpenAIResponsesPilotTests(unittest.TestCase):
                         client=FakeClient(FakeResponse(json.dumps(malformed))),
                         model="gpt-test", allow_declarative_continuation=True,
                     ).choose(obs)
+
+        for bad in ({"type": []}, {"type": "wait", "until": {}, "maxPasses": 1}):
+            with self.subTest(retry_bad=bad):
+                invalid = {**output, "continuation": {
+                    "reason": "Invalid then retry", "steps": [bad],
+                }}
+                valid = {"channel": "action", "semanticId": "argentum-action-v1:pass",
+                         "params": {}}
+                client = FakeClient([
+                    FakeResponse(json.dumps(invalid), response_id="bad"),
+                    FakeResponse(json.dumps(valid), response_id="good"),
+                ])
+                recovered = OpenAIResponsesPilot(
+                    client=client, model="gpt-test", max_attempts=2,
+                    allow_declarative_continuation=True,
+                ).choose(obs)
+                self.assertEqual(len(client.responses.calls), 2)
+                self.assertEqual(recovered.metadata["retryCount"], 1)
+                attempts = recovered.metadata["modelIo"]["attempts"]
+                self.assertEqual(len(attempts), 2)
+                self.assertIn("validationError", attempts[0]["response"])
+        malformed_native = action_observation()
+        malformed_native["legalActions"][0]["kind"] = []
+        for action in malformed_native["legalActions"]:
+            action["parameterSpec"] = {"allowedFields": {}}
+        with self.assertRaises(OpenAIResponsesPilotError):
+            OpenAIResponsesPilot(
+                client=FakeClient(FakeResponse(json.dumps(output))),
+                model="gpt-test", max_attempts=1,
+                allow_declarative_continuation=True,
+            ).choose(malformed_native)
 
     def test_native_action_schema_exposes_delegation_only_for_opt_in(self):
         obs = action_observation()

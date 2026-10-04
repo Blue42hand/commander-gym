@@ -165,6 +165,27 @@ class DelegatedAutopassTests(unittest.TestCase):
                          "boundary-reached")
         self.assertEqual(strategic.calls, 2)
 
+        class MaxOnePilot(PlannedPilot):
+            def choose(self, observation):
+                choice = super().choose(observation)
+                if self.calls == 1:
+                    choice.metadata["continuation"]["steps"][-1]["maxPasses"] = 1
+                return choice
+
+        strategic = MaxOnePilot()
+        pilot = DelegatedAutopassPilot(
+            strategic, allow_named_deferrals=True,
+            allow_declarative_continuation=True,
+        )
+        pilot.choose(start)
+        pilot.choose(main)
+        pilot.choose(after_land)
+        first_pass = pilot.choose(after_cast)
+        self.assertEqual(first_pass.metadata["declarativeContinuation"]["ordinal"], 1)
+        self.assertEqual(pilot.choose(after_cast).metadata["continuationWake"]["reason"],
+                         "wait-state-or-menu-changed")
+        self.assertEqual(strategic.calls, 2)
+
         for changed in ("resolved", "opponent_spell", "tapped_mana", "decision",
                         "nonmana_option", "unknown_event"):
             with self.subTest(after_cast=changed):
@@ -290,6 +311,8 @@ class DelegatedAutopassTests(unittest.TestCase):
                                   "maxPasses": True}]},
             {**valid, "steps": [{"type": "wait", "until": "phase_end",
                                   "maxPasses": 2, "code": "pass"}]},
+            {**valid, "steps": [{"type": []}]},
+            {**valid, "steps": [{"type": "wait", "until": {}, "maxPasses": 1}]},
             {**valid, "steps": [{"type": "cast", "cardId": "h1",
                                   "when": {"phase": "PRECOMBAT_MAIN"}, "params": {}}]},
             {**valid, "steps": valid["steps"] * 5},
@@ -317,6 +340,14 @@ class DelegatedAutopassTests(unittest.TestCase):
         pilot = DelegatedAutopassPilot(strategic, allow_declarative_continuation=True)
         self.assertEqual(pilot.choose(unsafe).metadata["continuationRejected"],
                          "unsafe-priority-start")
+        malformed = copy.deepcopy(start)
+        malformed["state"]["zones"].append({
+            "zoneId": {"ownerId": "p1", "zoneType": []}, "cardIds": [],
+        })
+        strategic = InvalidPilot(valid)
+        pilot = DelegatedAutopassPilot(strategic, allow_declarative_continuation=True)
+        self.assertEqual(pilot.choose(malformed).metadata["continuationRejected"],
+                         "invalid-current-choice-or-view")
 
     def test_guarded_then_cast_optional_native_template_and_abort_conditions(self):
         class LandPilot:
