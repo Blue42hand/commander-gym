@@ -1,12 +1,28 @@
 from pathlib import Path
 from tempfile import TemporaryDirectory
+import subprocess
 import unittest
+import venv
 
 from commander_gym.openai_run_budget import OpenAIRunBudget, OpenAIRunBudgetError
-from scripts.run_two_luna_binding_game import checked_existing_budget
+from scripts.run_two_luna_binding_game import checked_existing_budget, selected_python
 
 
 class ExistingGameBudgetTests(unittest.TestCase):
+    def test_explicit_venv_interpreter_retains_its_environment(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            venv.EnvBuilder(with_pip=False, symlinks=True).create(root / "venv")
+            interpreter = root / "venv/bin/python"
+            self.assertTrue(interpreter.is_symlink())
+            selected = selected_python(root, interpreter)
+            self.assertEqual(selected, interpreter)
+            result = subprocess.run(
+                [str(selected), "-c", "import sys; print(sys.prefix != sys.base_prefix)"],
+                capture_output=True, text=True, check=True,
+            )
+            self.assertEqual(result.stdout.strip(), "True")
+
     def test_launcher_reuses_elevated_ledger_without_reset_and_rejects_drift(self):
         with TemporaryDirectory() as temporary:
             path = Path(temporary) / "ledger.json"

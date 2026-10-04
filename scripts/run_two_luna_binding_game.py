@@ -45,6 +45,15 @@ def checked_existing_budget(ledger, cap, authorized_max, max_requests,
     return snapshot
 
 
+def selected_python(gym: Path, override: Path | None) -> Path:
+    # A venv interpreter is usually a symlink. Resolving it selects the system
+    # binary outside the venv and loses its installed OpenAI SDK.
+    python = override.absolute() if override else gym / ".venv/bin/python"
+    if not python.is_file() or not os.access(python, os.X_OK):
+        raise RuntimeError("selected Python executable is unavailable")
+    return python
+
+
 def await_ready(url, process, seconds, token=None):
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
@@ -92,9 +101,7 @@ def main():
     if not args.dry_run and args.api_key_file is None:
         parser.error("--api-key-file is required for a paid game")
     gym = Path(__file__).resolve().parent.parent
-    python = args.python.resolve() if args.python else gym / ".venv/bin/python"
-    if not python.is_file() or not os.access(python, os.X_OK):
-        raise RuntimeError("selected Python executable is unavailable")
+    python = selected_python(gym, args.python)
     engine = args.engine_dir.resolve()
     out = args.output_dir.resolve()
     os.umask(0o077)
