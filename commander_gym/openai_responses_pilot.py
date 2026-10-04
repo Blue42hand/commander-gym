@@ -823,6 +823,13 @@ class OpenAIResponsesPilot:
             )
 
     def choose(self, observation: Mapping[str, Any]) -> PilotChoice:
+        native_payment_error = observation.get("nativePaymentError")
+        if native_payment_error is not None:
+            if not isinstance(native_payment_error, str) or not native_payment_error.strip():
+                raise OpenAIResponsesPilotError("nativePaymentError must be a non-empty string")
+            pending = observation.get("pendingDecision")
+            if not isinstance(pending, Mapping) or pending.get("kind", pending.get("type")) != "SelectManaSourcesDecision":
+                raise OpenAIResponsesPilotError("native payment correction requires the current mana decision")
         decision_format = _native_decision_format(observation)
         action_format = None if decision_format is not None else _native_action_format(
             observation, allow_priority_delegation=self.allow_priority_delegation,
@@ -848,6 +855,13 @@ class OpenAIResponsesPilot:
             "text": {"format": decision_format or action_format or {"type": "json_object"}},
             "store": False,
         }
+        if native_payment_error is not None:
+            request["instructions"] += (
+                "\n\nArgentum rejected your previous payment response. "
+                "nativePaymentError in the observation is the native reason. "
+                "Use only this fresh legal action and pending-decision offer to correct it. "
+                "You may activate an offered mana ability before answering the payment decision."
+            )
         if self.compact_model_observation:
             request["instructions"] += (
                 "\n\nThis request uses argentum-seat-sparse-cards-v1. The observation "

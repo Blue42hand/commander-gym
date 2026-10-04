@@ -915,6 +915,35 @@ class OpenAIResponsesPilotTests(unittest.TestCase):
         schema = client.responses.calls[0]["text"]["format"]["schema"]
         self.assertEqual(schema["properties"]["response"]["properties"]["autoPay"]["const"], False)
 
+    def test_native_payment_correction_uses_current_offer_and_records_provider_attempt(self):
+        observation = structured_observation()
+        observation["pendingDecision"].update({
+            "kind": "SelectManaSourcesDecision", "decisionId": "fresh-payment",
+            "canAutoPayNow": False,
+            "availableSources": [{"entityId": "fresh-mountain", "name": "Mountain"}],
+            "responseSpec": {"responseType": "ManaSourcesSelectedResponse", "requiredFields": {
+                "autoPay": "BOOLEAN", "declined": "BOOLEAN",
+                "selectedSources": "ENTITY_ID_ARRAY", "waterbendPermanents": "ENTITY_ID_ARRAY",
+            }},
+        })
+        observation["nativePaymentError"] = "Selected mana sources cannot pay this spell's cost"
+        client = FakeClient(FakeResponse(json.dumps({"channel": "decision", "response": {
+            "type": "ManaSourcesSelectedResponse", "autoPay": False,
+            "declined": True, "selectedSources": [], "waterbendPermanents": [],
+        }})))
+        choice = OpenAIResponsesPilot(client=client, model="gpt-test").choose(observation)
+        self.assertEqual(choice.response["decisionId"], "fresh-payment")
+        self.assertEqual(choice.metadata["modelIo"]["selectedAttempt"], 0)
+        self.assertEqual(len(client.responses.calls), 1)
+        self.assertIn("nativePaymentError", client.responses.calls[0]["input"])
+        self.assertIn("fresh-mountain", client.responses.calls[0]["input"])
+        self.assertIn("fresh legal action", client.responses.calls[0]["instructions"])
+
+        observation["pendingDecision"]["kind"] = "YesNoDecision"
+        with self.assertRaisesRegex(OpenAIResponsesPilotError, "current mana decision"):
+            OpenAIResponsesPilot(client=client, model="gpt-test").choose(observation)
+        self.assertEqual(len(client.responses.calls), 1)
+
     def test_native_autopay_unknown_keeps_legacy_decision_usable(self):
         observation = structured_observation()
         observation["pendingDecision"].update({

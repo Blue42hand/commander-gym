@@ -283,6 +283,25 @@ class CommanderGymPlayerControllerParameterTest {
                 .jsonObject["pendingDecision"]!!.jsonObject
             assertEquals(false, policyPending["canAutoPayNow"]!!.jsonPrimitive.content.toBooleanStrict())
             assertEquals("{2}{R}{R}", policyPending["requiredCost"]!!.jsonPrimitive.content)
+            assertTrue("nativePaymentError" !in Json.parseToJsonElement(checkNotNull(requestBody)).jsonObject)
+
+            assertTrue(controller.chooseActionAfterRejectedPayment(
+                state = minimalState(playerId), legalActions = emptyList(),
+                pendingDecision = pending, recentGameLog = listOf("Current native payment window"),
+                nativePaymentError = "Selected mana sources cannot pay this spell's cost",
+            ) is ActionResponse.SubmitDecision)
+            val correction = Json.parseToJsonElement(checkNotNull(requestBody)).jsonObject
+            assertEquals("Selected mana sources cannot pay this spell's cost",
+                correction["nativePaymentError"]!!.jsonPrimitive.content)
+            assertEquals("payment-1", correction["pendingDecision"]!!.jsonObject["id"]!!.jsonPrimitive.content)
+            assertEquals("ai", correction["state"]!!.jsonObject["viewingPlayerId"]!!.jsonPrimitive.content)
+            assertTrue("snapshot" !in correction)
+            assertThrows(IllegalArgumentException::class.java) {
+                controller.chooseActionAfterRejectedPayment(
+                    state = minimalState(playerId), legalActions = emptyList(),
+                    pendingDecision = pending, recentGameLog = emptyList(), nativePaymentError = " ",
+                )
+            }
         } finally {
             server.stop(0)
         }

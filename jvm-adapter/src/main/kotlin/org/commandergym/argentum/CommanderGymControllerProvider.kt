@@ -8,6 +8,7 @@ import com.wingedsheep.ai.llm.MulliganInfo
 import com.wingedsheep.engine.core.DecisionResponse
 import com.wingedsheep.engine.core.GameAction
 import com.wingedsheep.engine.core.PendingDecision
+import com.wingedsheep.engine.core.SelectManaSourcesDecision
 import com.wingedsheep.engine.core.ActionParameterizer
 import com.wingedsheep.engine.core.ActionParams
 import com.wingedsheep.engine.core.responseSpec
@@ -170,7 +171,33 @@ class CommanderGymPlayerController(
         legalActions: List<LegalActionInfo>,
         pendingDecision: PendingDecision?,
         recentGameLog: List<String>,
+    ): ActionResponse = chooseActionWithPaymentError(
+        state, legalActions, pendingDecision, recentGameLog, null,
+    )
+
+    override fun chooseActionAfterRejectedPayment(
+        state: ClientGameState,
+        legalActions: List<LegalActionInfo>,
+        pendingDecision: PendingDecision,
+        recentGameLog: List<String>,
+        nativePaymentError: String,
+    ): ActionResponse = chooseActionWithPaymentError(
+        state, legalActions, pendingDecision, recentGameLog, nativePaymentError,
+    )
+
+    private fun chooseActionWithPaymentError(
+        state: ClientGameState,
+        legalActions: List<LegalActionInfo>,
+        pendingDecision: PendingDecision?,
+        recentGameLog: List<String>,
+        nativePaymentError: String?,
     ): ActionResponse {
+        if (nativePaymentError != null) {
+            require(nativePaymentError.isNotBlank()) { "Native payment error must not be blank" }
+            require(pendingDecision is SelectManaSourcesDecision) {
+                "Payment correction requires a fresh native mana-source decision"
+            }
+        }
         val policyActions = JsonArray(legalActions.map { legal ->
             val encoded = json.encodeToJsonElement(legal).jsonObject
             buildJsonObject {
@@ -194,6 +221,7 @@ class CommanderGymPlayerController(
             put("legalActions", policyActions)
             put("pendingDecision", policyDecision)
             put("recentGameLog", json.encodeToJsonElement(recentGameLog))
+            if (nativePaymentError != null) put("nativePaymentError", nativePaymentError)
         }
         val response = post("choose-action", body)
         return when (response.requiredString("kind")) {

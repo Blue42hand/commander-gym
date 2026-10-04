@@ -42,6 +42,9 @@ FATAL_EXTERNAL_ACTION_RE = re.compile(
     r"External AI action failed for seat \S+ in game (?P<game>\S+): "
     r"(?P<reason>.+?) — refusing server-side strategic fallback"
 )
+PAYMENT_REJECTION_RE = re.compile(
+    r"External AI payment rejected for seat \S+ in game (?P<game>\S+); same pilot is correcting"
+)
 
 
 def _request_json(
@@ -401,8 +404,12 @@ def _summarize(
     cached_input_tokens = 0
     provider_wall_time_ms = 0.0
     max_provider_wall_time_ms = 0.0
+    payment_correction_callbacks = 0
 
     for record in records:
+        observation = record.get("observation")
+        if isinstance(observation, Mapping) and isinstance(observation.get("nativePaymentError"), str):
+            payment_correction_callbacks += 1
         metadata = _metadata(record)
         delegated = isinstance(metadata.get("delegatedPass"), Mapping)
         if delegated:
@@ -470,8 +477,16 @@ def _summarize(
                         cached_input_tokens += cached
 
     communication_errors: list[str] = []
+    native_invalid_payment_attempts = 0
+    payment_correction_exhaustions = 0
     if log_path is not None and log_path.exists():
         for line in log_path.read_text(errors="replace").splitlines():
+            payment_match = PAYMENT_REJECTION_RE.search(line)
+            if payment_match and payment_match["game"] in game_ids:
+                native_invalid_payment_attempts += 1
+            fatal_match = FATAL_EXTERNAL_ACTION_RE.search(line)
+            if fatal_match and fatal_match["game"] in game_ids and "payment" in fatal_match["reason"].lower():
+                payment_correction_exhaustions += 1
             if ERROR_RE.search(line):
                 communication_errors.append(line[-1200:])
 
@@ -521,6 +536,9 @@ def _summarize(
         "delegatedPasses": delegated_passes,
         "providerRequests": provider_calls + retries,
         "validationRetries": retries,
+        "nativeInvalidPaymentAttempts": native_invalid_payment_attempts,
+        "paymentCorrectionCallbacks": payment_correction_callbacks,
+        "paymentCorrectionExhaustions": payment_correction_exhaustions,
         "providerWallTimeMs": round(provider_wall_time_ms, 3),
         "maxProviderWallTimeMs": round(max_provider_wall_time_ms, 3),
         "inputTokens": input_tokens,

@@ -120,6 +120,8 @@ class GameServerSeatAdapter:
         legal_actions: Sequence[Mapping[str, Any]],
         pending_decision: Mapping[str, Any] | None,
         recent_game_log: Sequence[str] = (),
+        *,
+        native_payment_error: str | None = None,
     ) -> NativeActionResponse | NativeDecisionResponse:
         observation = self._observation(
             state,
@@ -127,6 +129,13 @@ class GameServerSeatAdapter:
             pending_decision,
             recent_game_log,
         )
+        if native_payment_error is not None:
+            if not isinstance(native_payment_error, str) or not native_payment_error.strip():
+                raise GameServerSeatError("native payment error must be a non-empty string")
+            pending = observation.get("pendingDecision")
+            if not isinstance(pending, Mapping) or pending.get("kind") != "SelectManaSourcesDecision":
+                raise GameServerSeatError("payment correction requires the current native mana decision")
+            observation["nativePaymentError"] = native_payment_error
         choice = choose_for_observation(self._pilot, observation)
 
         if isinstance(choice, ArgentumActionChoice):

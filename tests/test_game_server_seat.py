@@ -200,6 +200,39 @@ class GameServerSeatAdapterTests(unittest.TestCase):
         self.assertIsInstance(native, NativeActionResponse)
         self.assertEqual(native.action, mana_action["action"])
 
+    def test_native_payment_rejection_returns_to_same_pilot_with_fresh_offer(self):
+        pending = {
+            "decisionId": "payment-fresh", "kind": "SelectManaSourcesDecision",
+            "canAutoPayNow": False,
+            "responseSpec": {"responseType": "ManaSourcesSelectedResponse"},
+        }
+        mana_action = {
+            "actionType": "ActivateAbility", "isManaAbility": True,
+            "action": {"type": "ActivateAbility", "playerId": "ai", "sourceId": "treasure"},
+        }
+        records = []
+        pilot = ScriptedPilot(ArgentumActionChoice(0))
+        adapter = GameServerSeatAdapter(pilot, "ai", provenance_sink=records.append)
+        result = adapter.choose_action(
+            self.state, [mana_action], pending, ["fresh native log"],
+            native_payment_error="Selected mana sources cannot pay this spell's cost",
+        )
+        self.assertEqual(result.action, mana_action["action"])
+        self.assertEqual(pilot.observations[0]["pendingDecision"]["decisionId"], "payment-fresh")
+        self.assertEqual(pilot.observations[0]["legalActions"][0]["action"], mana_action["action"])
+        self.assertEqual(pilot.observations[0]["legalActions"][0]["actionId"], 0)
+        self.assertIn("nativePaymentError", records[0].observation)
+        self.assertNotIn("snapshot", records[0].observation)
+
+        for invalid_pending, error in ((None, "rejected"), (pending, " ")):
+            with self.subTest(invalid_pending=invalid_pending, error=error):
+                with self.assertRaises(GameServerSeatError):
+                    adapter.choose_action(
+                        self.state, [mana_action], invalid_pending,
+                        native_payment_error=error,
+                    )
+        self.assertEqual(len(pilot.observations), 1)
+
     def test_mulligan_and_bottom_card_callbacks_use_same_pilot(self):
         pilot = ScriptedPilot(
             ArgentumActionChoice(1),

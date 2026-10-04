@@ -20,6 +20,24 @@ from commander_gym.two_luna_debug import (
 
 
 class TwoLunaDebugReportTests(unittest.TestCase):
+    def test_payment_correction_counts_are_scoped_to_active_game(self):
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / "server.log"
+            log.write_text(
+                "WARN External AI payment rejected for seat ai-a in game game-1; same pilot is correcting\n"
+                "WARN External AI payment rejected for seat ai-b in game other; same pilot is correcting\n"
+            )
+            summary = _summarize(
+                [{"callback": "chooseAction", "playerId": "ai-a",
+                  "observation": {"nativePaymentError": "native rejection"},
+                  "metadata": {"provider": "openai", "usage": {}}}],
+                completed=False, lobby_id="lobby", game_ids=["game-1"],
+                max_turn=3, log_path=log, wall_time_seconds=1,
+            )
+            self.assertEqual(summary["nativeInvalidPaymentAttempts"], 1)
+            self.assertEqual(summary["paymentCorrectionCallbacks"], 1)
+            self.assertEqual(summary["paymentCorrectionExhaustions"], 0)
+
     def test_fatal_action_watch_matches_active_game_only_after_complete_log_line(self):
         with tempfile.TemporaryDirectory() as directory:
             log = Path(directory) / "server.log"
