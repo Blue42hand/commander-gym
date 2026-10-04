@@ -46,6 +46,20 @@ def _request(url: str, payload: Mapping[str, Any] | None = None) -> dict[str, An
     return result
 
 
+def _expect_preflight_rejection(url: str, payload: Mapping[str, Any], reason: str) -> None:
+    """Confirm native profile validation rejects a request before creating a lobby."""
+
+    try:
+        _request(url, payload)
+    except HTTPError as exc:
+        body = json.load(exc)
+        if (exc.code == 400 and isinstance(body, dict)
+                and body.get("lobbyId") == "" and reason in body.get("message", "")):
+            return
+        raise RuntimeError(f"unexpected native preflight rejection: HTTP {exc.code} {body}") from exc
+    raise RuntimeError(f"native preflight accepted invalid request: {reason}")
+
+
 def _wait_ready(url: str, process: subprocess.Popen[Any], seconds: float) -> None:
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
@@ -232,6 +246,31 @@ def main() -> int:
         )
         base = f"http://127.0.0.1:{server_port}"
         _wait_ready(base + "/", process, 240)
+        if args.pass_only:
+            endpoint = base + "/api/dev/ai-tournament"
+            specs = [{"mode": "commander-gym", "profileId": profile_id}
+                     for profile_id in (args.profile_a, args.profile_b)]
+            request = {"decks": selected, "gamesPerMatch": 1,
+                       "controllerSpecs": specs, "rules": "COMMANDER"}
+            _expect_preflight_rejection(
+                endpoint, {**request, "controllerSpecs": specs[:1]},
+                "One native controller spec is required for each fixed deck",
+            )
+            _expect_preflight_rejection(
+                endpoint, {**request, "models": ["unused-model"]},
+                "Choose native controller specs or legacy model overrides",
+            )
+            _expect_preflight_rejection(
+                endpoint, {**request, "controllerSpecs": None},
+                "Commander debug games require exact native controller profiles",
+            )
+            mismatched = [dict(deck) for deck in selected]
+            first_card = next(iter(mismatched[0]))
+            mismatched[0][first_card] -= 1
+            _expect_preflight_rejection(
+                endpoint, {**request, "decks": mismatched},
+                "does not match its selected AI controller profile",
+            )
         created = _request(base + "/api/dev/ai-tournament", {
             "decks": selected, "gamesPerMatch": 1,
             "controllerSpecs": [
@@ -289,6 +328,7 @@ def main() -> int:
                "httpCallbacks": len(list(capture.glob("*.json"))), "status": last_status,
                "providerCalls": 0}
     if args.pass_only:
+        summary["profilePreflightRejections"] = 4
         summary["terminalEvidence"] = _natural_terminal_game(last_status.get("completedGames"))
         summary["terminalArtifact"] = terminal_artifact
     (output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
