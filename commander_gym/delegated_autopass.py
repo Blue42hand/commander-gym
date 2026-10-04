@@ -7,13 +7,22 @@ current native legal menu. Missing evidence expires the lease and wakes the pilo
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field
 import hashlib
 import json
 from threading import Lock
 from typing import Any, Mapping
 
-from .pilot import ArtificialPlayer, ArgentumActionChoice, PilotChoice
+from .pilot import ArtificialPlayer, ArgentumActionChoice, ArgentumDecisionChoice, PilotChoice
+
+
+_NATIVE_PHASES = {"BEGINNING", "PRECOMBAT_MAIN", "COMBAT", "POSTCOMBAT_MAIN", "ENDING"}
+_NATIVE_STEPS = {
+    "UNTAP", "UPKEEP", "DRAW", "PRECOMBAT_MAIN", "BEGIN_COMBAT",
+    "DECLARE_ATTACKERS", "DECLARE_BLOCKERS", "FIRST_STRIKE_COMBAT_DAMAGE",
+    "COMBAT_DAMAGE", "END_COMBAT", "POSTCOMBAT_MAIN", "END", "CLEANUP",
+}
 
 
 def _native_pass(observation: Mapping[str, Any]) -> Mapping[str, Any] | None:
@@ -202,6 +211,140 @@ class _Lease:
     passes: int = 0
     deferred_abilities: tuple[tuple[str, str], ...] | None = None
     deferred_menu_digest: str | None = None
+    max_passes: int = 16
+
+
+@dataclass
+class _Continuation:
+    steps: tuple[dict[str, Any], ...]
+    index: int
+    reason: str
+    plan_id: str
+    before: dict[str, Any]
+    last_action: str
+    last_card_id: str | None = None
+    lease: _Lease | None = None
+
+
+def _condition_matches(condition: Mapping[str, Any], now: Mapping[str, Any]) -> bool:
+    return (
+        ("phase" not in condition or condition["phase"] == now["phase"])
+        and ("step" not in condition or condition["step"] == now["step"])
+        and ("stackEmpty" not in condition
+             or condition["stackEmpty"] is (not bool(now["stack"])))
+    )
+
+
+def _fresh_named_action(
+    observation: Mapping[str, Any], now: Mapping[str, Any], step: Mapping[str, Any],
+) -> Mapping[str, Any] | None:
+    if observation.get("pendingDecision") is not None or not _condition_matches(step["when"], now):
+        return None
+    kind = "PlayLand" if step["type"] == "playLand" else "CastSpell"
+    card_id = step["cardId"]
+    if kind == "PlayLand":
+        if now["active"] != now["seat"] or now["stack"] or card_id not in now["hand"]:
+            return None
+    elif card_id not in now["hand"] and card_id not in (_own_command_zone(now) or []):
+        return None
+    legal = observation.get("legalActions")
+    if not isinstance(legal, list):
+        return None
+    same_card = [offer for offer in legal if isinstance(offer, Mapping)
+                 and isinstance(offer.get("action"), Mapping)
+                 and offer["action"].get("cardId") == card_id]
+    if len(same_card) != 1:
+        return None
+    offered = same_card[0]
+    action = offered["action"]
+    if (
+        offered.get("kind") != kind or offered.get("actionType") != kind
+        or offered.get("affordable") is not True
+        or offered.get("isAffordable") is not True
+        or offered.get("isDecisionOption") is not False
+        or action.get("playerId") != now["seat"]
+        or type(offered.get("actionId")) is not int
+        or step["params"] != {}
+    ):
+        return None
+    if kind == "PlayLand":
+        if (action != {"type": "PlayLand", "playerId": now["seat"],
+                       "cardId": card_id, "asBackFace": False}
+            or offered.get("parameterSpec") != {"allowedFields": {}}):
+            return None
+    elif not _parameterless_native_cast(offered, guarded_template=True):
+        return None
+    return offered
+
+
+def _continuation_wake(
+    plan: _Continuation, observation: Mapping[str, Any], reason: str,
+) -> dict[str, Any]:
+    now = _visible_checkpoint(observation, watch_opponents=True)
+    previous = plan.lease.previous if plan.lease is not None else plan.before
+    events: list[Any] = []
+    if now is not None and now["log"][:len(previous["log"])] == previous["log"]:
+        events = now["log"][len(previous["log"]):]
+    return {
+        "planId": plan.plan_id, "reason": reason, "nextStep": plan.index,
+        "intent": {"reason": plan.reason, "steps": list(plan.steps)},
+        "changedVisibleFields": (
+            None if now is None else [key for key in (
+                "turn", "phase", "step", "active", "hand", "zones", "cards",
+                "stack", "mana", "life", "log",
+            ) if now[key] != previous[key]]
+        ),
+        "maskedEvents": events,
+        "maskedState": None if now is None else {
+            key: now[key] for key in (
+                "turn", "phase", "step", "active", "hand", "zones", "stack",
+                "mana", "life",
+            )
+        },
+    }
+
+
+def _post_cast_wait_ready(
+    plan: _Continuation, now: Mapping[str, Any], observation: Mapping[str, Any],
+) -> Mapping[str, Any] | None:
+    """Recognize only the first unchanged priority over the exact chosen spell."""
+    before = plan.before
+    card_id = plan.last_card_id
+    passed = _pass_and_mana_only(observation)
+    if (passed is None or not isinstance(card_id, str)
+        or before["seat"] != now["seat"] or before["turn"] != now["turn"]
+        or before["phase"] != now["phase"] or before["step"] != now["step"]
+        or before["active"] != now["active"] or before["stack"]
+        or now["stack"] != [card_id] or before["life"] != now["life"]
+        or any(value for key, value in now["mana"].items() if key != "restrictedMana")
+        or now["mana"].get("restrictedMana")):
+        return None
+    old_hand = list(before["hand"])
+    old_command = _own_command_zone(before)
+    new_command = _own_command_zone(now)
+    if card_id in old_hand:
+        old_hand.remove(card_id)
+        if now["hand"] != old_hand or old_command != new_command:
+            return None
+    elif old_command is not None and card_id in old_command:
+        old_command = list(old_command)
+        old_command.remove(card_id)
+        if now["hand"] != old_hand or new_command != old_command:
+            return None
+    else:
+        return None
+    old_other = [z for z in before["zones"] if z["kind"] not in {"Hand", "Command"}]
+    new_other = [z for z in now["zones"] if z["kind"] not in {"Hand", "Command"}]
+    if old_other != new_other:
+        return None
+    if any(now["cards"].get(key) != value for key, value in before["cards"].items()):
+        return None
+    old_log, new_log = before["log"], now["log"]
+    if (new_log[:len(old_log)] != old_log or len(new_log) != len(old_log) + 1
+        or not isinstance(new_log[-1], Mapping)
+        or new_log[-1].get("type") != "spellCast"):
+        return None
+    return passed
 
 
 @dataclass
@@ -386,18 +529,28 @@ class DelegatedAutopassPilot:
     max_passes: int = 16
     allow_named_deferrals: bool = False
     guarded_then_cast_templates: bool = False
+    allow_declarative_continuation: bool = False
     _leases: dict[str, _Lease] = field(default_factory=dict, init=False, repr=False)
     _pending_casts: dict[str, _PendingCast] = field(default_factory=dict, init=False, repr=False)
+    _continuations: dict[str, _Continuation] = field(default_factory=dict, init=False, repr=False)
     _lock: Lock = field(default_factory=Lock, init=False, repr=False)
 
     def choose(self, observation: Mapping[str, Any]) -> PilotChoice:
         seat = observation.get("agentToAct")
         lease = None
         pending_cast = None
+        plan = None
         if isinstance(seat, str):
             with self._lock:
                 lease = self._leases.pop(seat, None)
                 pending_cast = self._pending_casts.pop(seat, None)
+                plan = self._continuations.pop(seat, None)
+        wake = None
+        if plan is not None:
+            result, reason = self._continue_plan(plan, observation)
+            if result is not None:
+                return result
+            wake = _continuation_wake(plan, observation, reason)
         if pending_cast is not None:
             now = _visible_checkpoint(observation, watch_opponents=True)
             followup = _ready_followup_cast(pending_cast, now, observation)
@@ -429,6 +582,26 @@ class DelegatedAutopassPilot:
                 )
 
         choice = self.strategic_pilot.choose(observation)
+        if wake is not None:
+            if isinstance(choice, ArgentumActionChoice):
+                choice = ArgentumActionChoice(
+                    action_id=choice.action_id, params=choice.params,
+                    metadata={**dict(choice.metadata), "continuationWake": wake},
+                )
+            elif isinstance(choice, ArgentumDecisionChoice):
+                choice = ArgentumDecisionChoice(
+                    response=choice.response,
+                    metadata={**dict(choice.metadata), "continuationWake": wake},
+                )
+        continuation = choice.metadata.get("continuation") if isinstance(choice, ArgentumActionChoice) else None
+        if continuation is not None:
+            accepted, reason = self._install_continuation(choice, observation, continuation)
+            if not accepted:
+                return ArgentumActionChoice(
+                    action_id=choice.action_id, params=choice.params,
+                    metadata={**dict(choice.metadata), "continuationRejected": reason},
+                )
+            return choice
         then_cast = choice.metadata.get("thenCast") if isinstance(choice, ArgentumActionChoice) else None
         if then_cast is not None:
             current = _visible_checkpoint(observation, watch_opponents=True)
@@ -524,10 +697,223 @@ class DelegatedAutopassPilot:
             )
         return choice
 
+    def _install_continuation(
+        self, choice: ArgentumActionChoice, observation: Mapping[str, Any],
+        directive: Any,
+    ) -> tuple[bool, str]:
+        if not self.allow_declarative_continuation:
+            return False, "component-disabled"
+        now = _visible_checkpoint(observation, watch_opponents=True)
+        legal = observation.get("legalActions")
+        selected = next((item for item in legal if isinstance(item, Mapping)
+                         and item.get("actionId") == choice.action_id), None) if isinstance(legal, list) else None
+        if (now is None or not isinstance(selected, Mapping) or choice.params != {}
+            or not isinstance(directive, Mapping) or set(directive) != {"reason", "steps"}
+            or not isinstance(directive.get("reason"), str) or not directive["reason"].strip()):
+            return False, "invalid-current-choice-or-view"
+        steps = directive.get("steps")
+        if not isinstance(steps, list) or not 1 <= len(steps) <= 4:
+            return False, "invalid-step-count"
+        kinds = []
+        for step in steps:
+            if not isinstance(step, Mapping):
+                return False, "malformed-step"
+            kind = step.get("type")
+            if kind == "wait":
+                if (set(step) != {"type", "until", "maxPasses"}
+                    or step.get("until") not in {"phase_end", "next_own_main"}
+                    or type(step.get("maxPasses")) is not int
+                    or not 1 <= step["maxPasses"] <= min(self.max_passes, 16)):
+                    return False, "invalid-wait"
+            elif kind in {"playLand", "cast"}:
+                when = step.get("when")
+                if (set(step) != {"type", "cardId", "when", "params"}
+                    or not isinstance(step.get("cardId"), str) or not step["cardId"]
+                    or not isinstance(when, Mapping) or "stackEmpty" not in when
+                    or set(when) - {"phase", "step", "stackEmpty"}
+                    or any(not isinstance(when[key], str) or not when[key]
+                           for key in ("phase", "step") if key in when)
+                    or ("stackEmpty" in when and type(when["stackEmpty"]) is not bool)
+                    or ("phase" in when and when["phase"] not in _NATIVE_PHASES)
+                    or ("step" in when and when["step"] not in _NATIVE_STEPS)
+                    or step.get("params") != {}):
+                    return False, "invalid-action-step"
+                visible = now["hand"] if kind == "playLand" else (
+                    now["hand"] + (_own_command_zone(now) or []))
+                if step["cardId"] not in visible:
+                    return False, "card-not-currently-visible"
+            else:
+                return False, "unknown-step"
+            kinds.append(kind)
+        current_kind = selected.get("kind")
+        if (current_kind == "PlayLand"
+            and kinds not in (["cast"], ["cast", "wait"])
+            or current_kind == "PassPriority"
+            and kinds not in (["wait"], ["wait", "playLand"],
+                              ["wait", "playLand", "cast"],
+                              ["wait", "playLand", "cast", "wait"])
+            or current_kind not in {"PlayLand", "PassPriority"}):
+            return False, "unsupported-step-order"
+        if (selected.get("affordable") is not True
+            or selected.get("isAffordable") is not True
+            or selected.get("actionType") != current_kind
+            or not isinstance(selected.get("action"), Mapping)
+            or selected["action"].get("playerId") != now["seat"]):
+            return False, "uncertified-native-choice"
+        if current_kind == "PlayLand":
+            land_id = selected["action"].get("cardId")
+            if (not isinstance(land_id, str) or land_id not in now["hand"]
+                or land_id == steps[0]["cardId"] or now["active"] != now["seat"]
+                or now["stack"] or selected.get("parameterSpec") != {"allowedFields": {}}
+                or selected["action"] != {
+                    "type": "PlayLand", "playerId": now["seat"], "cardId": land_id,
+                    "asBackFace": False,
+                }):
+                return False, "invalid-land-transition-start"
+        else:
+            if (_pass_and_mana_only(observation) is not selected
+                or any(value for key, value in now["mana"].items() if key != "restrictedMana")
+                or now["mana"].get("restrictedMana")):
+                return False, "unsafe-priority-start"
+            land_id = None
+        plan_id = hashlib.sha256(json.dumps(
+            [now["seat"], now["turn"], now["log"], directive], sort_keys=True,
+        ).encode()).hexdigest()[:24]
+        plan = _Continuation(
+            steps=tuple(deepcopy(dict(step)) for step in steps), index=0,
+            reason=directive["reason"], plan_id=plan_id, before=deepcopy(now),
+            last_action=current_kind, last_card_id=land_id,
+        )
+        if current_kind == "PassPriority":
+            step = steps[0]
+            plan.lease = _Lease(
+                start=deepcopy(now), previous=deepcopy(now), until=step["until"],
+                reason=directive["reason"], lease_id=plan_id,
+                watch_opponents=True, max_passes=step["maxPasses"],
+            )
+        with self._lock:
+            self._continuations[now["seat"]] = plan
+        return True, "accepted"
+
+    def _continue_plan(
+        self, plan: _Continuation, observation: Mapping[str, Any],
+    ) -> tuple[PilotChoice | None, str]:
+        now = _visible_checkpoint(observation, watch_opponents=True)
+        if (now is None or observation.get("pendingDecision") is not None
+            or observation.get("terminated") is not False):
+            return None, "decision-or-invalid-view"
+        if plan.lease is not None:
+            lease = plan.lease
+            boundary = (
+                lease.until == "phase_end"
+                and (now["turn"], now["phase"]) != (lease.start["turn"], lease.start["phase"])
+            ) or (
+                lease.until == "next_own_main" and now["active"] == now["seat"]
+                and now["step"] == "PRECOMBAT_MAIN"
+                and (now["turn"] > lease.start["turn"]
+                     or lease.start["step"] != "PRECOMBAT_MAIN")
+            )
+            if not boundary:
+                if not self._continues(lease, now, observation):
+                    return None, "wait-state-or-menu-changed"
+                passed = _pass_and_mana_only(observation)
+                if passed is None:
+                    return None, "wait-menu-changed"
+                lease.previous = deepcopy(now)
+                lease.passes += 1
+                with self._lock:
+                    self._continuations[now["seat"]] = plan
+                return ArgentumActionChoice(
+                    action_id=passed["actionId"],
+                    metadata={"declarativeContinuation": {
+                        "planId": plan.plan_id, "step": plan.index, "type": "wait",
+                        "ordinal": lease.passes,
+                    }},
+                ), "continued"
+            if not self._continues(
+                lease, now, observation, ignore_boundary=True, require_menu=False,
+            ):
+                return None, "wait-changed-at-boundary"
+            plan.lease = None
+            plan.index += 1
+            if plan.index >= len(plan.steps):
+                return None, "boundary-reached"
+        elif plan.last_action == "PlayLand":
+            step = plan.steps[plan.index]
+            if step["type"] != "cast":
+                return None, "unexpected-land-continuation"
+            pending = _PendingCast(
+                before=plan.before, land_id=plan.last_card_id or "",
+                cast_id=step["cardId"], reason=plan.reason,
+                guarded_template=True,
+                cast_zone=("Command" if step["cardId"] not in plan.before["hand"] else "Hand"),
+            )
+            offered = _ready_followup_cast(pending, now, observation)
+            if offered is None or not _condition_matches(step["when"], now):
+                return None, "land-transition-or-cast-offer-changed"
+            if plan.index + 1 < len(plan.steps):
+                plan.before = deepcopy(now)
+                plan.last_action = "CastSpell"
+                plan.last_card_id = step["cardId"]
+                plan.index += 1
+                with self._lock:
+                    self._continuations[now["seat"]] = plan
+            return ArgentumActionChoice(
+                action_id=offered["actionId"],
+                metadata={"declarativeContinuation": {
+                    "planId": plan.plan_id,
+                    "step": plan.index - 1 if plan.last_action == "CastSpell" else plan.index,
+                    "type": "cast",
+                    "cardId": step["cardId"],
+                }},
+            ), "completed"
+        elif plan.last_action == "CastSpell":
+            step = plan.steps[plan.index]
+            if step["type"] != "wait":
+                return None, "unexpected-cast-continuation"
+            passed = _post_cast_wait_ready(plan, now, observation)
+            if passed is None:
+                return None, "cast-transition-or-pass-menu-changed"
+            lease = _Lease(
+                start=deepcopy(now), previous=deepcopy(now), until=step["until"],
+                reason=plan.reason, lease_id=plan.plan_id,
+                watch_opponents=True, max_passes=step["maxPasses"],
+            )
+            plan.lease = lease
+            with self._lock:
+                self._continuations[now["seat"]] = plan
+            return ArgentumActionChoice(
+                action_id=passed["actionId"],
+                metadata={"declarativeContinuation": {
+                    "planId": plan.plan_id, "step": plan.index, "type": "wait",
+                    "ordinal": 0,
+                }},
+            ), "continued"
+        step = plan.steps[plan.index]
+        offered = _fresh_named_action(observation, now, step)
+        if offered is None:
+            return None, "condition-or-native-offer-changed"
+        step_index = plan.index
+        if step["type"] == "playLand" and plan.index + 1 < len(plan.steps):
+            plan.before = deepcopy(now)
+            plan.last_action = "PlayLand"
+            plan.last_card_id = step["cardId"]
+            plan.index += 1
+            with self._lock:
+                self._continuations[now["seat"]] = plan
+        return ArgentumActionChoice(
+            action_id=offered["actionId"],
+            metadata={"declarativeContinuation": {
+                "planId": plan.plan_id, "step": step_index, "type": step["type"],
+                "cardId": step["cardId"],
+            }},
+        ), "continued"
+
     def _continues(
         self, lease: _Lease, now: dict[str, Any], observation: Mapping[str, Any],
+        *, ignore_boundary: bool = False, require_menu: bool = True,
     ) -> bool:
-        if lease.passes >= self.max_passes:
+        if lease.passes >= min(self.max_passes, lease.max_passes):
             return False
         if lease.deferred_abilities is not None:
             if (
@@ -536,7 +922,7 @@ class DelegatedAutopassPilot:
                 or _nonmana_ability_menu_digest(observation) != lease.deferred_menu_digest
             ):
                 return False
-        elif _pass_and_mana_only(observation) is None:
+        elif require_menu and _pass_and_mana_only(observation) is None:
             return False
         start, previous = lease.start, lease.previous
         if (
@@ -545,9 +931,9 @@ class DelegatedAutopassPilot:
             or now["playerCount"] != start["playerCount"]
         ):
             return False
-        if lease.until == "phase_end" and (now["turn"], now["phase"]) != (start["turn"], start["phase"]):
+        if not ignore_boundary and lease.until == "phase_end" and (now["turn"], now["phase"]) != (start["turn"], start["phase"]):
             return False
-        if lease.until == "next_own_main" and (
+        if not ignore_boundary and lease.until == "next_own_main" and (
             now["active"] == now["seat"] and now["step"] == "PRECOMBAT_MAIN"
             and (now["turn"] > start["turn"] or start["step"] != "PRECOMBAT_MAIN")
         ):

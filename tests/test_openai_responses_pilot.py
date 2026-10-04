@@ -211,6 +211,46 @@ class OpenAIResponsesPilotTests(unittest.TestCase):
         self.assertIn("hand or command zone", instructions)
         self.assertIn("Never guess a payment or target", instructions)
 
+    def test_declarative_continuation_is_versioned_and_rejects_bad_steps(self):
+        obs = action_observation()
+        obs["legalActions"][0]["kind"] = "PlayLand"
+        for action in obs["legalActions"]:
+            action["parameterSpec"] = {"allowedFields": {}}
+        step = {"type": "cast", "cardId": "hand-2",
+                "when": {"phase": "PRECOMBAT_MAIN", "stackEmpty": True},
+                "params": {}}
+        output = {"channel": "action", "semanticId": "argentum-action-v1:pass",
+                  "params": {}, "continuation": {
+                      "reason": "Play then cast", "steps": [step],
+                  }}
+        client = FakeClient(FakeResponse(json.dumps(output)))
+        pilot = OpenAIResponsesPilot(client=client, model="gpt-test",
+                                     allow_declarative_continuation=True)
+        self.assertEqual(pilot.choose(obs).metadata["continuation"]["steps"], [step])
+        self.assertIn("continuation", client.responses.calls[0]["text"]["format"]
+                      ["schema"]["properties"])
+        with self.assertRaises(OpenAIResponsesPilotError):
+            OpenAIResponsesPilot(client=FakeClient(FakeResponse(json.dumps(output))),
+                                 model="gpt-test").choose(obs)
+        for bad in (
+            {**step, "params": {"targets": ["other"]}},
+            {**step, "when": {}},
+            {**step, "when": {"stackEmpty": "true"}},
+            {**step, "when": {"phase": "MAGIC_PHASE"}},
+            {**step, "cardId": ""},
+            {**step, "extra": True},
+            {"type": "python", "code": "pass"},
+        ):
+            with self.subTest(bad=bad):
+                malformed = {**output, "continuation": {
+                    "reason": "Play then cast", "steps": [bad],
+                }}
+                with self.assertRaises(OpenAIResponsesPilotError):
+                    OpenAIResponsesPilot(
+                        client=FakeClient(FakeResponse(json.dumps(malformed))),
+                        model="gpt-test", allow_declarative_continuation=True,
+                    ).choose(obs)
+
     def test_native_action_schema_exposes_delegation_only_for_opt_in(self):
         obs = action_observation()
         for action in obs["legalActions"]:

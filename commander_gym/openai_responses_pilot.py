@@ -29,6 +29,7 @@ from typing import Any, Mapping
 from .pilot import ArgentumActionChoice, ArgentumDecisionChoice, PilotChoice
 from .openai_run_budget import OpenAIRunBudget, OpenAIRunBudgetError
 from .observation_projection import compact_seat_observation
+from .delegated_autopass import _NATIVE_PHASES, _NATIVE_STEPS
 
 MODEL_IO_SCHEMA_VERSION = 1
 
@@ -400,6 +401,7 @@ def _native_action_format(
     observation: Mapping[str, Any], *, allow_priority_delegation: bool = False,
     allow_named_deferrals: bool = False,
     require_nonempty_named_deferrals: bool = False,
+    allow_declarative_continuation: bool = False,
 ) -> dict[str, Any] | None:
     """Constrain each semantic action to its own Argentum-authored parameter fields."""
 
@@ -458,6 +460,34 @@ def _native_action_format(
             "properties": {"cardId": {"type": "string"}, "reason": {"type": "string"}},
             "required": ["cardId", "reason"],
             "additionalProperties": False,
+        }
+    if allow_declarative_continuation:
+        root_properties["continuation"] = {
+            "type": "object", "properties": {
+                "reason": {"type": "string"},
+                "steps": {"type": "array", "minItems": 1, "maxItems": 4,
+                          "items": {"anyOf": [
+                              {"type": "object", "properties": {
+                                  "type": {"type": "string", "const": "wait"},
+                                  "until": {"type": "string", "enum": ["phase_end", "next_own_main"]},
+                                  "maxPasses": {"type": "integer", "minimum": 1, "maximum": 16},
+                              }, "required": ["type", "until", "maxPasses"],
+                                  "additionalProperties": False},
+                              {"type": "object", "properties": {
+                                  "type": {"type": "string", "enum": ["playLand", "cast"]},
+                                  "cardId": {"type": "string"},
+                                  "when": {"type": "object", "properties": {
+                                      "phase": {"type": "string", "enum": sorted(_NATIVE_PHASES)},
+                                      "step": {"type": "string", "enum": sorted(_NATIVE_STEPS)},
+                                      "stackEmpty": {"type": "boolean"},
+                                  }, "required": ["stackEmpty"],
+                                     "additionalProperties": False},
+                                  "params": {"type": "object", "properties": {},
+                                             "additionalProperties": False},
+                              }, "required": ["type", "cardId", "when", "params"],
+                                  "additionalProperties": False},
+                          ]}},
+            }, "required": ["reason", "steps"], "additionalProperties": False,
         }
     return {
         "type": "json_schema",
@@ -722,6 +752,7 @@ class OpenAIResponsesPilot:
     require_nonempty_named_deferrals: bool = False
     compact_model_observation: bool = False
     guarded_then_cast_templates: bool = False
+    allow_declarative_continuation: bool = False
     name: str = "openai-responses"
     version: str = "1"
 
@@ -753,6 +784,7 @@ class OpenAIResponsesPilot:
             observation, allow_priority_delegation=self.allow_priority_delegation,
             allow_named_deferrals=self.allow_named_deferrals,
             require_nonempty_named_deferrals=self.require_nonempty_named_deferrals,
+            allow_declarative_continuation=self.allow_declarative_continuation,
         )
         model_observation = _without_live_routing(observation)
         if self.compact_model_observation:
@@ -856,6 +888,23 @@ class OpenAIResponsesPilot:
                     "required decisions, or changed own hand/board, life, or mana wake "
                     "you. Omit delegation when floating mana or unreviewed events matter."
                 )
+        if self.allow_declarative_continuation:
+            request["instructions"] += (
+                "\n\nYou may attach one declarative continuation to a chosen PlayLand "
+                "or PassPriority. For PlayLand, choose one exact cast cardId. "
+                "For PassPriority, choose a bounded wait, optionally followed "
+                "by one exact land cardId and one exact cast cardId. An optional "
+                "final bounded wait after the cast applies only if you regain "
+                "priority over that sole exact spell before it resolves. Each future "
+                "action has type, cardId, when, and empty params; when may name "
+                "the expected phase, step, and stackEmpty. The cards must "
+                "already be visible in your hand or command zone. Gym checks "
+                "each fresh native offer and wakes you on any changed state, "
+                "decision, stack object, or unknown event. A wait may pass "
+                "only when the legal menu has PassPriority and mana abilities. "
+                "Never plan targets, modes, X, payment, or an unreviewed spell. "
+                "Omit continuation when an intervening choice matters."
+            )
         if isinstance(pending, Mapping) and pending.get("requiresStructuredResponse") is True:
             request["instructions"] += (
                 "\n\nFor this structured decision, copy the exact responseType from "
@@ -1004,6 +1053,60 @@ class OpenAIResponsesPilot:
             choice = self._action_choice(action_decision, observation, metadata)
             directive = decision.get("priorityDelegation")
             then_cast = decision.get("thenCast")
+            continuation = decision.get("continuation")
+            if continuation is not None:
+                if not self.allow_declarative_continuation or directive is not None or then_cast is not None:
+                    raise OpenAIResponsesPilotError("continuation requires the versioned Pilot alone")
+                legal = observation.get("legalActions")
+                selected = next((item for item in legal if isinstance(item, Mapping)
+                                 and item.get("actionId") == choice.action_id), None) if isinstance(legal, list) else None
+                if not isinstance(continuation, Mapping) or set(continuation) != {"reason", "steps"}:
+                    raise OpenAIResponsesPilotError("continuation requires reason and steps")
+                steps = continuation.get("steps")
+                if (not isinstance(continuation.get("reason"), str)
+                    or not continuation["reason"].strip()
+                    or not isinstance(steps, list) or not 1 <= len(steps) <= 4
+                    or not isinstance(selected, Mapping) or choice.params != {}):
+                    raise OpenAIResponsesPilotError("continuation has invalid bounds or current choice")
+                kinds = []
+                for step in steps:
+                    if not isinstance(step, Mapping):
+                        raise OpenAIResponsesPilotError("continuation step must be an object")
+                    kind = step.get("type")
+                    if kind == "wait":
+                        if (set(step) != {"type", "until", "maxPasses"}
+                            or step.get("until") not in {"phase_end", "next_own_main"}
+                            or type(step.get("maxPasses")) is not int
+                            or not 1 <= step["maxPasses"] <= 16):
+                            raise OpenAIResponsesPilotError("continuation wait must be bounded")
+                    elif kind in {"playLand", "cast"}:
+                        when = step.get("when")
+                        if (set(step) != {"type", "cardId", "when", "params"}
+                            or not isinstance(step.get("cardId"), str) or not step["cardId"]
+                            or not isinstance(when, Mapping) or "stackEmpty" not in when
+                            or set(when) - {"phase", "step", "stackEmpty"}
+                            or any(not isinstance(when[key], str) or not when[key]
+                                   for key in ("phase", "step") if key in when)
+                            or ("stackEmpty" in when and type(when["stackEmpty"]) is not bool)
+                            or ("phase" in when and when["phase"] not in _NATIVE_PHASES)
+                            or ("step" in when and when["step"] not in _NATIVE_STEPS)
+                            or step.get("params") != {}):
+                            raise OpenAIResponsesPilotError("continuation action must be exact and guarded")
+                    else:
+                        raise OpenAIResponsesPilotError("unsupported continuation step")
+                    kinds.append(kind)
+                if (selected.get("kind") == "PlayLand"
+                    and kinds not in (["cast"], ["cast", "wait"])
+                    or selected.get("kind") == "PassPriority"
+                    and kinds not in (["wait"], ["wait", "playLand"],
+                                      ["wait", "playLand", "cast"],
+                                      ["wait", "playLand", "cast", "wait"])
+                    or selected.get("kind") not in {"PlayLand", "PassPriority"}):
+                    raise OpenAIResponsesPilotError("unsupported continuation order")
+                return ArgentumActionChoice(
+                    action_id=choice.action_id, params=choice.params,
+                    metadata={**dict(choice.metadata), "continuation": dict(continuation)},
+                )
             if then_cast is not None:
                 if not self.allow_named_deferrals or directive is not None:
                     raise OpenAIResponsesPilotError("thenCast requires the versioned action-sequence Pilot")
@@ -1059,7 +1162,7 @@ class OpenAIResponsesPilot:
                 metadata={**dict(choice.metadata), "priorityDelegation": dict(directive)},
             )
         if channel == "decision":
-            if "priorityDelegation" in decision or "thenCast" in decision:
+            if "priorityDelegation" in decision or "thenCast" in decision or "continuation" in decision:
                 raise OpenAIResponsesPilotError(
                     "priority delegation or action sequence cannot accompany a structured decision"
                 )

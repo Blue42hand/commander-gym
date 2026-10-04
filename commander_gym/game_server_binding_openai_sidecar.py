@@ -130,6 +130,12 @@ BUILTIN_FORGE_GUARDED_THEN_CAST_COMPONENT_REF = ArtifactRef(
     version="5",
     digest="sha256:9527c8a9234e9573711e5f4c03d9fe9d92b5226eb04d54322cab7a928487cf9a",
 )
+BUILTIN_FORGE_DECLARATIVE_CONTINUATION_COMPONENT_REF = ArtifactRef(
+    kind="provider",
+    artifact_id="openai-responses-forge-conditional-wait",
+    version="6",
+    digest="sha256:425ea6c84b91cd8a1ffae495c79214acaf2d7518f6a0f9db714c25ee634391e0",
+)
 
 
 def _component_key(ref: ArtifactRef) -> tuple[str, str, str, str | None]:
@@ -407,6 +413,30 @@ class OpenAIBindingPilotComponentResolver:
                     name="forge-conditional-wait", version="4",
                     allow_named_deferrals=True,
                     guarded_then_cast_templates=True,
+                )
+            )
+        if (
+            spec.role == "frontier_escalation"
+            and key == _component_key(BUILTIN_FORGE_DECLARATIVE_CONTINUATION_COMPONENT_REF)
+        ):
+            return ArtificialPlayerSubsystem(
+                DelegatedAutopassPilot(
+                    OpenAIResponsesPilot(
+                        client=self.client,
+                        model=self.config.model,
+                        max_attempts=self.config.max_attempts,
+                        budget=self.budget,
+                        allow_priority_delegation=True,
+                        allow_named_deferrals=True,
+                        require_nonempty_named_deferrals=True,
+                        compact_model_observation=True,
+                        guarded_then_cast_templates=True,
+                        allow_declarative_continuation=True,
+                    ),
+                    name="forge-conditional-wait", version="5",
+                    allow_named_deferrals=True,
+                    guarded_then_cast_templates=True,
+                    allow_declarative_continuation=True,
                 )
             )
         raise PilotContractError(

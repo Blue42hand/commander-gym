@@ -63,6 +63,261 @@ class ScriptedPilot:
 
 
 class DelegatedAutopassTests(unittest.TestCase):
+    def test_declarative_wait_land_cast_uses_fresh_native_offers(self):
+        class PlannedPilot:
+            name, version = "planned", "1"
+            calls = 0
+
+            def choose(self, observation):
+                self.calls += 1
+                if self.calls == 1:
+                    return ArgentumActionChoice(0, metadata={"continuation": {
+                        "reason": "Wait through upkeep, then play land and cast",
+                        "steps": [
+                            {"type": "wait", "until": "phase_end", "maxPasses": 3},
+                            {"type": "playLand", "cardId": "h1",
+                             "when": {"phase": "PRECOMBAT_MAIN", "stackEmpty": True},
+                             "params": {}},
+                            {"type": "cast", "cardId": "h2",
+                             "when": {"phase": "PRECOMBAT_MAIN", "stackEmpty": True},
+                             "params": {}},
+                            {"type": "wait", "until": "phase_end", "maxPasses": 2},
+                        ],
+                    }})
+                return ArgentumActionChoice(0)
+
+        passed = {
+            "actionId": 0, "kind": "PassPriority", "actionType": "PassPriority",
+            "affordable": True, "isAffordable": True,
+            "action": {"type": "PassPriority", "playerId": "p1"},
+        }
+        land = {
+            "actionId": 5, "kind": "PlayLand", "actionType": "PlayLand",
+            "affordable": True, "isAffordable": True, "isDecisionOption": False,
+            "parameterSpec": {"allowedFields": {}},
+            "action": {"type": "PlayLand", "playerId": "p1", "cardId": "h1",
+                       "asBackFace": False},
+        }
+        cast = {
+            "actionId": 9, "kind": "CastSpell", "actionType": "CastSpell",
+            "affordable": True, "isAffordable": True, "isDecisionOption": False,
+            "sourceZone": None, "hasXCost": False, "additionalCostInfo": None,
+            "requiresTargets": False, "validTargets": None,
+            "requiresDamageDistribution": False, "requiresManaColorChoice": False,
+            "modalEnumeration": None, "maxAffordableX": None,
+            "hasDelve": False, "hasConvoke": False, "hasHarmonize": False,
+            "hasTapForGeneric": False,
+            "parameterSpec": {"allowedFields": {
+                "targets": "ENTITY_ID_ARRAY", "xValue": "INTEGER",
+            }},
+            "action": {
+                "type": "CastSpell", "playerId": "p1", "cardId": "h2",
+                "additionalCostPayment": None, "alternativeCostType": None,
+                "alternativePayment": None, "casualtyCreature": None,
+                "chosenModes": [], "targets": [], "modeTargetsOrdered": [],
+                "splicedCardIds": [], "conspiredCreatures": [],
+                "damageDistribution": None, "declaredCostSlot": None,
+                "faceIndex": None, "giftRecipient": None,
+                "graveyardCastRider": None, "graveyardLifeCost": 0,
+                "modeDamageDistribution": {}, "wasWaterbendPaid": False,
+                "xValue": None, "paymentStrategy": {"type": "AutoPay"},
+                "useAlternativeCost": False, "useWithoutPayingManaCost": False,
+                "castFaceDown": False,
+            },
+        }
+        start = observation(step="UPKEEP", legal=[passed])
+        start["state"]["currentPhase"] = "BEGINNING"
+        start["state"]["zones"][0]["cardIds"] = ["h1", "h2"]
+        main = copy.deepcopy(start)
+        main["state"]["currentPhase"] = "PRECOMBAT_MAIN"
+        main["state"]["currentStep"] = "PRECOMBAT_MAIN"
+        main["legalActions"] = [land]
+        after_land = copy.deepcopy(main)
+        after_land["state"]["zones"][0]["cardIds"] = ["h2"]
+        after_land["state"]["zones"][1]["cardIds"] = ["b1", "h1"]
+        after_land["state"]["cards"]["h1"] = {"name": "Played Land", "tapped": False}
+        after_land["state"]["gameLog"] = [{"type": "permanentEntered"}]
+        after_land["legalActions"] = [cast]
+
+        strategic = PlannedPilot()
+        pilot = DelegatedAutopassPilot(
+            strategic, allow_named_deferrals=True,
+            allow_declarative_continuation=True,
+        )
+        self.assertEqual(pilot.choose(start).action_id, 0)
+        self.assertEqual(pilot.choose(copy.deepcopy(start)).action_id, 0)
+        self.assertEqual(pilot.choose(main).action_id, 5)
+        chosen = pilot.choose(after_land)
+        self.assertEqual(chosen.action_id, 9)
+        self.assertEqual(chosen.metadata["declarativeContinuation"]["type"], "cast")
+        self.assertEqual(strategic.calls, 1)
+        after_cast = copy.deepcopy(after_land)
+        after_cast["state"]["zones"][0]["cardIds"] = []
+        after_cast["state"]["zones"][-1]["cardIds"] = ["h2"]
+        after_cast["state"]["gameLog"].append({"type": "spellCast"})
+        after_cast["legalActions"] = [passed]
+        self.assertEqual(pilot.choose(after_cast).action_id, 0)
+        self.assertEqual(pilot.choose(after_cast).action_id, 0)
+        finished = copy.deepcopy(after_cast)
+        finished["state"]["currentPhase"] = "POSTCOMBAT_MAIN"
+        finished["state"]["currentStep"] = "POSTCOMBAT_MAIN"
+        self.assertEqual(pilot.choose(finished).metadata["continuationWake"]["reason"],
+                         "boundary-reached")
+        self.assertEqual(strategic.calls, 2)
+
+        for changed in ("resolved", "opponent_spell", "tapped_mana", "decision",
+                        "nonmana_option", "unknown_event"):
+            with self.subTest(after_cast=changed):
+                strategic = PlannedPilot()
+                pilot = DelegatedAutopassPilot(
+                    strategic, allow_named_deferrals=True,
+                    allow_declarative_continuation=True,
+                )
+                pilot.choose(start)
+                pilot.choose(main)
+                pilot.choose(after_land)
+                interrupted = copy.deepcopy(after_cast)
+                if changed == "resolved":
+                    interrupted["state"]["zones"][-1]["cardIds"] = []
+                    interrupted["state"]["gameLog"].append({"type": "spellResolved"})
+                elif changed == "opponent_spell":
+                    interrupted["state"]["zones"][-1]["cardIds"].append("opponent-spell")
+                elif changed == "tapped_mana":
+                    interrupted["state"]["cards"]["b1"]["tapped"] = True
+                elif changed == "decision":
+                    interrupted["pendingDecision"] = {"decisionId": "d1"}
+                elif changed == "nonmana_option":
+                    interrupted["legalActions"].append({
+                        "actionId": 3, "kind": "CastSpell", "affordable": True,
+                        "action": {"cardId": "h3"},
+                    })
+                else:
+                    interrupted["state"]["gameLog"][-1] = {"type": "unknownEvent"}
+                choice = pilot.choose(interrupted)
+                self.assertEqual(strategic.calls, 2)
+                self.assertEqual(choice.metadata["continuationWake"]["reason"],
+                                 ("decision-or-invalid-view" if changed == "decision"
+                                  else "cast-transition-or-pass-menu-changed"))
+
+        for changed in ("unknown_event", "stack", "decision", "mana", "ambiguous_land",
+                        "stale_land", "cast_target", "duplicate_cast"):
+            with self.subTest(changed=changed):
+                strategic = PlannedPilot()
+                pilot = DelegatedAutopassPilot(
+                    strategic, allow_named_deferrals=True,
+                    allow_declarative_continuation=True,
+                )
+                pilot.choose(start)
+                interrupted = copy.deepcopy(main)
+                if changed == "unknown_event":
+                    interrupted["state"]["gameLog"] = [{"type": "unknownEvent"}]
+                elif changed == "stack":
+                    interrupted["state"]["zones"][-1]["cardIds"] = ["opponent-spell"]
+                elif changed == "decision":
+                    interrupted["pendingDecision"] = {"decisionId": "d1"}
+                elif changed == "mana":
+                    interrupted["state"]["players"][0]["manaPool"]["red"] = 1
+                elif changed == "ambiguous_land":
+                    interrupted["legalActions"].append({**land, "actionId": 6})
+                elif changed == "stale_land":
+                    interrupted["state"]["zones"][0]["cardIds"] = ["h2"]
+                else:
+                    interrupted = copy.deepcopy(after_land)
+                    if changed == "cast_target":
+                        interrupted["legalActions"][0]["requiresTargets"] = True
+                    else:
+                        interrupted["legalActions"].append({**cast, "actionId": 10})
+                    pilot.choose(main)
+                chosen = pilot.choose(interrupted)
+                self.assertEqual(strategic.calls, 2)
+                self.assertIn("continuationWake", chosen.metadata)
+                self.assertIn("maskedState", chosen.metadata["continuationWake"])
+                self.assertEqual(len(chosen.metadata["continuationWake"]["intent"]["steps"]), 4)
+                if changed == "unknown_event":
+                    self.assertEqual(chosen.metadata["continuationWake"]["maskedEvents"],
+                                     [{"type": "unknownEvent"}])
+                    self.assertIn("log", chosen.metadata["continuationWake"]["changedVisibleFields"])
+
+    def test_declarative_wait_expires_on_repeated_callback(self):
+        class PlannedPilot:
+            name, version = "planned", "1"
+            calls = 0
+
+            def choose(self, observation):
+                self.calls += 1
+                return ArgentumActionChoice(0, metadata={"continuation": {
+                    "reason": "Short wait", "steps": [
+                        {"type": "wait", "until": "phase_end", "maxPasses": 1},
+                    ],
+                }}) if self.calls == 1 else ArgentumActionChoice(0)
+
+        start = observation(legal=[{
+            "actionId": 0, "kind": "PassPriority", "actionType": "PassPriority",
+            "affordable": True, "isAffordable": True,
+            "action": {"type": "PassPriority", "playerId": "p1"},
+        }])
+        strategic = PlannedPilot()
+        pilot = DelegatedAutopassPilot(strategic, allow_declarative_continuation=True)
+        pilot.choose(start)
+        self.assertEqual(pilot.choose(start).metadata["declarativeContinuation"]["ordinal"], 1)
+        self.assertEqual(pilot.choose(start).metadata["continuationWake"]["reason"],
+                         "wait-state-or-menu-changed")
+        self.assertEqual(strategic.calls, 2)
+
+    def test_declarative_malformed_or_unapproved_plan_does_not_arm(self):
+        class InvalidPilot:
+            name, version = "invalid", "1"
+            calls = 0
+
+            def __init__(self, directive):
+                self.directive = directive
+
+            def choose(self, observation):
+                self.calls += 1
+                return ArgentumActionChoice(0, metadata={"continuation": self.directive}) \
+                    if self.calls == 1 else ArgentumActionChoice(0)
+
+        start = observation(legal=[{
+            "actionId": 0, "kind": "PassPriority", "actionType": "PassPriority",
+            "affordable": True, "isAffordable": True,
+            "action": {"type": "PassPriority", "playerId": "p1"},
+        }])
+        valid = {"reason": "Yield to main", "steps": [
+            {"type": "wait", "until": "phase_end", "maxPasses": 2},
+        ]}
+        for directive in (
+            {**valid, "steps": [{"type": "wait", "until": "phase_end",
+                                  "maxPasses": True}]},
+            {**valid, "steps": [{"type": "wait", "until": "phase_end",
+                                  "maxPasses": 2, "code": "pass"}]},
+            {**valid, "steps": [{"type": "cast", "cardId": "h1",
+                                  "when": {"phase": "PRECOMBAT_MAIN"}, "params": {}}]},
+            {**valid, "steps": valid["steps"] * 5},
+            {**valid, "reason": " "},
+        ):
+            with self.subTest(directive=directive):
+                strategic = InvalidPilot(directive)
+                pilot = DelegatedAutopassPilot(
+                    strategic, allow_declarative_continuation=True,
+                )
+                first = pilot.choose(start)
+                self.assertIn("continuationRejected", first.metadata)
+                self.assertEqual(pilot.choose(start).action_id, 0)
+                self.assertEqual(strategic.calls, 2)
+        strategic = InvalidPilot(valid)
+        legacy = DelegatedAutopassPilot(strategic)
+        self.assertEqual(legacy.choose(start).metadata["continuationRejected"],
+                         "component-disabled")
+        unsafe = copy.deepcopy(start)
+        unsafe["legalActions"].append({
+            "actionId": 1, "kind": "CastSpell", "affordable": True,
+            "action": {"playerId": "p1", "cardId": "h1"},
+        })
+        strategic = InvalidPilot(valid)
+        pilot = DelegatedAutopassPilot(strategic, allow_declarative_continuation=True)
+        self.assertEqual(pilot.choose(unsafe).metadata["continuationRejected"],
+                         "unsafe-priority-start")
+
     def test_guarded_then_cast_optional_native_template_and_abort_conditions(self):
         class LandPilot:
             name, version = "planned-land", "1"
