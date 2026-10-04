@@ -43,7 +43,8 @@ FATAL_EXTERNAL_ACTION_RE = re.compile(
     r"(?P<reason>.+?) — refusing server-side strategic fallback"
 )
 PAYMENT_REJECTION_RE = re.compile(
-    r"External AI payment rejected for seat \S+ in game (?P<game>\S+); same pilot is correcting"
+    r"External AI payment (?P<preflight>preflight )?rejected for seat \S+ "
+    r"in game (?P<game>\S+); same pilot is correcting"
 )
 
 
@@ -478,17 +479,27 @@ def _summarize(
 
     communication_errors: list[str] = []
     native_invalid_payment_attempts = 0
+    payment_preflight_rejections = 0
     payment_correction_fatal_rejections = 0
+    payment_correction_exhaustions = 0
+    payment_correction_provider_failures = 0
     if log_path is not None and log_path.exists():
         for line in log_path.read_text(errors="replace").splitlines():
             payment_match = PAYMENT_REJECTION_RE.search(line)
             if payment_match and payment_match["game"] in game_ids:
-                native_invalid_payment_attempts += 1
+                if payment_match["preflight"]:
+                    payment_preflight_rejections += 1
+                else:
+                    native_invalid_payment_attempts += 1
             fatal_match = FATAL_EXTERNAL_ACTION_RE.search(line)
-            if fatal_match and fatal_match["game"] in game_ids and re.search(
-                r"pay|mana source|insufficient mana", fatal_match["reason"], re.IGNORECASE,
-            ):
-                payment_correction_fatal_rejections += 1
+            if fatal_match and fatal_match["game"] in game_ids:
+                fatal_reason = fatal_match["reason"].lower()
+                if "payment correction attempt limit reached" in fatal_reason:
+                    payment_correction_exhaustions += 1
+                elif "payment correction provider failed" in fatal_reason:
+                    payment_correction_provider_failures += 1
+                elif re.search(r"pay|mana source|insufficient mana", fatal_reason):
+                    payment_correction_fatal_rejections += 1
             if ERROR_RE.search(line):
                 communication_errors.append(line[-1200:])
 
@@ -539,8 +550,11 @@ def _summarize(
         "providerRequests": provider_calls + retries,
         "validationRetries": retries,
         "nativeInvalidPaymentAttempts": native_invalid_payment_attempts,
+        "paymentPreflightRejections": payment_preflight_rejections,
         "paymentCorrectionCallbacks": payment_correction_callbacks,
         "paymentCorrectionFatalRejections": payment_correction_fatal_rejections,
+        "paymentCorrectionExhaustions": payment_correction_exhaustions,
+        "paymentCorrectionProviderFailures": payment_correction_provider_failures,
         "providerWallTimeMs": round(provider_wall_time_ms, 3),
         "maxProviderWallTimeMs": round(max_provider_wall_time_ms, 3),
         "inputTokens": input_tokens,

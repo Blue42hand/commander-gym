@@ -25,6 +25,7 @@ class TwoLunaDebugReportTests(unittest.TestCase):
             log = Path(directory) / "server.log"
             log.write_text(
                 "WARN External AI payment rejected for seat ai-a in game game-1; same pilot is correcting\n"
+                "WARN External AI payment preflight rejected for seat ai-a in game game-1; same pilot is correcting\n"
                 "WARN External AI payment rejected for seat ai-b in game other; same pilot is correcting\n"
             )
             summary = _summarize(
@@ -35,12 +36,25 @@ class TwoLunaDebugReportTests(unittest.TestCase):
                 max_turn=3, log_path=log, wall_time_seconds=1,
             )
             self.assertEqual(summary["nativeInvalidPaymentAttempts"], 1)
+            self.assertEqual(summary["paymentPreflightRejections"], 1)
             self.assertEqual(summary["paymentCorrectionCallbacks"], 1)
             self.assertEqual(summary["paymentCorrectionFatalRejections"], 0)
+            self.assertEqual(summary["paymentCorrectionExhaustions"], 0)
+            self.assertEqual(summary["paymentCorrectionProviderFailures"], 0)
             with log.open("a") as output:
                 output.write(
                     "ERROR External AI action failed for seat ai-a in game game-1: "
                     "Selected mana sources cannot pay this spell's cost "
+                    "— refusing server-side strategic fallback\n"
+                )
+                output.write(
+                    "ERROR External AI action failed for seat ai-a in game game-1: "
+                    "payment correction attempt limit reached after underpayment "
+                    "— refusing server-side strategic fallback\n"
+                )
+                output.write(
+                    "ERROR External AI action failed for seat ai-a in game game-1: "
+                    "payment correction provider failed "
                     "— refusing server-side strategic fallback\n"
                 )
             failed = _summarize(
@@ -48,6 +62,8 @@ class TwoLunaDebugReportTests(unittest.TestCase):
                 max_turn=3, log_path=log, wall_time_seconds=1,
             )
             self.assertEqual(failed["paymentCorrectionFatalRejections"], 1)
+            self.assertEqual(failed["paymentCorrectionExhaustions"], 1)
+            self.assertEqual(failed["paymentCorrectionProviderFailures"], 1)
 
     def test_fatal_action_watch_matches_active_game_only_after_complete_log_line(self):
         with tempfile.TemporaryDirectory() as directory:
