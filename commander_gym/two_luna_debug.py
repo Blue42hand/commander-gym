@@ -478,15 +478,17 @@ def _summarize(
 
     communication_errors: list[str] = []
     native_invalid_payment_attempts = 0
-    payment_correction_exhaustions = 0
+    payment_correction_fatal_rejections = 0
     if log_path is not None and log_path.exists():
         for line in log_path.read_text(errors="replace").splitlines():
             payment_match = PAYMENT_REJECTION_RE.search(line)
             if payment_match and payment_match["game"] in game_ids:
                 native_invalid_payment_attempts += 1
             fatal_match = FATAL_EXTERNAL_ACTION_RE.search(line)
-            if fatal_match and fatal_match["game"] in game_ids and "payment" in fatal_match["reason"].lower():
-                payment_correction_exhaustions += 1
+            if fatal_match and fatal_match["game"] in game_ids and re.search(
+                r"pay|mana source|insufficient mana", fatal_match["reason"], re.IGNORECASE,
+            ):
+                payment_correction_fatal_rejections += 1
             if ERROR_RE.search(line):
                 communication_errors.append(line[-1200:])
 
@@ -538,7 +540,7 @@ def _summarize(
         "validationRetries": retries,
         "nativeInvalidPaymentAttempts": native_invalid_payment_attempts,
         "paymentCorrectionCallbacks": payment_correction_callbacks,
-        "paymentCorrectionExhaustions": payment_correction_exhaustions,
+        "paymentCorrectionFatalRejections": payment_correction_fatal_rejections,
         "providerWallTimeMs": round(provider_wall_time_ms, 3),
         "maxProviderWallTimeMs": round(max_provider_wall_time_ms, 3),
         "inputTokens": input_tokens,
