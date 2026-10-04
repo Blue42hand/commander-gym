@@ -20,6 +20,53 @@ from commander_gym.two_luna_debug import (
 
 
 class TwoLunaDebugReportTests(unittest.TestCase):
+    def test_recovered_live_payment_rejection_cannot_qualify_a_completed_game(self):
+        records = [
+            {
+                "callback": "chooseAction", "playerId": seat,
+                "observation": {
+                    "agentToAct": seat, "perspectivePlayerId": seat,
+                    "knownDeck": {"cards": {"Mountain": 99}},
+                    "pendingDecision": None, "legalActions": [], "terminated": False,
+                },
+                "choice": {"channel": "action", "metadata": {
+                    "provider": "openai", "retryCount": 0,
+                    "routing": {"path": "strategic"},
+                }},
+            }
+            for seat in ("ai-a", "ai-b")
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / "server.log"
+
+            def summary():
+                return _summarize(
+                    records, completed=True, lobby_id="lobby", game_ids=["game-1"],
+                    max_turn=8, log_path=log, wall_time_seconds=1,
+                )
+
+            log.write_text(
+                "WARN External AI payment preflight rejected for seat ai-a in game game-1; "
+                "same pilot is correcting: underpayment\n"
+                "WARN External AI payment rejected for seat ai-z in game other; "
+                "same pilot is correcting: underpayment\n"
+            )
+            preflight_only = summary()
+            self.assertTrue(preflight_only["technicalQualified"])
+            self.assertEqual(preflight_only["paymentPreflightRejections"], 1)
+            self.assertEqual(preflight_only["nativeInvalidPaymentAttempts"], 0)
+
+            with log.open("a") as output:
+                output.write(
+                    "WARN External AI payment rejected for seat ai-a in game game-1; "
+                    "same pilot is correcting: underpayment\n"
+                )
+            live_rejected = summary()
+            self.assertFalse(live_rejected["technicalQualified"])
+            self.assertEqual(live_rejected["result"], "needs-debug")
+            self.assertEqual(live_rejected["nativeInvalidPaymentAttempts"], 1)
+            self.assertEqual(live_rejected["communicationErrors"], [])
+
     def test_payment_correction_counts_are_scoped_to_active_game(self):
         with tempfile.TemporaryDirectory() as directory:
             log = Path(directory) / "server.log"

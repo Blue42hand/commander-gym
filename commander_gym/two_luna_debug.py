@@ -523,6 +523,9 @@ def _summarize(
         and provenance_complete
         and provider_calls > 0
         and retries == 0
+        # A recovered live rejection is still an invalid native submission. A native
+        # preflight rejection was caught before submission and is counted separately.
+        and native_invalid_payment_attempts == 0
         and not communication_errors
         and routing_classification_errors == 0
         and not avoidable
