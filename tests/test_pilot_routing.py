@@ -119,6 +119,103 @@ class RoutingPilotTests(unittest.TestCase):
             with self.subTest(changed=changed):
                 self.assertIsNone(handler.choose(changed))
 
+    def test_all_unaffordable_pass_certifies_only_plain_unpayable_native_cycling(self):
+        passed = {
+            **pass_action(), "actionType": "PassPriority", "isAffordable": True,
+            "isManaAbility": False,
+            "action": {"type": "PassPriority", "playerId": "player-1"},
+        }
+        cycle = {
+            "actionId": 1, "semanticId": "native-cycle", "kind": "CycleCard",
+            "actionType": "CycleCard", "affordable": False, "isAffordable": False,
+            "isManaAbility": False, "isDecisionOption": False,
+            "hasXCost": False, "maxAffordableX": None, "manaCostString": "{2}",
+            "hasConvoke": False, "hasDelve": False, "hasHarmonize": False,
+            "hasTapForGeneric": False, "additionalCostInfo": None,
+            "sourceZone": None, "requiresTargets": False, "validTargets": None,
+            "requiresManaColorChoice": False,
+            "requiresDamageDistribution": False, "modalEnumeration": None,
+            "parameterSpec": {"allowedFields": {}},
+            "action": {"type": "CycleCard", "playerId": "player-1", "cardId": "hand-1",
+                       "paymentStrategy": {"type": "AutoPay"}, "xValue": None},
+        }
+        current = observation(passed)
+        current["state"] = {
+            "priorityPlayerId": "player-1",
+            "zones": [{"zoneId": {"ownerId": "player-1", "zoneType": "Hand"},
+                       "cardIds": ["hand-1"]}],
+        }
+        current["legalActions"] = [passed, cycle]
+        handler = AllUnaffordablePassHandler(version="2", allow_unaffordable_cycling=True)
+        self.assertIsNone(AllUnaffordablePassHandler().choose(current))
+        self.assertEqual(handler.choose(current).action_id, 0)
+        self.assertIsNone(StandingManaOnlyPassHandler(
+            ignore_unaffordable_abilities=True,
+        ).choose(current))
+        strategic = CountingPilot(error=AssertionError("unavailable cycling woke model"))
+        self.assertEqual(RoutingPilot(strategic, handlers=(handler,)).choose(current).action_id, 0)
+        self.assertEqual(strategic.calls, 0)
+
+        for field, value in (
+            ("affordable", True), ("affordable", None),
+            ("isAffordable", True), ("isAffordable", None),
+            ("isManaAbility", True), ("isDecisionOption", True),
+            ("hasXCost", True), ("maxAffordableX", 0),
+            ("hasDelve", True), ("hasConvoke", True),
+            ("hasHarmonize", True), ("hasTapForGeneric", True),
+            ("additionalCostInfo", {"kind": "discard"}),
+            ("sourceZone", "EXILE"), ("requiresTargets", True),
+            ("validTargets", ["target"]),
+            ("requiresManaColorChoice", True),
+            ("requiresDamageDistribution", True),
+            ("modalEnumeration", {}),
+            ("parameterSpec", {"allowedFields": {"xValue": "INTEGER"}}),
+            ("parameterSpec", None), ("manaCostString", ""),
+            ("kind", "TypecycleCard"), ("actionType", "TypecycleCard"),
+            ("semanticId", ""),
+        ):
+            with self.subTest(field=field, value=value):
+                changed = {**cycle, field: value}
+                self.assertIsNone(handler.choose({**current, "legalActions": [passed, changed]}))
+        for action in (
+            {**cycle["action"], "playerId": "other"},
+            {**cycle["action"], "cardId": "not-in-hand"},
+            {**cycle["action"], "paymentStrategy": {"type": "Explicit"}},
+            {**cycle["action"], "xValue": 1},
+            {**cycle["action"], "extra": True},
+            {k: v for k, v in cycle["action"].items() if k != "cardId"},
+        ):
+            with self.subTest(action=action):
+                self.assertIsNone(handler.choose({**current, "legalActions": [
+                    passed, {**cycle, "action": action},
+                ]}))
+        for state in (
+            {"priorityPlayerId": "other", "zones": current["state"]["zones"]},
+            {"priorityPlayerId": "player-1", "zones": None},
+            {"priorityPlayerId": "player-1", "zones": []},
+            {"priorityPlayerId": "player-1", "zones": [{
+                "zoneId": {"ownerId": "other", "zoneType": "Hand"}, "cardIds": ["hand-1"],
+            }]},
+            {"priorityPlayerId": "player-1", "zones": [
+                *current["state"]["zones"], *current["state"]["zones"],
+            ]},
+        ):
+            with self.subTest(state=state):
+                self.assertIsNone(handler.choose({**current, "state": state}))
+        for changed in (
+            {**current, "pendingDecision": {"kind": "SelectCardsDecision"}},
+            {**current, "terminated": True},
+            {**current, "perspectivePlayerId": "other"},
+            {**current, "legalActions": [passed, cycle, {
+                "actionId": 2, "semanticId": "native-other", "kind": "CastSpell",
+                "actionType": "CastSpell", "affordable": True, "isAffordable": True,
+                "isManaAbility": False, "isDecisionOption": False,
+                "action": {"type": "CastSpell", "playerId": "player-1"},
+            }]},
+        ):
+            with self.subTest(changed=changed):
+                self.assertIsNone(handler.choose(changed))
+
     def test_opt_in_standing_pass_validates_sole_native_action_before_no_choice(self):
         passed = {
             **pass_action(), "isManaAbility": False,

@@ -236,6 +236,7 @@ class AllUnaffordablePassHandler:
 
     name: str = "native-all-unaffordable-pass"
     version: str = "1"
+    allow_unaffordable_cycling: bool = False
 
     def choose(self, observation: Mapping[str, Any]) -> PilotChoice | None:
         seat = observation.get("agentToAct")
@@ -260,6 +261,8 @@ class AllUnaffordablePassHandler:
             "DeclareAttackers": "DeclareAttackers",
             "DeclareBlockers": "DeclareBlockers",
         }
+        if self.allow_unaffordable_cycling:
+            native_types["CycleCard"] = "CycleCard"
         for offer in legal:
             if not isinstance(offer, Mapping):
                 return None
@@ -295,6 +298,46 @@ class AllUnaffordablePassHandler:
                 or type(offer.get("isManaAbility")) is not bool
             ):
                 return None
+            if kind == "CycleCard":
+                # Argentum's CyclingEnumerator certifies affordability with its
+                # mana solver; LegalActionEnricher copies the same fact into
+                # isAffordable. Only a plain, non-X, unavailable native cycle
+                # may join this all-unaffordable menu. Other forms wake Gym.
+                card_id = action.get("cardId")
+                zones = state.get("zones")
+                if not isinstance(zones, list):
+                    return None
+                hand = [zone for zone in zones
+                        if isinstance(zone, Mapping)
+                        and zone.get("zoneId") == {"ownerId": seat, "zoneType": "Hand"}]
+                if (
+                    offer.get("affordable") is not False
+                    or offer.get("isAffordable") is not False
+                    or offer.get("isManaAbility") is not False
+                    or offer.get("hasXCost") is not False
+                    or offer.get("maxAffordableX") is not None
+                    or offer.get("additionalCostInfo") is not None
+                    or offer.get("sourceZone") is not None
+                    or offer.get("requiresTargets") is not False
+                    or offer.get("validTargets") is not None
+                    or offer.get("requiresManaColorChoice") is not False
+                    or offer.get("requiresDamageDistribution") is not False
+                    or offer.get("modalEnumeration") is not None
+                    or any(offer.get(field) is not False for field in (
+                        "hasConvoke", "hasDelve", "hasHarmonize", "hasTapForGeneric",
+                    ))
+                    or offer.get("parameterSpec") != {"allowedFields": {}}
+                    or not isinstance(offer.get("manaCostString"), str)
+                    or not offer["manaCostString"]
+                    or set(action) != {"type", "playerId", "cardId", "paymentStrategy", "xValue"}
+                    or not isinstance(card_id, str) or not card_id
+                    or action.get("paymentStrategy") != {"type": "AutoPay"}
+                    or action.get("xValue") is not None
+                    or len(hand) != 1
+                    or not isinstance(hand[0].get("cardIds"), list)
+                    or hand[0]["cardIds"].count(card_id) != 1
+                ):
+                    return None
         previous = StandingManaOnlyPassHandler(
             name=self.name, version=self.version, ignore_unaffordable_abilities=True,
         ).choose(observation)

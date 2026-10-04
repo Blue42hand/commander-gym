@@ -88,6 +88,12 @@ BUILTIN_ALL_UNAFFORDABLE_PASS_COMPONENT_REF = ArtifactRef(
     version="1",
     digest="sha256:9e54a77e5614f433be4feaa62fba42dca8e886f762303a69c15b69df50c896eb",
 )
+BUILTIN_ALL_UNAFFORDABLE_CYCLE_PASS_COMPONENT_REF = ArtifactRef(
+    kind="deterministic-policy",
+    artifact_id="native-all-unaffordable-pass",
+    version="2",
+    digest="sha256:5a85e6b3bcc8ca8c0c76c29d4656a68fc97d049e0693f53645e7c1e70e2d6433",
+)
 BUILTIN_OPENAI_RESPONSES_COMPONENT_REF = ArtifactRef(
     kind="provider",
     artifact_id="openai-responses",
@@ -290,6 +296,13 @@ class OpenAIBindingPilotComponentResolver:
             and key == _component_key(BUILTIN_ALL_UNAFFORDABLE_PASS_COMPONENT_REF)
         ):
             return MechanicalHandlerSubsystem(AllUnaffordablePassHandler())
+        if (
+            spec.role == "deterministic"
+            and key == _component_key(BUILTIN_ALL_UNAFFORDABLE_CYCLE_PASS_COMPONENT_REF)
+        ):
+            return MechanicalHandlerSubsystem(AllUnaffordablePassHandler(
+                version="2", allow_unaffordable_cycling=True,
+            ))
         if (
             spec.role == "frontier_escalation"
             and key == _component_key(BUILTIN_OPENAI_RESPONSES_COMPONENT_REF)

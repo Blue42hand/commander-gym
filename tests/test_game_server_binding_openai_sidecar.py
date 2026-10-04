@@ -10,6 +10,7 @@ from pathlib import Path
 from commander_gym.deck_package import ArtifactRef
 from commander_gym.game_server_binding_openai_sidecar import (
     BUILTIN_ALL_UNAFFORDABLE_PASS_COMPONENT_REF,
+    BUILTIN_ALL_UNAFFORDABLE_CYCLE_PASS_COMPONENT_REF,
     BUILTIN_DELEGATED_AUTOPASS_COMPONENT_REF,
     BUILTIN_FORGE_CONDITIONAL_WAIT_COMPONENT_REF,
     BUILTIN_FORGE_CONDITIONAL_WAIT_V3_COMPONENT_REF,
@@ -137,6 +138,13 @@ class BindingOpenAIGameServerSidecarTests(unittest.TestCase):
             ref=BUILTIN_ALL_UNAFFORDABLE_PASS_COMPONENT_REF,
         ))
         self.assertIsInstance(new.handler, AllUnaffordablePassHandler)
+        self.assertFalse(new.handler.allow_unaffordable_cycling)
+        cycle = resolver.resolve(PilotSubsystemSpec(
+            role="deterministic", ordinal=0,
+            ref=BUILTIN_ALL_UNAFFORDABLE_CYCLE_PASS_COMPONENT_REF,
+        ))
+        self.assertIsInstance(cycle.handler, AllUnaffordablePassHandler)
+        self.assertTrue(cycle.handler.allow_unaffordable_cycling)
         old = resolver.resolve(PilotSubsystemSpec(
             role="deterministic", ordinal=0,
             ref=BUILTIN_NATIVE_UNAFFORDABLE_PASS_COMPONENT_REF,
