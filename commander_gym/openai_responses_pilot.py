@@ -1078,8 +1078,28 @@ class OpenAIResponsesPilot:
                     else self.client.responses.create(**request)
                 )
             except OpenAIRunBudgetError as exc:
-                # A pre-dispatch cap rejection is not a provider attempt.
-                raise OpenAIResponsesPilotError(str(exc)) from exc
+                # A rejected reservation is not a new provider attempt. Preserve
+                # any earlier invalid response when the retry hits the cap.
+                # Settlement failures happen after dispatch and get their own
+                # attempt with the response already returned by the provider.
+                if exc.dispatched:
+                    elapsed_ms = (perf_counter() - request_started) * 1000
+                    response_snapshot = (
+                        _provider_response_snapshot(exc.response)
+                        if exc.response is not None else {}
+                    )
+                    response_snapshot.update({
+                        "budgetError": str(exc),
+                        "providerWallTimeMs": round(elapsed_ms, 3),
+                    })
+                    attempts.append({
+                        "attempt": attempt, "request": request_snapshot,
+                        "response": response_snapshot,
+                    })
+                raise OpenAIResponsesPilotError(
+                    str(exc),
+                    model_io=_failed_model_io(attempts) if attempts else None,
+                ) from exc
             except Exception as exc:  # Provider SDK owns transport-level retries.
                 elapsed_ms = (perf_counter() - request_started) * 1000
                 failure_summary = _provider_failure_summary(exc)

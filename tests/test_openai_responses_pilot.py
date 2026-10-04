@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 
 from commander_gym.openai_responses_pilot import (
     MODEL_IO_SCHEMA_VERSION,
@@ -475,6 +476,80 @@ class OpenAIResponsesPilotTests(unittest.TestCase):
             self.assertEqual(budget.snapshot()["requests"], 1)
             self.assertEqual(budget.snapshot()["inputTokens"], 100)
             self.assertEqual(budget.snapshot()["outputTokens"], 20)
+
+    def test_initial_budget_cap_rejection_has_no_provider_attempt(self):
+        with TemporaryDirectory() as temporary:
+            budget = OpenAIRunBudget(
+                Path(temporary) / "budget.json", 5, max_requests=0,
+                initialize_new_ledger=True,
+            )
+            client = FakeClient(FakeResponse("{}"))
+            pilot = OpenAIResponsesPilot(client=client, model="gpt-6-luna", budget=budget)
+            with self.assertRaises(OpenAIResponsesPilotError) as caught:
+                pilot.choose(action_observation())
+            self.assertIsNone(caught.exception.model_io)
+            self.assertEqual(client.responses.calls, [])
+            self.assertEqual(budget.snapshot()["requests"], 0)
+
+    def test_retry_cap_preserves_first_invalid_provider_attempt(self):
+        with TemporaryDirectory() as temporary:
+            budget = OpenAIRunBudget(
+                Path(temporary) / "budget.json", 5, max_requests=1,
+                initialize_new_ledger=True,
+            )
+            invalid = '{"channel":"action","semanticId":"not-offered","params":{}}'
+            client = FakeClient([FakeResponse(invalid), FakeResponse("{}")])
+            pilot = OpenAIResponsesPilot(
+                client=client, model="gpt-6-luna", budget=budget, max_attempts=2,
+            )
+            with self.assertRaisesRegex(OpenAIResponsesPilotError, "request limit") as caught:
+                pilot.choose(action_observation())
+            evidence = caught.exception.model_io
+            self.assertEqual(len(client.responses.calls), 1)
+            self.assertEqual(budget.snapshot()["requests"], 1)
+            self.assertEqual(evidence["selectedAttempt"], None)
+            self.assertEqual(len(evidence["attempts"]), 1)
+            self.assertEqual(evidence["attempts"][0]["response"]["outputText"], invalid)
+            self.assertIn("validationError", evidence["attempts"][0]["response"])
+
+    def test_postdispatch_budget_failure_records_response_not_transport_error(self):
+        with TemporaryDirectory() as temporary:
+            budget = OpenAIRunBudget(
+                Path(temporary) / "budget.json", 5, initialize_new_ledger=True,
+            )
+            response = FakeResponse('{"channel":"action","semanticId":"argentum-action-v1:pass","params":{}}')
+            client = FakeClient(response)
+            pilot = OpenAIResponsesPilot(client=client, model="gpt-6-luna", budget=budget)
+            # Reservation succeeds, provider returns, then durable settlement fails.
+            with patch.object(budget, "_transact", side_effect=[None, RuntimeError("private-ledger-path")]):
+                with self.assertRaisesRegex(OpenAIResponsesPilotError, "settlement failed") as caught:
+                    pilot.choose(action_observation())
+            evidence = caught.exception.model_io
+            self.assertEqual(len(client.responses.calls), 1)
+            self.assertEqual(evidence["selectedAttempt"], None)
+            self.assertEqual(len(evidence["attempts"]), 1)
+            recorded = evidence["attempts"][0]["response"]
+            self.assertEqual(recorded["outputText"], response.output_text)
+            self.assertIn("budgetError", recorded)
+            self.assertNotIn("transportError", recorded)
+            self.assertNotIn("private-ledger-path", str(caught.exception))
+
+    def test_postdispatch_reservation_overrun_keeps_provider_response(self):
+        with TemporaryDirectory() as temporary:
+            budget = OpenAIRunBudget(
+                Path(temporary) / "budget.json", 5, initialize_new_ledger=True,
+            )
+            response = FakeResponse("{}")
+            response.usage = {"input_tokens": 1_000_000, "output_tokens": 20}
+            client = FakeClient(response)
+            pilot = OpenAIResponsesPilot(client=client, model="gpt-6-luna", budget=budget)
+            with self.assertRaisesRegex(OpenAIResponsesPilotError, "usage exceeded") as caught:
+                pilot.choose(action_observation())
+            self.assertEqual(len(client.responses.calls), 1)
+            evidence = caught.exception.model_io
+            self.assertEqual(len(evidence["attempts"]), 1)
+            self.assertEqual(evidence["attempts"][0]["response"]["usage"], response.usage)
+            self.assertIn("budgetError", evidence["attempts"][0]["response"])
 
     def test_selects_by_semantic_id_and_hides_live_action_ids_from_model(self):
         raw_output = json.dumps(

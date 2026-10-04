@@ -7,10 +7,31 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
+from scripts import run_scripted_paired_screen as screen
 from scripts import run_scripted_paired_screen_continuation as continuation
 
 
 class ScriptedPairedContinuationTests(unittest.TestCase):
+    def test_relative_path_is_rejected_before_private_data_or_provider(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            args = ["continuation", "--capture-dir", str(root), "--corpus-dir", str(root),
+                    "--instance-root", str(root), "--catalog", str(root / "catalog"),
+                    "--ledger", "relative-ledger", "--prior-results", str(root / "prior"),
+                    "--output", str(root / "output")]
+            with patch("sys.argv", args), patch.object(continuation, "_load_reviewed") as load:
+                with self.assertRaisesRegex(ValueError, "all paths must be absolute"):
+                    continuation.main()
+                load.assert_not_called()
+
+    def test_initial_and_continuation_use_same_whole_screen_lock(self):
+        with TemporaryDirectory() as temporary:
+            ledger = Path(temporary) / "budget.json"
+            with screen._exclusive_screen_lock(ledger):
+                with self.assertRaisesRegex(ValueError, "another scripted paired screen"):
+                    with continuation._exclusive_screen_lock(ledger):
+                        pass
+
     def test_legal_semantic_difference_is_flagged_for_review(self):
         self.assertEqual(continuation._manifest()["semanticDivergencePolicy"], "record_and_continue")
         self.assertFalse(continuation._pair_review_flag(

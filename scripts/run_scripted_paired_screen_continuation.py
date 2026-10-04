@@ -7,8 +7,6 @@ This never advances a game.
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
-import fcntl
 import hashlib
 import json
 import os
@@ -20,7 +18,8 @@ from commander_gym.openai_run_budget import OpenAIRunBudget
 from commander_gym.observation_projection import compact_seat_observation, expand_seat_observation
 from commander_gym.openai_responses_pilot import _without_live_routing
 from scripts.run_scripted_paired_screen import (
-    MANIFEST as BASE_MANIFEST, REVIEWED_SOURCE, _load_reviewed, _private_directory, _sha,
+    MANIFEST as BASE_MANIFEST, REVIEWED_SOURCE, _exclusive_screen_lock,
+    _load_reviewed, _private_directory, _sha,
 )
 from scripts.run_paired_view_screen import (
     _append_result, _captured_request, _run_with_watchdog, _screen_worker,
@@ -113,26 +112,11 @@ def _pair_review_flag(full_choice: dict, compact_choice: dict) -> bool:
     return full_choice != compact_choice
 
 
-@contextmanager
-def _exclusive_screen_lock(ledger_path: Path):
-    """Hold a private whole-screen lock, beyond the ledger's per-request lock."""
-    lock_path = ledger_path.with_name(ledger_path.name + ".scripted-screen.lock")
-    fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
-    try:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as exc:
-            raise ValueError("another scripted paired screen is using this ledger") from exc
-        yield
-    finally:
-        os.close(fd)
-
-
 def _run(args) -> int:
     paths = (args.capture_dir, args.corpus_dir, args.instance_root, args.catalog,
              args.ledger, args.prior_results, args.output)
     if not all(path.is_absolute() for path in paths):
-        parser.error("all paths must be absolute")
+        raise ValueError("all paths must be absolute")
     _private_directory(args.capture_dir)
     _private_directory(args.corpus_dir)
     _private_directory(args.output.parent)

@@ -6,6 +6,8 @@ manifest. This never advances a game. Stop on an invalid response or semantic di
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
+import fcntl
 import hashlib
 import json
 import os
@@ -128,16 +130,28 @@ def _read_ledger(path: Path, manifest: dict) -> dict:
     return ledger
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    for name in ("capture-dir", "corpus-dir", "instance-root", "catalog", "ledger", "output"):
-        parser.add_argument("--" + name, type=Path, required=True)
-    parser.add_argument("--execute", action="store_true")
-    parser.add_argument("--approved-source-set-sha256", default="")
-    args = parser.parse_args()
+@contextmanager
+def _exclusive_screen_lock(ledger_path: Path):
+    """Serialize both initial and continuation screens for one ledger."""
+    if not ledger_path.is_absolute():
+        raise ValueError("all paths must be absolute")
+    ledger_path = ledger_path.resolve()
+    lock_path = ledger_path.with_name(ledger_path.name + ".scripted-screen.lock")
+    fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise ValueError("another scripted paired screen is using this ledger") from exc
+        yield
+    finally:
+        os.close(fd)
+
+
+def _run(args) -> int:
     paths = (args.capture_dir, args.corpus_dir, args.instance_root, args.catalog, args.ledger, args.output)
     if not all(path.is_absolute() for path in paths):
-        parser.error("all paths must be absolute")
+        raise ValueError("all paths must be absolute")
     _private_directory(args.capture_dir)
     _private_directory(args.corpus_dir)
     _private_directory(args.output.parent)
@@ -213,6 +227,19 @@ def main() -> int:
     print(json.dumps({"completedPairs": len(rows), "newRequests": attempts,
                       "estimatedCumulativeUsd": budget.snapshot()["estimatedUsd"]}))
     return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    for name in ("capture-dir", "corpus-dir", "instance-root", "catalog", "ledger", "output"):
+        parser.add_argument("--" + name, type=Path, required=True)
+    parser.add_argument("--execute", action="store_true")
+    parser.add_argument("--approved-source-set-sha256", default="")
+    args = parser.parse_args()
+    if args.execute:
+        with _exclusive_screen_lock(args.ledger):
+            return _run(args)
+    return _run(args)
 
 
 if __name__ == "__main__":

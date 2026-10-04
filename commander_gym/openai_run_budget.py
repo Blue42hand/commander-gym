@@ -17,7 +17,12 @@ from typing import Any, Callable, Mapping
 
 
 class OpenAIRunBudgetError(RuntimeError):
-    """Raised before a request if its conservative reservation exceeds the cap."""
+    """Budget rejection, with dispatch status for truthful attempt provenance."""
+
+    def __init__(self, message: str, *, dispatched: bool = False, response: Any = None):
+        super().__init__(message)
+        self.dispatched = dispatched
+        self.response = response
 
 
 class OpenAIRunBudget:
@@ -227,7 +232,18 @@ class OpenAIRunBudget:
                 data["outputTokens"] += output_tokens
                 data["unsettledRequests"] -= 1
 
-            self._transact(settle)
+            try:
+                self._transact(settle)
+            except Exception as exc:
+                # The provider has already answered. Keep its response in memory
+                # for the private model-I/O receipt; never print ledger internals.
+                raise OpenAIRunBudgetError(
+                    "budget settlement failed after provider dispatch",
+                    dispatched=True, response=response,
+                ) from exc
             if actual > reserved:
-                raise OpenAIRunBudgetError("provider usage exceeded conservative reservation")
+                raise OpenAIRunBudgetError(
+                    "provider usage exceeded conservative reservation",
+                    dispatched=True, response=response,
+                )
         return response
