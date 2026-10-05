@@ -430,6 +430,14 @@ def _native_attack_targets(action: Mapping[str, Any]) -> tuple[list[str], list[s
 
 
 def _native_action_field_schema(action: Mapping[str, Any], name: str, kind: str) -> dict[str, Any]:
+    if name == "delvedCards" and kind == "ENTITY_ID_ARRAY":
+        offer = _native_delve_offer(action)
+        if offer is not None:
+            candidates, cap = offer
+            schema = _offered_id_array_schema(candidates)
+            if cap is not None:
+                schema["maxItems"] = cap
+            return schema
     if name == "attackers" and kind == "ENTITY_ID_MAP":
         offered = _native_attack_targets(action)
         if offered is not None:
@@ -446,6 +454,24 @@ def _native_action_field_schema(action: Mapping[str, Any], name: str, kind: str)
                 for blocker, attackers in targets.items()
             }, "additionalProperties": False}
     return _ACTION_PARAM_SCHEMAS[kind]
+
+
+def _native_delve_offer(action: Mapping[str, Any]) -> tuple[list[str], int | None] | None:
+    if action.get("hasDelve") is not True:
+        return None
+    cards = action.get("validDelveCards")
+    if not isinstance(cards, list) or any(
+        not isinstance(card, Mapping) or not isinstance(card.get("entityId"), str)
+        or not card["entityId"] for card in cards
+    ):
+        raise OpenAIResponsesPilotError("native validDelveCards is malformed")
+    ids = [card["entityId"] for card in cards]
+    if len(ids) != len(set(ids)):
+        raise OpenAIResponsesPilotError("native validDelveCards contains duplicates")
+    cap = action.get("maxDelveCards")
+    if cap is not None and (type(cap) is not int or cap < 0 or cap > len(ids)):
+        raise OpenAIResponsesPilotError("native maxDelveCards is malformed")
+    return ids, cap
 
 
 def _native_card_options(pending: Mapping[str, Any]) -> list[str] | None:
@@ -808,6 +834,19 @@ def _validate_native_action_params(
             raise OpenAIResponsesPilotError(
                 "ActionParams.attackers contains an ID outside native validAttackers or validAttackTargets"
             )
+    if "delvedCards" in params:
+        offer = _native_delve_offer(action)
+        if offer is not None:
+            candidates, cap = offer
+            selected = params["delvedCards"]
+            if len(selected) != len(set(selected)) or any(card not in candidates for card in selected):
+                raise OpenAIResponsesPilotError(
+                    "ActionParams.delvedCards must be distinct native offered IDs"
+                )
+            if cap is not None and len(selected) > cap:
+                raise OpenAIResponsesPilotError(
+                    "ActionParams.delvedCards exceeds native maxDelveCards"
+                )
     return dict(params)
 
 

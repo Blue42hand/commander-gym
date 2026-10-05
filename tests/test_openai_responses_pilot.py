@@ -750,6 +750,49 @@ class OpenAIResponsesPilotTests(unittest.TestCase):
                         observation
                     )
 
+    def test_native_delve_cap_rejects_seven_of_six_before_submission(self):
+        observation = action_observation()
+        observation["legalActions"][0]["parameterSpec"] = {"allowedFields": {}}
+        cast = observation["legalActions"][1]
+        cast.update({
+            "kind": "CastSpell", "hasDelve": True,
+            "validDelveCards": [{"entityId": f"grave-{i}"} for i in range(14)],
+            "maxDelveCards": 6,
+            "parameterSpec": {"allowedFields": {"delvedCards": "ENTITY_ID_ARRAY"}},
+        })
+
+        def choose(cards):
+            client = FakeClient(FakeResponse(json.dumps({
+                "channel": "action", "choice": {
+                    "semanticId": cast["semanticId"],
+                    "params": {"delvedCards": cards},
+                },
+            })))
+            pilot = OpenAIResponsesPilot(client=client, model="gpt-test", max_attempts=1)
+            return client, pilot
+
+        client, pilot = choose([f"grave-{i}" for i in range(6)])
+        self.assertEqual(len(pilot.choose(observation).params["delvedCards"]), 6)
+        variants = client.responses.calls[0]["text"]["format"]["schema"]["properties"]["choice"]["anyOf"]
+        schema = variants[1]["properties"]["params"]["properties"]["delvedCards"]
+        self.assertEqual(schema["maxItems"], 6)
+        self.assertNotIn("uniqueItems", schema)
+        self.assertEqual(len(schema["items"]["enum"]), 14)
+
+        for cards, error in (
+            ([f"grave-{i}" for i in range(7)], "exceeds native maxDelveCards"),
+            (["grave-0", "grave-0"], "distinct native offered IDs"),
+            (["not-offered"], "distinct native offered IDs"),
+        ):
+            with self.subTest(cards=cards):
+                _, pilot = choose(cards)
+                with self.assertRaisesRegex(OpenAIResponsesPilotError, error):
+                    pilot.choose(observation)
+
+        cast["maxDelveCards"] = True
+        with self.assertRaisesRegex(OpenAIResponsesPilotError, "native maxDelveCards is malformed"):
+            choose([])[1].choose(observation)
+
     def test_native_additional_cost_fields_follow_each_offered_action_spec(self):
         # These are the four ActionParams fields on Argentum's native cost-choice
         # contract. The provider receives only fields declared for this offer.

@@ -1,14 +1,30 @@
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from contextlib import redirect_stderr
+from io import StringIO
 import subprocess
 import unittest
+from unittest.mock import patch
 import venv
 
 from commander_gym.openai_run_budget import OpenAIRunBudget, OpenAIRunBudgetError
-from scripts.run_two_luna_binding_game import checked_existing_budget, selected_python
+from scripts.run_two_luna_binding_game import checked_existing_budget, main, selected_python
 
 
 class ExistingGameBudgetTests(unittest.TestCase):
+    def test_paid_launcher_requires_explicit_v7_qualification_before_setup(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output = root / "not-created"
+            argv = ["game", "--engine-dir", str(root), "--instance-root", str(root),
+                    "--catalog", str(root / "old.json"), "--output-dir", str(output),
+                    "--api-key-file", str(root / "unused-key"),
+                    "--profile-a", "foundation-a", "--profile-b", "foundation-b"]
+            with patch("sys.argv", argv), redirect_stderr(StringIO()), self.assertRaises(SystemExit) as caught:
+                main()
+            self.assertEqual(caught.exception.code, 2)
+            self.assertFalse(output.exists())
+
     def test_explicit_venv_interpreter_retains_its_environment(self):
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
