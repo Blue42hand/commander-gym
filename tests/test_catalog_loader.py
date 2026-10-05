@@ -207,7 +207,12 @@ class CatalogLoaderTests(unittest.TestCase):
         self.assertEqual([face['oracle_id'] for face in result['oracle_faces']], [OID, OTHER])
         self.assertEqual([face['mana_value'] for face in result['oracle_faces']], [2, 3])
         self.assertEqual(query.get_card(oracle_id=OTHER)['name'], 'Back')
-        self.assertEqual(query.search_cards(name='Back')['cards'][0]['oracle_id'], OTHER)
+        self.assertEqual({card['oracle_id'] for card in query.search_cards(name='Back')['cards']}, {OTHER})
+        self.assertEqual({card['oracle_id'] for card in query.search_cards(type_line='Artifact')['cards']}, {OTHER})
+        self.assertEqual({card['oracle_id'] for card in query.search_cards(oracle_text='Back text.')['cards']}, {OTHER})
+        self.assertEqual({card['oracle_id'] for card in query.search_cards(name='Front')['cards']}, {OID})
+        self.assertEqual({card['oracle_id'] for card in query.search_cards(type_line='Creature')['cards']}, {OID})
+        self.assertEqual({card['oracle_id'] for card in query.search_cards(oracle_text='Front text.')['cards']}, {OID})
 
     def test_reversible_same_oracle_identity_keeps_both_faces(self):
         # Scryfall's Propaganda // Propaganda reversible card has the same

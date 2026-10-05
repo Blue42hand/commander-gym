@@ -67,7 +67,9 @@ has three `//` name components but two `card_faces` with the same Oracle ID;
 the importer uses the face array, never name punctuation, for face identities.
 Structured name, type, and Oracle-text searches check every stored face, so
 the `Claim Territory` Sorcery — Omen face remains discoverable even though the
-canonical row uses the first face's display name.
+canonical row uses the first face's display name. For reversible printings
+whose faces have distinct Oracle IDs, a face match returns only that face's
+Oracle identity; it does not return its sibling as a separate hit.
 Oracle tag membership is advisory; absence never proves a gameplay role is
 absent. Only exact single-tag filtering is implemented.
 
