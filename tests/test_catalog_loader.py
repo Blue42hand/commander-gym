@@ -79,6 +79,7 @@ class CatalogLoaderTests(unittest.TestCase):
         self.assertIsNone(result['price_usd'])
         self.assertEqual(result['printing_count'], 2)
         self.assertEqual([face['name'] for face in result['faces']], ['Front', 'Back'])
+        self.assertEqual(query.search_cards(oracle_text='Draw a card')['cards'][0]['oracle_id'], OID)
         self.assertEqual(result['rulings'][0]['comment'], 'Example ruling.')
         self.assertEqual(result['tags'][0]['tag_id'], TAG)
         self.assertEqual(len(result['provenance']['datasets']), 3)
@@ -259,6 +260,8 @@ class CatalogLoaderTests(unittest.TestCase):
         self.assertEqual(result['oracle_id'], oracle_id)
         self.assertEqual([face['name'] for face in result['faces']],
                          ['Bloomvine Regent', 'Claim Territory'])
+        self.assertEqual(query.search_cards(name='Claim Territory')['cards'][0]['oracle_id'], oracle_id)
+        self.assertEqual(query.search_cards(type_line='Sorcery — Omen')['cards'][0]['oracle_id'], oracle_id)
 
     def test_large_valid_cmc_and_non_commander_record_are_retained(self):
         self.records['default_cards'] = [self.records['default_cards'][0]]

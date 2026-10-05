@@ -65,6 +65,9 @@ own Oracle ID and mana value. The [official reversible Bloomvine Regent
 printing](https://api.scryfall.com/cards/081f2de5-251a-41c9-a62f-11487f54d355)
 has three `//` name components but two `card_faces` with the same Oracle ID;
 the importer uses the face array, never name punctuation, for face identities.
+Structured name, type, and Oracle-text searches check every stored face, so
+the `Claim Territory` Sorcery — Omen face remains discoverable even though the
+canonical row uses the first face's display name.
 Oracle tag membership is advisory; absence never proves a gameplay role is
 absent. Only exact single-tag filtering is implemented.
 

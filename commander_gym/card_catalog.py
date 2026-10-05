@@ -294,8 +294,10 @@ class CardCatalog:
         args: list[Any] = [self.snapshot_id]
         for column, value in (('name', name), ('oracle_text', oracle_text), ('type_line', type_line)):
             if value:
-                where.append(f"c.{column} LIKE ? ESCAPE '\\'")
-                args.append(_like(value))
+                where.append(f"(c.{column} LIKE ? ESCAPE '\\' OR EXISTS ("
+                             f"SELECT 1 FROM card_faces f WHERE f.snapshot_id=c.snapshot_id "
+                             f"AND f.oracle_id=c.oracle_id AND f.{column} LIKE ? ESCAPE '\\'))")
+                args.extend([_like(value), _like(value)])
         if tag_id is not None:
             where.append('EXISTS (SELECT 1 FROM card_tags ct WHERE ct.snapshot_id=c.snapshot_id AND ct.oracle_id=c.oracle_id AND ct.kind=? AND ct.tag_id=?)')
             args.extend([tag_kind, tag_id])
