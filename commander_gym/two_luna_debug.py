@@ -210,8 +210,9 @@ def _finalize_provenance(
 ) -> tuple[list[dict[str, Any]], int, bool]:
     """Wait for this run's reserved provider attempts to reach the JSONL receipt."""
     deadline = time.monotonic() + timeout_seconds
+    size = _provenance_size(path)
+    records = _read_provenance(path)
     while True:
-        records = _read_provenance(path)
         recorded = 0
         for record in records:
             metadata = _metadata(record)
@@ -222,7 +223,11 @@ def _finalize_provenance(
         complete = recorded >= expected
         if path is None or complete or time.monotonic() >= deadline:
             return records, recorded, complete
-        time.sleep(0.1)
+        time.sleep(0.25)
+        next_size = _provenance_size(path)
+        if next_size != size:
+            records = _read_provenance(path)
+            size = next_size
 
 
 def _metadata(record: Mapping[str, Any]) -> Mapping[str, Any]:
