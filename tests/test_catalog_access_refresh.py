@@ -139,6 +139,33 @@ class CatalogAccessRefreshTests(unittest.TestCase):
                 self.assertIsNone(card['price_usd'])
                 self.assertTrue(card['tags_advisory'])
 
+                for tool, arguments, message in (
+                    ('catalog_status', {'snapshot_id': TWO}, 'snapshot unavailable'),
+                    ('search_tags', {'snapshot_id': ONE, 'query': 'ramp',
+                                     'cursor': 'bad'}, 'invalid cursor'),
+                    ('search_cards', {'snapshot_id': ONE, 'limit': 51},
+                     'limit must be an integer from 1 to 50'),
+                    ('get_card', {'snapshot_id': ONE, 'oracle_id': 'a',
+                                  'printing_id': 'b'}, 'exactly one'),
+                ):
+                    with self.subTest(tool=tool):
+                        failed = await client.call_tool(tool, arguments)
+                        self.assertTrue(failed.is_error)
+                        self.assertIn(message, ' '.join(part.text for part in failed.content))
+                        self.assertNotIn(str(self.root), ' '.join(part.text for part in failed.content))
+
+                with mock.patch('commander_gym.catalog_mcp.MAX_RESULT_BYTES', 10):
+                    failed = await client.call_tool('catalog_status', {})
+                self.assertTrue(failed.is_error)
+                self.assertIn('narrow the query', ' '.join(part.text for part in failed.content))
+
+                with mock.patch('commander_gym.catalog_access.CardCatalog.catalog_status',
+                                side_effect=OSError('sensitive-host-path')):
+                    failed = await client.call_tool('catalog_status', {})
+                self.assertTrue(failed.is_error)
+                self.assertNotIn('sensitive-host-path',
+                                 ' '.join(part.text for part in failed.content))
+
         asyncio.run(run())
         with self.assertRaisesRegex(CatalogError, 'too large'):
             _bounded({'large': 'x' * 500_000})

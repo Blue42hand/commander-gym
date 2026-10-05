@@ -27,9 +27,17 @@ def _bounded(result: Any) -> Any:
 def build_server(root: str | Path):
     """Register only the four bounded discovery tools on the official MCP SDK."""
     from mcp.server import MCPServer
+    from mcp.server.mcpserver.exceptions import ToolError
     from mcp.types import ToolAnnotations
 
     access = CatalogAccess(root)
+
+    def checked(call):
+        try:
+            return _bounded(call())
+        except CatalogError as exc:
+            raise ToolError(str(exc)) from exc
+
     server = MCPServer(
         "commander-gym-public-cards",
         instructions=("Public Scryfall card discovery only. Call catalog_status first and pass its "
@@ -46,7 +54,7 @@ def build_server(root: str | Path):
         Omit snapshot_id to discover the current immutable snapshot. Pass that ID
         to all other calls; later refreshes will not change a pinned session.
         """
-        return _bounded(access.catalog_status(snapshot_id))
+        return checked(lambda: access.catalog_status(snapshot_id))
 
     @server.tool(annotations=readonly)
     def search_tags(snapshot_id: str, query: str, kind: str = "oracle",
@@ -56,7 +64,7 @@ def build_server(root: str | Path):
         Only oracle tags are loaded in the current catalog. Use an exact tag_id
         returned here to filter cards. Pagination is pinned to snapshot_id.
         """
-        return _bounded(access.search_tags(snapshot_id, query, kind=kind, limit=limit, cursor=cursor))
+        return checked(lambda: access.search_tags(snapshot_id, query, kind=kind, limit=limit, cursor=cursor))
 
     @server.tool(annotations=readonly)
     def search_cards(snapshot_id: str, name: str | None = None,
@@ -72,7 +80,7 @@ def build_server(root: str | Path):
         Returns Oracle and printing IDs with source evidence. Commander legality
         is catalog data for discovery; Argentum remains the rules authority.
         """
-        return _bounded(access.search_cards(
+        return checked(lambda: access.search_cards(
             snapshot_id, name=name, oracle_text=oracle_text, type_line=type_line,
             tag_id=tag_id, tag_kind=tag_kind, commander_legal=commander_legal,
             color_identity=color_identity, mana_value_min=mana_value_min,
@@ -85,7 +93,7 @@ def build_server(root: str | Path):
 
         Supply exactly one ID. Missing prices stay null, and tags are advisory.
         """
-        return _bounded(access.get_card(snapshot_id, oracle_id=oracle_id, printing_id=printing_id))
+        return checked(lambda: access.get_card(snapshot_id, oracle_id=oracle_id, printing_id=printing_id))
 
     return server
 
