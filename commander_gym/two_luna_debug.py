@@ -191,17 +191,58 @@ def _terminal_artifact_result(
         return {"error": f"{type(exc).__name__}: {exc}"}
 
 
-def _read_provenance(path: Path | None) -> list[dict[str, Any]]:
+def _read_provenance(path: Path | None) -> tuple[list[dict[str, Any]], bool]:
+    """Read complete JSONL rows; a partial final row can still be in flight."""
     if path is None or not path.exists():
-        return []
+        return [], False
     records: list[dict[str, Any]] = []
-    for line in path.read_text().splitlines():
-        if not line.strip():
-            continue
-        item = json.loads(line)
-        if isinstance(item, dict):
+    partial_tail = False
+    with path.open("rb") as stream:
+        for line in stream:
+            if not line.strip():
+                continue
+            try:
+                item = json.loads(line)
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                if line.endswith(b"\n"):
+                    raise  # A malformed committed row is evidence corruption.
+                partial_tail = True
+                break
+            if not isinstance(item, dict):
+                raise ValueError("policy provenance JSONL row must be an object")
             records.append(item)
-    return records
+    return records, partial_tail
+
+
+def _finalize_provenance(
+    path: Path | None, budget: OpenAIRunBudget, before_requests: int,
+    timeout_seconds: float = 15.0,
+) -> tuple[list[dict[str, Any]], int, bool, str | None]:
+    """Wait for this run's reserved provider attempts to reach the JSONL receipt."""
+    deadline = time.monotonic() + timeout_seconds
+    size = _provenance_size(path)
+    records, partial_tail = _read_provenance(path)
+    while True:
+        recorded = 0
+        for record in records:
+            metadata = _metadata(record)
+            if metadata.get("provider") == "openai":
+                retry = metadata.get("retryCount")
+                recorded += 1 + (retry if type(retry) is int and retry >= 0 else 0)
+        expected = budget.snapshot()["requests"] - before_requests
+        complete = recorded >= expected and not partial_tail
+        if path is None or complete or time.monotonic() >= deadline:
+            error = None if complete else (
+                f"incomplete trailing policy JSONL row; recorded {recorded} of {expected} reserved requests"
+                if partial_tail else
+                f"recorded {recorded} of {expected} reserved provider requests"
+            )
+            return records, recorded, complete, error
+        time.sleep(0.25)
+        next_size = _provenance_size(path)
+        if next_size != size:
+            records, partial_tail = _read_provenance(path)
+            size = next_size
 
 
 def _metadata(record: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -715,9 +756,12 @@ def run(args: argparse.Namespace) -> int:
             break
         time.sleep(args.poll_seconds)
 
-    # Give sidecar provenance writes a moment to flush after terminal state.
-    time.sleep(0.25)
-    records = _read_provenance(Path(args.provenance) if args.provenance else None)
+    # A provider request may already be reserved when native completion arrives.
+    # Reconcile only this run's reservations; historical unsettled requests may
+    # remain in the cumulative ledger and must not hold finalization open.
+    records, recorded_requests, provenance_finalized, finalization_error = _finalize_provenance(
+        provenance_path, budget, before["requests"],
+    )
     result = _summarize(
         records,
         completed=completed,
@@ -728,6 +772,13 @@ def run(args: argparse.Namespace) -> int:
         wall_time_seconds=time.monotonic() - run_started,
     )
     result["terminalEvidence"] = terminal_evidence
+    result["provenanceFinalizationComplete"] = provenance_finalized
+    result["recordedGameApiRequests"] = recorded_requests
+    if finalization_error is not None:
+        result["provenanceFinalizationError"] = finalization_error
+    if provenance_path is not None and not provenance_finalized:
+        result["technicalQualified"] = False
+        result["result"] = "needs-debug"
     result["expectedSeats"] = len(profile_ids)
     result["singlePodGame"] = not four_seat or (
         final_status.get("ffaGamesPlayed") == 1

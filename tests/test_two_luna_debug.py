@@ -13,13 +13,79 @@ from unittest.mock import ANY, patch
 
 from commander_gym.openai_run_budget import OpenAIRunBudget, OpenAIRunBudgetError
 from commander_gym.two_luna_debug import (
-    _FatalActionWatch, _ProgressGuard, _capture_terminal_replay, _natural_terminal_game,
+    _FatalActionWatch, _ProgressGuard, _capture_terminal_replay, _finalize_provenance, _natural_terminal_game,
+    _read_provenance,
     _provenance_size, _request_json, _run_budget, _summarize, run,
     _terminal_artifact_result, _write_private_json,
 )
 
 
 class TwoLunaDebugReportTests(unittest.TestCase):
+    def test_finalization_includes_late_callback_without_waiting_for_old_unsettled_requests(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "policy.jsonl"
+            record = {"choice": {"metadata": {"provider": "openai", "retryCount": 0}}}
+            path.write_text(json.dumps(record) + "\n")
+            budget = type("Budget", (), {"snapshot": lambda self: {
+                "requests": 102, "unsettledRequests": 4,
+            }})()
+
+            def finish_late_request(_duration):
+                with path.open("a") as output:
+                    output.write(json.dumps(record) + "\n")
+
+            with patch("commander_gym.two_luna_debug.time.sleep", side_effect=finish_late_request):
+                records, counted, complete, error = _finalize_provenance(path, budget, 100)
+            self.assertTrue(complete)
+            self.assertIsNone(error)
+            self.assertEqual(counted, 2)
+            self.assertEqual(len(records), 2)
+
+            path.write_text(json.dumps(record) + "\n")
+            _, counted, complete, error = _finalize_provenance(path, budget, 100, timeout_seconds=0)
+            self.assertFalse(complete)
+            self.assertEqual(counted, 1)
+            self.assertIn("recorded 1 of 2", error)
+
+    def test_split_trailing_policy_row_retries_without_dropping_complete_rows(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "policy.jsonl"
+            record = {"choice": {"metadata": {"provider": "openai", "retryCount": 0}}}
+            encoded = json.dumps(record).encode() + b"\n"
+            split = len(encoded) // 2
+            path.write_bytes(encoded + encoded[:split])
+            budget = type("Budget", (), {"snapshot": lambda self: {"requests": 2}})()
+
+            def finish_split(_duration):
+                with path.open("ab") as output:
+                    output.write(encoded[split:])
+
+            with patch("commander_gym.two_luna_debug.time.sleep", side_effect=finish_split):
+                records, counted, complete, error = _finalize_provenance(path, budget, 0)
+            self.assertEqual(len(records), 2)
+            self.assertEqual(counted, 2)
+            self.assertTrue(complete)
+            self.assertIsNone(error)
+
+            path.write_bytes(encoded + encoded[:split])
+            records, counted, complete, error = _finalize_provenance(
+                path, budget, 0, timeout_seconds=0,
+            )
+            self.assertEqual(len(records), 1)
+            self.assertEqual(counted, 1)
+            self.assertFalse(complete)
+            self.assertIn("incomplete trailing policy JSONL row", error)
+
+    def test_malformed_completed_policy_row_fails_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "policy.jsonl"
+            path.write_bytes(b'{"choice": {}}\n{"choice": broken}\n')
+            with self.assertRaises(json.JSONDecodeError):
+                _read_provenance(path)
+            budget = type("Budget", (), {"snapshot": lambda self: {"requests": 2}})()
+            with self.assertRaises(json.JSONDecodeError):
+                _finalize_provenance(path, budget, 0, timeout_seconds=0)
+
     def test_four_profiles_create_one_native_pod_with_exact_seat_decks(self):
         ids = ("krenko", "talrand", "sythis", "lathril")
         profiles = {"profiles": [
@@ -354,6 +420,47 @@ class TwoLunaDebugReportTests(unittest.TestCase):
         self.assertEqual(exit_code, 1)  # no policy provenance in this synthetic run
         self.assertIn("IncompleteRead", result["terminalArtifact"]["error"])
         self.assertEqual(result["terminalEvidence"]["winnerId"], "ai-a")
+
+    def test_partial_provenance_timeout_keeps_native_terminal_proof_in_result(self):
+        profiles = {"profiles": [
+            {"id": "a", "deck": {"commander": "Krenko", "cards": {"Mountain": 99}}},
+            {"id": "b", "deck": {"commander": "Talrand", "cards": {"Island": 99}}},
+        ]}
+        status = {"complete": True, "state": "TOURNAMENT_COMPLETE", "round": 1,
+                  "liveGames": [], "completedGames": [{
+                      "gameSessionId": "game-1", "winnerId": "ai-a", "draw": False,
+                      "simulated": False, "nativeGameOver": True, "finalTurnNumber": 13,
+                  }]}
+        snapshot = {"capUsd": 8, "estimatedUsd": 1, "requests": 1,
+                    "inputTokens": 20, "outputTokens": 3, "unsettledRequests": 0}
+        budget = type("Budget", (), {"snapshot": lambda self: snapshot})()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "policy.jsonl"
+            path.write_bytes(b'{"choice":')
+            args = Namespace(
+                profile_a="a", profile_b="b", sidecar_url="http://sidecar",
+                server_url="http://server", timeout=10, stall_seconds=10,
+                poll_seconds=0.001, provenance=str(path), server_log=None,
+                terminal_evidence_dir=directory,
+            )
+            output = io.StringIO()
+            with patch.dict(os.environ, {"COMMANDER_GYM_SIDECAR_TOKEN": "local-test"}), \
+                    patch("commander_gym.two_luna_debug._request_json",
+                          side_effect=[profiles, {"lobbyId": "lobby"}, status]), \
+                    patch("commander_gym.two_luna_debug._run_budget", return_value=budget), \
+                    patch("commander_gym.two_luna_debug._finalize_provenance",
+                          return_value=([], 0, False, "incomplete trailing policy JSONL row")), \
+                    patch("commander_gym.two_luna_debug._terminal_artifact_result",
+                          return_value={"snapshotCount": 3}), redirect_stdout(output):
+                exit_code = run(args)
+            result = json.loads(next(s.partition("=")[2] for s in output.getvalue().splitlines()
+                                     if s.startswith("TWO_LUNA_DEBUG_RESULT=")))
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(result["result"], "needs-debug")
+        self.assertFalse(result["provenanceFinalizationComplete"])
+        self.assertIn("incomplete trailing", result["provenanceFinalizationError"])
+        self.assertEqual(result["terminalEvidence"]["winnerId"], "ai-a")
+        self.assertEqual(result["terminalArtifact"]["snapshotCount"], 3)
 
     def test_existing_elevated_cumulative_budget_is_read_without_reset(self):
         with tempfile.TemporaryDirectory() as directory:
