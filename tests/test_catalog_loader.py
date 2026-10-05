@@ -54,15 +54,26 @@ class CatalogLoaderTests(unittest.TestCase):
         result = {}
         for kind, records in self.records.items():
             path = self.root / f'{kind}.jsonl.gz'
-            with gzip.open(path, 'wb') as stream:
-                for record in records:
-                    stream.write(json.dumps(record).encode() + b'\n')
+            with path.open('wb') as output:
+                with gzip.GzipFile(fileobj=output, mode='wb', filename='', mtime=0) as stream:
+                    for record in records:
+                        stream.write(json.dumps(record).encode() + b'\n')
             data = path.read_bytes()
             slug = kind.replace('_', '-')
             result[kind] = Source(kind, f'https://data.scryfall.io/{slug}/{slug}-20261004210033.jsonl.gz',
                                   '2026-10-04T21:00:33Z', len(data), path,
                                   hashlib.sha256(data).hexdigest(), '2026-10-05T00:00:00Z')
         return result
+
+    def test_fixture_sources_are_stable_across_wall_clock_seconds(self):
+        with mock.patch('gzip.time.time', return_value=1_000_000):
+            first = self.sources()
+        with mock.patch('gzip.time.time', return_value=2_000_000):
+            second = self.sources()
+        self.assertEqual(
+            {kind: source.sha256 for kind, source in first.items()},
+            {kind: source.sha256 for kind, source in second.items()},
+        )
 
     def test_publish_keeps_printing_face_ruling_and_null_price_evidence(self):
         metadata = publish_from_files(self.root / 'catalog', self.sources())
