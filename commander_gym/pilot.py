@@ -137,11 +137,25 @@ def validate_pilot_choice(
     )
 
     if requires_structured:
-        if not isinstance(choice, ArgentumDecisionChoice):
-            raise PilotContractError(
-                "current Argentum decision requires a structured DecisionResponse"
-            )
-        return _validate_decision_choice(choice, pending)
+        if isinstance(choice, ArgentumDecisionChoice):
+            return _validate_decision_choice(choice, pending)
+        if isinstance(choice, ArgentumActionChoice):
+            # Native mana production can be offered alongside a paused payment.
+            # Only an explicitly offered mana ability may precede the response.
+            spec = pending.get("responseSpec")
+            legal = observation.get("legalActions")
+            if isinstance(spec, Mapping) and spec.get("responseType") == "ManaSourcesSelectedResponse" and isinstance(legal, list):
+                for action in legal:
+                    if (
+                        isinstance(action, Mapping)
+                        and action.get("actionId") == choice.action_id
+                        and action.get("kind") == "ActivateAbility"
+                        and action.get("isManaAbility") is True
+                    ):
+                        return _validate_action_choice(choice, observation)
+        raise PilotContractError(
+            "current Argentum decision requires a structured DecisionResponse or an offered mana ability"
+        )
 
     if not isinstance(choice, ArgentumActionChoice):
         raise PilotContractError(

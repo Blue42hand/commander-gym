@@ -8,9 +8,8 @@ in public Commander Gym.
 A selected Binding's canonical Pilot is authoritative for runtime composition. The
 production launcher resolves that Pilot's exact component graph through the #73
 composition contract instead of attaching canonical identity to a process-global
-fallback policy. Public built-ins are intentionally narrow: the certified forced-choice
-handler and the OpenAI Responses frontier adapter. Any other declared component must be
-provided by an explicit component resolver and otherwise fails closed at startup.
+fallback policy. Each built-in policy has an exact component reference; any other
+declared component requires an explicit resolver and otherwise fails closed at startup.
 """
 
 from __future__ import annotations
@@ -22,6 +21,7 @@ from typing import Any, Mapping
 
 from .binding_catalog import BindingCatalogError, load_binding_catalog
 from .deck_package import ArtifactRef
+from .delegated_autopass import DelegatedAutopassPilot
 from .game_server_bindings import GameServerBindingError, GameServerBindingRegistry
 from .game_server_openai_sidecar import (
     JsonlSeatProvenanceWriter,
@@ -33,6 +33,7 @@ from .game_server_openai_sidecar import (
 from .game_server_sidecar import GameServerSidecarServer
 from .identity import Binding, Pilot
 from .openai_responses_pilot import OpenAIResponsesPilot
+from .openai_run_budget import OpenAIRunBudget
 from .pilot import (
     ArgentumActionChoice,
     ArgentumDecisionChoice,
@@ -47,7 +48,10 @@ from .pilot_composition import (
     PilotSubsystemSpec,
     compose_pilot_runtime,
 )
-from .pilot_routing import ForcedParameterlessChoiceHandler
+from .pilot_routing import (
+    AllUnaffordablePassHandler, ForcedParameterlessChoiceHandler, NativeNoChoiceHandler,
+    StandingManaOnlyPassHandler,
+)
 
 
 # These refs identify the public executable adapter contracts, not a particular model
@@ -60,11 +64,77 @@ BUILTIN_FORCED_PARAMETERLESS_COMPONENT_REF = ArtifactRef(
     version="1",
     digest="sha256:3c00dd57dbed45ceb9937fecbedd0d67f509d9619f8e565eae0eeed789f4ac38",
 )
+BUILTIN_NATIVE_NO_CHOICE_COMPONENT_REF = ArtifactRef(
+    kind="deterministic-policy",
+    artifact_id="native-no-choice",
+    version="3",
+    digest="sha256:16580bbe6cf9b073f02083a5480bf3f376d1250f438ab02ed0414ca5d70a272a",
+)
+BUILTIN_STANDING_MANA_ONLY_PASS_COMPONENT_REF = ArtifactRef(
+    kind="deterministic-policy",
+    artifact_id="standing-mana-only-pass",
+    version="1",
+    digest="sha256:727132e3a10fd28a551f62324f96e0d0d943560bdb7933c9d6edf9afa4e5c2bd",
+)
+BUILTIN_NATIVE_UNAFFORDABLE_PASS_COMPONENT_REF = ArtifactRef(
+    kind="deterministic-policy",
+    artifact_id="native-unaffordable-ability-pass",
+    version="2",
+    digest="sha256:989156518fba4374673e3218fb9c538898ecef79ea2f02c791c793e1765db443",
+)
+BUILTIN_ALL_UNAFFORDABLE_PASS_COMPONENT_REF = ArtifactRef(
+    kind="deterministic-policy",
+    artifact_id="native-all-unaffordable-pass",
+    version="1",
+    digest="sha256:9e54a77e5614f433be4feaa62fba42dca8e886f762303a69c15b69df50c896eb",
+)
+BUILTIN_ALL_UNAFFORDABLE_CYCLE_PASS_COMPONENT_REF = ArtifactRef(
+    kind="deterministic-policy",
+    artifact_id="native-all-unaffordable-pass",
+    version="2",
+    digest="sha256:5a85e6b3bcc8ca8c0c76c29d4656a68fc97d049e0693f53645e7c1e70e2d6433",
+)
 BUILTIN_OPENAI_RESPONSES_COMPONENT_REF = ArtifactRef(
     kind="provider",
     artifact_id="openai-responses",
     version="1",
     digest="sha256:5010883834fef52a65e49a2fc245ec9faa506badcae64ae5f16cdf65e70dac92",
+)
+BUILTIN_DELEGATED_AUTOPASS_COMPONENT_REF = ArtifactRef(
+    kind="provider",
+    artifact_id="openai-responses-delegated-autopass",
+    version="1",
+    digest="sha256:8f01e8269a20bd30dfab13a025972d7f8320b3fb9296a118d027b84d26487e0c",
+)
+BUILTIN_FORGE_CONDITIONAL_WAIT_COMPONENT_REF = ArtifactRef(
+    kind="provider",
+    artifact_id="openai-responses-forge-conditional-wait",
+    version="2",
+    digest="sha256:339686cd2684e701162b5d73fe0f6a91e0958217466d1a914fc1dc215436dca1",
+)
+BUILTIN_FORGE_CONDITIONAL_WAIT_V3_COMPONENT_REF = ArtifactRef(
+    kind="provider",
+    artifact_id="openai-responses-forge-conditional-wait",
+    version="3",
+    digest="sha256:668ec1bf45106b1debc850940b2703bf01017d1c6806f0a9a938df75a7c79a46",
+)
+BUILTIN_FORGE_CONDITIONAL_WAIT_COMPACT_COMPONENT_REF = ArtifactRef(
+    kind="provider",
+    artifact_id="openai-responses-forge-conditional-wait",
+    version="4",
+    digest="sha256:cdb76ab2dac1ec60961b4e75b96b64c2943d1391888872e8f38e5bdd878563a4",
+)
+BUILTIN_FORGE_GUARDED_THEN_CAST_COMPONENT_REF = ArtifactRef(
+    kind="provider",
+    artifact_id="openai-responses-forge-conditional-wait",
+    version="5",
+    digest="sha256:9527c8a9234e9573711e5f4c03d9fe9d92b5226eb04d54322cab7a928487cf9a",
+)
+BUILTIN_FORGE_DECLARATIVE_CONTINUATION_COMPONENT_REF = ArtifactRef(
+    kind="provider",
+    artifact_id="openai-responses-forge-conditional-wait",
+    version="6",
+    digest="sha256:425ea6c84b91cd8a1ffae495c79214acaf2d7518f6a0f9db714c25ee634391e0",
 )
 
 
@@ -80,6 +150,7 @@ class BindingOpenAIGameServerConfig:
     sidecar: OpenAIGameServerSidecarConfig
     catalog_path: Path
     instance_root: Path
+    budget: OpenAIRunBudget | None = None
 
 
 def binding_openai_game_server_config_from_environment(
@@ -107,10 +178,43 @@ def binding_openai_game_server_config_from_environment(
         raise OpenAIGameServerSidecarConfigurationError(
             "COMMANDER_GYM_BINDING_CATALOG must be below COMMANDER_GYM_INSTANCE_ROOT"
         ) from exc
+    ledger_value = environment.get("COMMANDER_GYM_OPENAI_BUDGET_LEDGER")
+    cap_value = environment.get("COMMANDER_GYM_OPENAI_BUDGET_CAP_USD")
+    authorized_max_value = environment.get("COMMANDER_GYM_OPENAI_BUDGET_AUTHORIZED_MAX_USD")
+    request_limit_value = environment.get("COMMANDER_GYM_OPENAI_BUDGET_MAX_REQUESTS")
+    if bool(ledger_value) != bool(cap_value):
+        raise OpenAIGameServerSidecarConfigurationError(
+            "OpenAI budget ledger and cap must be configured together"
+        )
+    if not ledger_value and (authorized_max_value or request_limit_value):
+        raise OpenAIGameServerSidecarConfigurationError(
+            "OpenAI budget ceiling and request limit require a ledger and cap"
+        )
+    try:
+        cap_usd = float(cap_value) if cap_value else None
+        authorized_max_usd = float(authorized_max_value) if authorized_max_value else 5.0
+        max_requests = int(request_limit_value) if request_limit_value else None
+    except ValueError as exc:
+        raise OpenAIGameServerSidecarConfigurationError(
+            "OpenAI budget cap, ceiling, and request limit must be numeric"
+        ) from exc
+    if cap_usd is not None and cap_usd > 5 and max_requests is None:
+        raise OpenAIGameServerSidecarConfigurationError(
+            "a budget above $5 requires an absolute request limit"
+        )
     return BindingOpenAIGameServerConfig(
         sidecar=sidecar,
         catalog_path=catalog_path,
         instance_root=instance_root,
+        budget=(
+            OpenAIRunBudget(
+                Path(environment["COMMANDER_GYM_OPENAI_BUDGET_LEDGER"]).expanduser().resolve(),
+                cap_usd, authorized_max_usd=authorized_max_usd,
+                max_requests=max_requests,
+            )
+            if ledger_value and cap_value
+            else None
+        ),
     )
 
 
@@ -166,6 +270,7 @@ class OpenAIBindingPilotComponentResolver:
 
     config: OpenAIGameServerSidecarConfig
     client: Any
+    budget: OpenAIRunBudget | None = None
 
     def resolve(self, spec: PilotSubsystemSpec):
         key = spec.component_key()
@@ -175,6 +280,36 @@ class OpenAIBindingPilotComponentResolver:
         ):
             return MechanicalHandlerSubsystem(ForcedParameterlessChoiceHandler())
         if (
+            spec.role == "deterministic"
+            and key == _component_key(BUILTIN_NATIVE_NO_CHOICE_COMPONENT_REF)
+        ):
+            return MechanicalHandlerSubsystem(NativeNoChoiceHandler())
+        if (
+            spec.role == "deterministic"
+            and key == _component_key(BUILTIN_STANDING_MANA_ONLY_PASS_COMPONENT_REF)
+        ):
+            return MechanicalHandlerSubsystem(StandingManaOnlyPassHandler())
+        if (
+            spec.role == "deterministic"
+            and key == _component_key(BUILTIN_NATIVE_UNAFFORDABLE_PASS_COMPONENT_REF)
+        ):
+            return MechanicalHandlerSubsystem(StandingManaOnlyPassHandler(
+                name="native-unaffordable-ability-pass", version="2",
+                ignore_unaffordable_abilities=True,
+            ))
+        if (
+            spec.role == "deterministic"
+            and key == _component_key(BUILTIN_ALL_UNAFFORDABLE_PASS_COMPONENT_REF)
+        ):
+            return MechanicalHandlerSubsystem(AllUnaffordablePassHandler())
+        if (
+            spec.role == "deterministic"
+            and key == _component_key(BUILTIN_ALL_UNAFFORDABLE_CYCLE_PASS_COMPONENT_REF)
+        ):
+            return MechanicalHandlerSubsystem(AllUnaffordablePassHandler(
+                version="2", allow_unaffordable_cycling=True,
+            ))
+        if (
             spec.role == "frontier_escalation"
             and key == _component_key(BUILTIN_OPENAI_RESPONSES_COMPONENT_REF)
         ):
@@ -183,6 +318,125 @@ class OpenAIBindingPilotComponentResolver:
                     client=self.client,
                     model=self.config.model,
                     max_attempts=self.config.max_attempts,
+                    budget=self.budget,
+                )
+            )
+        if (
+            spec.role == "frontier_escalation"
+            and key == _component_key(BUILTIN_DELEGATED_AUTOPASS_COMPONENT_REF)
+        ):
+            return ArtificialPlayerSubsystem(
+                DelegatedAutopassPilot(
+                    OpenAIResponsesPilot(
+                        client=self.client,
+                        model=self.config.model,
+                        max_attempts=self.config.max_attempts,
+                        budget=self.budget,
+                        allow_priority_delegation=True,
+                    )
+                )
+            )
+        if (
+            spec.role == "frontier_escalation"
+            and key == _component_key(BUILTIN_FORGE_CONDITIONAL_WAIT_COMPONENT_REF)
+        ):
+            return ArtificialPlayerSubsystem(
+                DelegatedAutopassPilot(
+                    OpenAIResponsesPilot(
+                        client=self.client,
+                        model=self.config.model,
+                        max_attempts=self.config.max_attempts,
+                        budget=self.budget,
+                        allow_priority_delegation=True,
+                        allow_named_deferrals=True,
+                    ),
+                    name="forge-conditional-wait", version="2",
+                    allow_named_deferrals=True,
+                )
+            )
+        if (
+            spec.role == "frontier_escalation"
+            and key == _component_key(BUILTIN_FORGE_CONDITIONAL_WAIT_V3_COMPONENT_REF)
+        ):
+            return ArtificialPlayerSubsystem(
+                DelegatedAutopassPilot(
+                    OpenAIResponsesPilot(
+                        client=self.client,
+                        model=self.config.model,
+                        max_attempts=self.config.max_attempts,
+                        budget=self.budget,
+                        allow_priority_delegation=True,
+                        allow_named_deferrals=True,
+                        require_nonempty_named_deferrals=True,
+                    ),
+                    name="forge-conditional-wait", version="3",
+                    allow_named_deferrals=True,
+                )
+            )
+        if (
+            spec.role == "frontier_escalation"
+            and key == _component_key(BUILTIN_FORGE_CONDITIONAL_WAIT_COMPACT_COMPONENT_REF)
+        ):
+            return ArtificialPlayerSubsystem(
+                DelegatedAutopassPilot(
+                    OpenAIResponsesPilot(
+                        client=self.client,
+                        model=self.config.model,
+                        max_attempts=self.config.max_attempts,
+                        budget=self.budget,
+                        allow_priority_delegation=True,
+                        allow_named_deferrals=True,
+                        require_nonempty_named_deferrals=True,
+                        compact_model_observation=True,
+                    ),
+                    name="forge-conditional-wait", version="3",
+                    allow_named_deferrals=True,
+                )
+            )
+        if (
+            spec.role == "frontier_escalation"
+            and key == _component_key(BUILTIN_FORGE_GUARDED_THEN_CAST_COMPONENT_REF)
+        ):
+            return ArtificialPlayerSubsystem(
+                DelegatedAutopassPilot(
+                    OpenAIResponsesPilot(
+                        client=self.client,
+                        model=self.config.model,
+                        max_attempts=self.config.max_attempts,
+                        budget=self.budget,
+                        allow_priority_delegation=True,
+                        allow_named_deferrals=True,
+                        require_nonempty_named_deferrals=True,
+                        compact_model_observation=True,
+                        guarded_then_cast_templates=True,
+                    ),
+                    name="forge-conditional-wait", version="4",
+                    allow_named_deferrals=True,
+                    guarded_then_cast_templates=True,
+                )
+            )
+        if (
+            spec.role == "frontier_escalation"
+            and key == _component_key(BUILTIN_FORGE_DECLARATIVE_CONTINUATION_COMPONENT_REF)
+        ):
+            return ArtificialPlayerSubsystem(
+                DelegatedAutopassPilot(
+                    OpenAIResponsesPilot(
+                        client=self.client,
+                        model=self.config.model,
+                        max_attempts=self.config.max_attempts,
+                        budget=self.budget,
+                        allow_priority_delegation=True,
+                        allow_named_deferrals=True,
+                        require_nonempty_named_deferrals=True,
+                        compact_model_observation=True,
+                        guarded_then_cast_templates=True,
+                        allow_declarative_continuation=True,
+                    ),
+                    name="forge-conditional-wait", version="5",
+                    allow_named_deferrals=True,
+                    guarded_then_cast_templates=True,
+                    allow_declarative_continuation=True,
                 )
             )
         raise PilotContractError(
@@ -192,14 +446,14 @@ class OpenAIBindingPilotComponentResolver:
         )
 
 
-def _default_openai_client(config: OpenAIGameServerSidecarConfig) -> Any:
+def _default_openai_client(config: OpenAIGameServerSidecarConfig, *, bounded: bool) -> Any:
     try:
         from openai import OpenAI
     except ImportError as exc:
         raise OpenAIGameServerSidecarConfigurationError(
             "OpenAI SDK is not installed; install requirements-openai.txt"
         ) from exc
-    return OpenAI(api_key=config.api_key, timeout=config.timeout)
+    return OpenAI(api_key=config.api_key, timeout=config.timeout, max_retries=0 if bounded else 2)
 
 
 def build_binding_openai_game_server_sidecar(
@@ -230,10 +484,13 @@ def build_binding_openai_game_server_sidecar(
 
     runtime_resolver = component_resolver
     if runtime_resolver is None:
-        provider_client = client if client is not None else _default_openai_client(config.sidecar)
+        provider_client = client if client is not None else _default_openai_client(
+            config.sidecar, bounded=config.budget is not None,
+        )
         runtime_resolver = OpenAIBindingPilotComponentResolver(
             config=config.sidecar,
             client=provider_client,
+            budget=config.budget,
         )
 
     if provenance_sink is None and config.sidecar.provenance_path is not None:
