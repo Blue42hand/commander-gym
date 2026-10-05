@@ -204,6 +204,27 @@ def _read_provenance(path: Path | None) -> list[dict[str, Any]]:
     return records
 
 
+def _finalize_provenance(
+    path: Path | None, budget: OpenAIRunBudget, before_requests: int,
+    timeout_seconds: float = 15.0,
+) -> tuple[list[dict[str, Any]], int, bool]:
+    """Wait for this run's reserved provider attempts to reach the JSONL receipt."""
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        records = _read_provenance(path)
+        recorded = 0
+        for record in records:
+            metadata = _metadata(record)
+            if metadata.get("provider") == "openai":
+                retry = metadata.get("retryCount")
+                recorded += 1 + (retry if type(retry) is int and retry >= 0 else 0)
+        expected = budget.snapshot()["requests"] - before_requests
+        complete = recorded >= expected
+        if path is None or complete or time.monotonic() >= deadline:
+            return records, recorded, complete
+        time.sleep(0.1)
+
+
 def _metadata(record: Mapping[str, Any]) -> Mapping[str, Any]:
     choice = record.get("choice")
     if not isinstance(choice, Mapping):
@@ -715,9 +736,12 @@ def run(args: argparse.Namespace) -> int:
             break
         time.sleep(args.poll_seconds)
 
-    # Give sidecar provenance writes a moment to flush after terminal state.
-    time.sleep(0.25)
-    records = _read_provenance(Path(args.provenance) if args.provenance else None)
+    # A provider request may already be reserved when native completion arrives.
+    # Reconcile only this run's reservations; historical unsettled requests may
+    # remain in the cumulative ledger and must not hold finalization open.
+    records, recorded_requests, provenance_finalized = _finalize_provenance(
+        provenance_path, budget, before["requests"],
+    )
     result = _summarize(
         records,
         completed=completed,
@@ -728,6 +752,11 @@ def run(args: argparse.Namespace) -> int:
         wall_time_seconds=time.monotonic() - run_started,
     )
     result["terminalEvidence"] = terminal_evidence
+    result["provenanceFinalizationComplete"] = provenance_finalized
+    result["recordedGameApiRequests"] = recorded_requests
+    if provenance_path is not None and not provenance_finalized:
+        result["technicalQualified"] = False
+        result["result"] = "needs-debug"
     result["expectedSeats"] = len(profile_ids)
     result["singlePodGame"] = not four_seat or (
         final_status.get("ffaGamesPlayed") == 1

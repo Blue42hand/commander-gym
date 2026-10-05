@@ -13,13 +13,37 @@ from unittest.mock import ANY, patch
 
 from commander_gym.openai_run_budget import OpenAIRunBudget, OpenAIRunBudgetError
 from commander_gym.two_luna_debug import (
-    _FatalActionWatch, _ProgressGuard, _capture_terminal_replay, _natural_terminal_game,
+    _FatalActionWatch, _ProgressGuard, _capture_terminal_replay, _finalize_provenance, _natural_terminal_game,
     _provenance_size, _request_json, _run_budget, _summarize, run,
     _terminal_artifact_result, _write_private_json,
 )
 
 
 class TwoLunaDebugReportTests(unittest.TestCase):
+    def test_finalization_includes_late_callback_without_waiting_for_old_unsettled_requests(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "policy.jsonl"
+            record = {"choice": {"metadata": {"provider": "openai", "retryCount": 0}}}
+            path.write_text(json.dumps(record) + "\n")
+            budget = type("Budget", (), {"snapshot": lambda self: {
+                "requests": 102, "unsettledRequests": 4,
+            }})()
+
+            def finish_late_request(_duration):
+                with path.open("a") as output:
+                    output.write(json.dumps(record) + "\n")
+
+            with patch("commander_gym.two_luna_debug.time.sleep", side_effect=finish_late_request):
+                records, counted, complete = _finalize_provenance(path, budget, 100)
+            self.assertTrue(complete)
+            self.assertEqual(counted, 2)
+            self.assertEqual(len(records), 2)
+
+            path.write_text(json.dumps(record) + "\n")
+            _, counted, complete = _finalize_provenance(path, budget, 100, timeout_seconds=0)
+            self.assertFalse(complete)
+            self.assertEqual(counted, 1)
+
     def test_four_profiles_create_one_native_pod_with_exact_seat_decks(self):
         ids = ("krenko", "talrand", "sythis", "lathril")
         profiles = {"profiles": [
