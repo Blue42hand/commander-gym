@@ -12,6 +12,65 @@ from commander_gym.openai_run_budget import OpenAIRunBudget, OpenAIRunBudgetErro
 
 
 class OpenAIRunBudgetTests(unittest.TestCase):
+    def test_cache_usage_prices_reads_writes_and_long_context(self):
+        expected = 2.2 * (300 * 0.10 + 400 * 0.01 + 300 * 0.125 + 100 * 0.50) / 1_000_000
+        self.assertAlmostEqual(OpenAIRunBudget._cost(
+            1000, 100, cached_tokens=400, cache_write_tokens=300,
+        ), expected)
+        long_expected = 2.2 * (272001 * 0.25 + 100 * 0.75) / 1_000_000
+        self.assertAlmostEqual(OpenAIRunBudget._cost(
+            272001, 100, cache_write_tokens=272001,
+        ), long_expected)
+        with self.assertRaisesRegex(ValueError, "exceed total input"):
+            OpenAIRunBudget._cost(100, 10, cached_tokens=80, cache_write_tokens=30)
+
+    def test_cache_usage_settlement_and_strict_missing_details(self):
+        with TemporaryDirectory() as temporary:
+            budget = OpenAIRunBudget(
+                Path(temporary) / "budget.json", 5,
+                initialize_new_ledger=True, require_cache_usage_details=True,
+            )
+            response = SimpleNamespace(usage={
+                "input_tokens": 1000, "output_tokens": 100,
+                "input_tokens_details": {"cached_tokens": 400, "cache_write_tokens": 300},
+            })
+            budget.create(lambda **_request: response, self.request())
+            snapshot = budget.snapshot()
+            self.assertAlmostEqual(snapshot["estimatedUsd"], OpenAIRunBudget._cost(
+                1000, 100, cached_tokens=400, cache_write_tokens=300,
+            ))
+            self.assertEqual(snapshot["unsettledRequests"], 0)
+
+            missing = SimpleNamespace(usage={"input_tokens": 1000, "output_tokens": 100})
+            with self.assertRaisesRegex(OpenAIRunBudgetError, "cache usage details") as error:
+                budget.create(lambda **_request: missing, self.request())
+            self.assertTrue(error.exception.dispatched)
+            snapshot = budget.snapshot()
+            self.assertEqual(snapshot["requests"], 2)
+            self.assertEqual(snapshot["unsettledRequests"], 0)
+            self.assertAlmostEqual(snapshot["estimatedUsd"],
+                OpenAIRunBudget._cost(1000, 100, cached_tokens=400, cache_write_tokens=300)
+                + OpenAIRunBudget._cost(1000, 100, cache_write_tokens=1000))
+
+    def test_session_subcap_rejects_before_dispatch_without_changing_shared_cap(self):
+        with TemporaryDirectory() as temporary:
+            path = Path(temporary) / "budget.json"
+            budget = OpenAIRunBudget(
+                path, 5, max_requests=10, initialize_new_ledger=True,
+                session_cap_usd=0.001, session_max_requests=1,
+            )
+            calls = []
+            with self.assertRaisesRegex(OpenAIRunBudgetError, "session cap"):
+                budget.create(lambda **request: calls.append(request), self.request())
+            self.assertEqual(calls, [])
+            self.assertEqual(budget.snapshot()["capUsd"], 5)
+            budget = OpenAIRunBudget(
+                path, 5, max_requests=10, session_max_requests=0,
+            )
+            with self.assertRaisesRegex(OpenAIRunBudgetError, "session request limit"):
+                budget.create(lambda **request: calls.append(request), self.request())
+            self.assertEqual(budget.snapshot()["requests"], 0)
+
     def test_existing_ledger_is_required_by_default_and_legacy_v1_loads(self):
         with TemporaryDirectory() as temporary:
             path = Path(temporary) / "budget.json"
