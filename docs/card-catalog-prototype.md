@@ -47,4 +47,4 @@ not downloaded or validated. All query tests still use synthetic fixtures.
 Full card bulk downloads, scheduled refresh, and remote MCP transport are
 outside this prototype.
 
-Run fixture tests with `PYTHONPATH=. pytest tests/test_card_catalog.py -q`.
+Run fixture tests with `python -m unittest discover -s tests -p test_card_catalog.py -v`.
