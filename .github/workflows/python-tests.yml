@@ -32,7 +32,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           repository: Blue42hand/argentum-engine
-          ref: 55dfac7120285688c1bc850da50b9bf80bcd550b
+          ref: 951f4e0af7a4ad90d50f8222f444f277d18f3679
           path: argentum-engine
       - uses: actions/setup-java@v5
         with:
