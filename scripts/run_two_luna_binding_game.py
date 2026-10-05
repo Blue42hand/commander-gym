@@ -1,6 +1,7 @@
 """Start isolated Argentum/Binding services and run one capped headless game."""
 from __future__ import annotations
 import argparse
+import json
 import os
 from pathlib import Path
 import secrets
@@ -13,6 +14,7 @@ from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 
 from commander_gym.openai_run_budget import OpenAIRunBudget
+from commander_gym.qualified_v7_preflight import stage_qualified_v7_catalog
 
 
 def free_port():
@@ -89,6 +91,8 @@ def main():
     parser.add_argument("--profile-a", required=True)
     parser.add_argument("--profile-b", required=True)
     parser.add_argument("--dry-run", action="store_true", help="reject model dispatch before spend")
+    parser.add_argument("--qualified-v7-comparison", action="store_true",
+                        help="pin and stage the reviewed v7 Binding/Pilot catalog closure")
     parser.add_argument("--timeout", type=float, default=3600)
     parser.add_argument("--stall-seconds", type=float, default=600)
     args = parser.parse_args()
@@ -100,6 +104,8 @@ def main():
         parser.error("an elevated cumulative cap requires an absolute request limit")
     if not args.dry_run and args.api_key_file is None:
         parser.error("--api-key-file is required for a paid game")
+    if not args.dry_run and not args.qualified_v7_comparison:
+        parser.error("paid two-Luna qualification requires --qualified-v7-comparison")
     gym = Path(__file__).resolve().parent.parent
     python = selected_python(gym, args.python)
     engine = args.engine_dir.resolve()
@@ -117,6 +123,14 @@ def main():
         )
     run_dir = out / f"game-{int(time.time())}-{secrets.token_hex(4)}"
     run_dir.mkdir(mode=0o700)
+    catalog_root = args.instance_root.resolve()
+    catalog_path = args.catalog.resolve()
+    if args.qualified_v7_comparison:
+        catalog_root, catalog_path, qualification = stage_qualified_v7_catalog(
+            catalog_root, catalog_path, run_dir, args.profile_a, args.profile_b,
+            args.max_attempts,
+        )
+        print("TWO_LUNA_QUALIFICATION_PREFLIGHT " + json.dumps(qualification, sort_keys=True))
     sidecar_port, server_port = free_port(), free_port()
     env = dict(os.environ)
     env.update({
@@ -131,8 +145,8 @@ def main():
         "COMMANDER_GYM_OPENAI_MAX_ATTEMPTS": str(args.max_attempts),
         "COMMANDER_GYM_OPENAI_TIMEOUT": "120",
         "COMMANDER_GYM_SIDECAR_PROVENANCE": str(run_dir / "policy.jsonl"),
-        "COMMANDER_GYM_BINDING_CATALOG": str(args.catalog.resolve()),
-        "COMMANDER_GYM_INSTANCE_ROOT": str(args.instance_root.resolve()),
+        "COMMANDER_GYM_BINDING_CATALOG": str(catalog_path),
+        "COMMANDER_GYM_INSTANCE_ROOT": str(catalog_root),
         "COMMANDER_GYM_OPENAI_BUDGET_LEDGER": str(ledger),
         "COMMANDER_GYM_OPENAI_BUDGET_CAP_USD": "0.000000001" if args.dry_run else str(args.budget_cap),
         "COMMANDER_GYM_OPENAI_BUDGET_AUTHORIZED_MAX_USD": str(args.budget_authorized_max),
