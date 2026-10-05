@@ -5,6 +5,7 @@ not add an Argentum protocol or expose hidden game state.
 """
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import shutil
@@ -35,8 +36,8 @@ footer{position:fixed;bottom:.7vw;right:1.2vw;color:#617286;font-size:.8vw}
 <header><div><h1>COMMANDER GYM</h1><div class="sub">LOCAL DISPLAY // RESEARCH NODE</div></div><div id="clock" class="big"></div></header>
 <div class="grid">
 <section class="panel"><h2>NODE STATUS</h2><div id="host"></div><h2 style="margin-top:1.4vw">TRAINING / POLICY</h2><div id="stats"></div></section>
-<section><div class="panel"><h2>LIVE GAME</h2><div id="game" class="big">Awaiting pilot traffic…</div><div id="players" class="players"></div></div>
-<div class="panel" style="margin-top:1.5vw"><h2>LATEST PILOT DECISION</h2><div id="decision" class="decision">No decision recorded.</div><h2 style="margin-top:1vw">RECENT GAME LOG</h2><div id="log" class="log"></div></div></section>
+<section><div class="panel"><h2>LATEST PILOT SNAPSHOT</h2><div id="game" class="big">Awaiting pilot traffic…</div><div id="players" class="players"></div></div>
+<div class="panel" style="margin-top:1.5vw"><h2>LATEST PILOT CALLBACK</h2><div id="decision" class="decision">No callback recorded.</div></div></section>
 </div><footer>read-only · local telemetry · refresh 2s</footer>
 <script>
 const esc=x=>String(x??"—").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
@@ -54,8 +55,7 @@ async function tick(){
   const s=d.live.state||{}; const phase=s.phase||s.currentPhase||s.step?.phase; const turn=s.turnNumber||s.turn||"—";
   document.getElementById("game").innerHTML=`TURN ${esc(turn)} &nbsp;·&nbsp; ${esc(phase||"IDLE")}`;
   const ps=statePlayers(s); document.getElementById("players").innerHTML=ps.slice(0,4).map((p,i)=>`<div class="player"><b>${esc(p.name||p.playerName||p.playerId||"Seat "+(i+1))}</b><div class="life">${esc(p.life??p.lifeTotal??"—")}</div><small>hand ${esc(p.handSize??p.hand?.length??"—")} · battlefield ${esc(p.battlefieldSize??p.battlefield?.length??"—")}</small></div>`).join("");
-  const c=d.live.choice||{}; const meta=c.metadata||{}; document.getElementById("decision").innerHTML=`<b>${esc(d.live.playerId||"—")}</b> · ${esc(d.live.callback||"—")}<br>${esc(meta.reasoning||meta.reason||meta.rationale||c.channel||JSON.stringify(c))}`;
-  document.getElementById("log").innerHTML=(d.live.recentGameLog||[]).slice(-8).reverse().map(x=>`<div>${esc(x)}</div>`).join("");
+  document.getElementById("decision").innerHTML=`${esc(d.live.callback||"No decision recorded")}`;
  }catch(e){document.getElementById("game").innerHTML='<span class="bad">dashboard data unavailable</span>'}
 }
 tick(); setInterval(tick,2000);
@@ -118,6 +118,22 @@ def _records(path: Path | None) -> list[Mapping[str,Any]]:
         except json.JSONDecodeError: pass
     return out
 
+def _public_state(observation: Mapping[str, Any]) -> dict[str, Any]:
+    """Keep a small status view; masked seat observations can contain private hands."""
+    state = observation.get("state")
+    if not isinstance(state, dict): return {}
+    public = {k: state[k] for k in ("phase", "currentPhase", "turnNumber", "turn")
+              if isinstance(state.get(k), (str, int))}
+    players = state.get("players") or state.get("playerStates")
+    if isinstance(players, dict): players = list(players.values())
+    if isinstance(players, list):
+        public["players"] = [
+            {k: p[k] for k in ("life", "lifeTotal", "handSize", "battlefieldSize")
+             if isinstance(p.get(k), int) and not isinstance(p[k], bool)}
+            for p in players[:4] if isinstance(p, dict)
+        ]
+    return public
+
 def build_status(provenance_path: Path | None) -> dict[str,Any]:
     records=_records(provenance_path)
     latest=records[-1] if records else {}
@@ -129,10 +145,8 @@ def build_status(provenance_path: Path | None) -> dict[str,Any]:
         "policy":{"calls":len(records),"seats":len({r.get("playerId") for r in records if r.get("playerId")}),
                   "actions":choices["action"],"decisions":choices["decision"],
                   "mulligans":callbacks["decideMulligan"]},
-        "live":{"playerId":latest.get("playerId"),"callback":latest.get("callback"),
-                "state":observation.get("state") if isinstance(observation,dict) else {},
-                "choice":latest.get("choice") or {},
-                "recentGameLog":observation.get("recentGameLog",[]) if isinstance(observation,dict) else []},
+        "live":{"callback":latest.get("callback") if isinstance(latest.get("callback"), str) else None,
+                "state":_public_state(observation)},
     }
 
 class Handler(BaseHTTPRequestHandler):
@@ -150,6 +164,11 @@ class Handler(BaseHTTPRequestHandler):
 def main() -> int:
     Handler.provenance_path=Path(os.environ["COMMANDER_GYM_DISPLAY_PROVENANCE"]).expanduser() if os.getenv("COMMANDER_GYM_DISPLAY_PROVENANCE") else None
     host=os.getenv("COMMANDER_GYM_DISPLAY_HOST","127.0.0.1"); port=int(os.getenv("COMMANDER_GYM_DISPLAY_PORT","8090"))
+    try:
+        if not ipaddress.ip_address(host).is_loopback:
+            raise ValueError("display must bind to a loopback address")
+    except ValueError as exc:
+        raise SystemExit(f"invalid COMMANDER_GYM_DISPLAY_HOST: {exc}") from exc
     server=ThreadingHTTPServer((host,port),Handler)
     print(f"Commander Gym display listening on http://{host}:{port}",flush=True)
     try: server.serve_forever()
