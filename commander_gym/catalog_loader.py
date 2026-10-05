@@ -25,7 +25,7 @@ import urllib.parse
 import urllib.request
 from uuid import UUID
 
-from .card_catalog import create_schema, normalize_oracle_tag
+from .card_catalog import SCHEMA_VERSION, create_schema, normalize_oracle_tag
 
 
 KINDS = ('default_cards', 'rulings', 'oracle_tags')
@@ -201,6 +201,37 @@ def _mana(value: object) -> float:
     return float(value)
 
 
+def _optional_text(value: object, field: str, limit: int) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or len(value) > limit:
+        raise CatalogLoadError(f'{field} must be a bounded string or null')
+    return value
+
+
+def _image_uris(value: object) -> dict[str, str] | None:
+    if value is None:
+        return None
+    if (not isinstance(value, dict) or len(value) > 12 or
+            any(not isinstance(key, str) or not 1 <= len(key) <= 40 or
+                not isinstance(url, str) or not 1 <= len(url) <= 2048 or
+                urllib.parse.urlsplit(url).scheme != 'https' or
+                not urllib.parse.urlsplit(url).netloc
+                for key, url in value.items())):
+        raise CatalogLoadError('image_uris must be a bounded HTTPS URL map or null')
+    return value
+
+
+def _authoring(row: dict) -> dict:
+    return {
+        'mana_cost': _optional_text(row.get('mana_cost'), 'mana_cost', 256),
+        'rarity': _optional_text(row.get('rarity'), 'rarity', 64),
+        'artist': _optional_text(row.get('artist'), 'artist', 512),
+        'flavor_text': _optional_text(row.get('flavor_text'), 'flavor_text', 8192),
+        'image_uris': _image_uris(row.get('image_uris')),
+    }
+
+
 def _card_data(row: dict) -> tuple[tuple[dict, ...], tuple[dict, ...], tuple]:
     if row.get('object') != 'card':
         raise CatalogLoadError('default_cards record is not a card')
@@ -225,7 +256,8 @@ def _card_data(row: dict) -> tuple[tuple[dict, ...], tuple[dict, ...], tuple]:
                        'type_line': _text(f.get('type_line', ''), 'face type_line', empty=True),
                        'oracle_text': _text(f.get('oracle_text', ''), 'face oracle_text', empty=True),
                        'oracle_id': _id(f.get('oracle_id'), 'face oracle_id') if reversible else None,
-                       'mana_value': _mana(f.get('cmc')) if reversible else None}
+                       'mana_value': _mana(f.get('cmc')) if reversible else None,
+                       **_authoring(f)}
                       for f in faces if isinstance(f, dict))
     if len(face_data) != len(faces):
         raise CatalogLoadError('card face must be object')
@@ -243,7 +275,8 @@ def _card_data(row: dict) -> tuple[tuple[dict, ...], tuple[dict, ...], tuple]:
               'price_usd': price, 'scryfall_uri': row.get('scryfall_uri'),
               'lang': lang, 'digital': int(digital), 'released_at': released,
               'set_code': _text(row.get('set'), 'set'),
-              'collector_number': _text(row.get('collector_number'), 'collector_number')}
+              'collector_number': _text(row.get('collector_number'), 'collector_number'),
+              'authoring': _authoring(row)}
     if reversible:
         # Two faces may share one Oracle identity (e.g. Propaganda // Propaganda).
         # Keep both in face_data, but associate the printing with that identity once.
@@ -303,11 +336,12 @@ def _load(db: sqlite3.Connection, snapshot: str, sources: dict[str, Source]) -> 
                     db.execute('INSERT INTO card_faces VALUES (?,?,?,?,?,?,?,?)',
                                (snapshot, oid, index, face['oracle_id'], face['mana_value'],
                                 face['name'], face['type_line'], face['oracle_text']))
-            db.execute('INSERT INTO printings VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            db.execute('INSERT INTO printings VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
                        (snapshot, printing_id, oid, card['face_index'], card['name'], card['type_line'], card['oracle_text'],
                         card['lang'], card['digital'], card['released_at'],
                         card['set_code'], card['collector_number'], card['price_usd'], card['scryfall_uri'],
-                        json.dumps(faces, ensure_ascii=False)))
+                        json.dumps(faces, ensure_ascii=False),
+                        json.dumps(card['authoring'], ensure_ascii=False)))
         counts['default_cards'] += 1
     for row in _records(sources['rulings']):
         if row.get('object') != 'ruling':
@@ -395,7 +429,8 @@ def _publish_locked(output_dir: Path, sources: dict[str, Source]) -> dict:
         if (isinstance(source.compressed_size, bool) or not 0 < source.compressed_size <= MAX_COMPRESSED[kind]
                 or source.path.stat().st_size != source.compressed_size):
             raise CatalogLoadError(f'{kind} compressed size mismatch')
-    snapshot = hashlib.sha256(''.join(sources[k].sha256 for k in KINDS).encode()).hexdigest()[:24]
+    snapshot = hashlib.sha256((f'schema-{SCHEMA_VERSION}:' + ''.join(
+        sources[k].sha256 for k in KINDS)).encode()).hexdigest()[:24]
     output_dir = Path(output_dir)
     final_dir = output_dir / 'snapshots'
     final_db = final_dir / f'{snapshot}.sqlite'
@@ -411,7 +446,8 @@ def _publish_locked(output_dir: Path, sources: dict[str, Source]) -> dict:
                     counts = _load(db, snapshot, sources)
         except (sqlite3.Error, OSError) as exc:
             raise CatalogLoadError('catalog build failed') from exc
-        metadata = {'snapshot_id': snapshot, 'published_at': _now(), 'counts': counts,
+        metadata = {'snapshot_id': snapshot, 'schema_version': SCHEMA_VERSION,
+                    'published_at': _now(), 'counts': counts,
                     'sources': {kind: {'url': item.url, 'updated_at': item.updated_at,
                                        'compressed_size': item.compressed_size, 'sha256': item.sha256,
                                        'downloaded_at': item.downloaded_at}

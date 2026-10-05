@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from commander_gym.card_catalog import CatalogError, create_schema
+from commander_gym.card_catalog import CatalogError, SCHEMA_VERSION, create_schema
 from commander_gym.catalog_access import CatalogAccess
 from commander_gym.catalog_loader import CatalogLoadError, KINDS
 from commander_gym.catalog_refresh import check_refresh, refresh_catalog
@@ -48,7 +48,8 @@ class CatalogAccessRefreshTests(unittest.TestCase):
             db.execute('INSERT INTO card_tags VALUES (?,?,?,?)',
                        (snapshot_id, f'oracle-{snapshot_id}', 'oracle', 'ramp'))
         (self.root / 'snapshots' / f'{snapshot_id}.json').write_text(json.dumps({
-            'snapshot_id': snapshot_id, 'sources': self.sources}))
+            'snapshot_id': snapshot_id, 'schema_version': SCHEMA_VERSION,
+            'sources': self.sources}))
 
     def _current(self, snapshot_id):
         (self.root / 'current.json').write_text(json.dumps({
@@ -93,6 +94,15 @@ class CatalogAccessRefreshTests(unittest.TestCase):
         self.assertEqual(result, {'current_snapshot_id': ONE, 'refresh_needed': False,
                                   'published': False})
         download.assert_not_called()
+
+    def test_older_schema_needs_rebuild_even_when_sources_are_unchanged(self):
+        metadata = self.root / 'snapshots' / f'{ONE}.json'
+        old = json.loads(metadata.read_text())
+        old.pop('schema_version')
+        metadata.write_text(json.dumps(old))
+        with mock.patch('commander_gym.catalog_refresh.fetch_manifest', return_value=self._manifest()):
+            result = check_refresh(self.root)
+        self.assertTrue(result['refresh_needed'])
 
     def test_check_only_is_read_only_and_changed_build_failure_keeps_current(self):
         before = (self.root / 'current.json').read_bytes()

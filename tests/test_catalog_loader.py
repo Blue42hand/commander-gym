@@ -102,6 +102,57 @@ class CatalogLoaderTests(unittest.TestCase):
         with self.assertRaises(CatalogLoadError):
             publish_from_files(self.root / 'catalog', self.sources())
 
+    def test_authoring_fields_keep_exact_printing_and_face_provenance(self):
+        old, new = self.records['default_cards']
+        old.update({'set': 'm21', 'collector_number': '117',
+                    'mana_cost': '{2}', 'rarity': 'rare', 'artist': 'First Artist',
+                    'flavor_text': 'First printing.',
+                    'image_uris': {'normal': 'https://cards.scryfall.io/normal/old.jpg'}})
+        new.update({'set': 'sld', 'collector_number': '123',
+                    'rarity': 'mythic', 'artist': 'Second Artist'})
+        new['card_faces'] = [
+            {**self.faces[0], 'mana_cost': '{1}', 'artist': 'Front Artist',
+             'flavor_text': 'Front flavor.',
+             'image_uris': {'normal': 'https://cards.scryfall.io/normal/front.jpg'}},
+            {**self.faces[1], 'mana_cost': '{1}', 'artist': 'Back Artist',
+             'image_uris': {'normal': 'https://cards.scryfall.io/normal/back.jpg'}},
+        ]
+        metadata = publish_from_files(self.root / 'details', self.sources())
+        query = CardCatalog(self.root / 'details/snapshots' / f"{metadata['snapshot_id']}.sqlite",
+                            metadata['snapshot_id'])
+        self.assertTrue(query.catalog_status()['authoring_fields_available'])
+        representative = query.get_card(oracle_id=OID)
+        self.assertEqual(representative['printing_id'], NEW)
+        self.assertEqual(representative['artist'], 'Second Artist')
+        self.assertIsNone(representative['image_uris'])
+        requested = query.get_card(printing_id=OLD)
+        self.assertEqual(requested['printing_id'], NEW)
+        self.assertEqual(requested['requested_printing']['printing_id'], OLD)
+        self.assertEqual((requested['requested_printing']['set_code'],
+                          requested['requested_printing']['collector_number']), ('m21', '117'))
+        self.assertEqual(requested['requested_printing']['mana_cost'], '{2}')
+        self.assertEqual(requested['requested_printing']['rarity'], 'rare')
+        self.assertEqual(requested['requested_printing']['artist'], 'First Artist')
+        self.assertEqual(requested['requested_printing']['flavor_text'], 'First printing.')
+        self.assertEqual(requested['requested_printing']['image_uris']['normal'],
+                         'https://cards.scryfall.io/normal/old.jpg')
+        self.assertEqual(requested['requested_printing']['provenance']['printing_id'], OLD)
+        self.assertEqual(requested['requested_printing']['provenance']['source_url'],
+                         requested['provenance']['card_source'])
+        multi = query.get_card(printing_id=NEW)['requested_printing']
+        self.assertIsNone(multi['mana_cost'])
+        self.assertIsNone(multi['image_uris'])
+        self.assertEqual([face['mana_cost'] for face in multi['faces']], ['{1}', '{1}'])
+        self.assertEqual(multi['faces'][0]['artist'], 'Front Artist')
+        self.assertEqual(multi['faces'][1]['image_uris']['normal'],
+                         'https://cards.scryfall.io/normal/back.jpg')
+        self.assertIsNone(multi['faces'][1]['flavor_text'])
+
+    def test_invalid_image_uri_is_rejected(self):
+        self.records['default_cards'][0]['image_uris'] = {'normal': 'http://example.test/card.jpg'}
+        with self.assertRaisesRegex(CatalogLoadError, 'image_uris'):
+            publish_from_files(self.root / 'bad-image', self.sources())
+
     def test_bad_files_and_partial_download_do_not_replace_current(self):
         publish_from_files(self.root / 'catalog', self.sources())
         previous = (self.root / 'catalog/current.json').read_bytes()

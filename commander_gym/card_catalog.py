@@ -19,6 +19,7 @@ from typing import Any
 
 MAX_PAGE_SIZE = 50
 MAX_QUERY_LENGTH = 120
+SCHEMA_VERSION = 2
 _SORT = "c.name COLLATE NOCASE, c.oracle_id"
 
 
@@ -101,6 +102,7 @@ def create_schema(connection: sqlite3.Connection) -> None:
             price_usd TEXT,
             scryfall_uri TEXT,
             faces_json TEXT NOT NULL,
+            authoring_json TEXT NOT NULL,
             PRIMARY KEY (snapshot_id, printing_id, oracle_id),
             FOREIGN KEY(snapshot_id, oracle_id) REFERENCES cards(snapshot_id, oracle_id)
         );
@@ -230,6 +232,10 @@ class CardCatalog:
             row['ruling_count'] = db.execute('SELECT count(*) FROM rulings WHERE snapshot_id=?', (self.snapshot_id,)).fetchone()[0]
             row['oracle_tag_count'] = db.execute("SELECT count(*) FROM tags WHERE snapshot_id=? AND kind='oracle'", (self.snapshot_id,)).fetchone()[0]
             row['art_tag_count'] = db.execute("SELECT count(*) FROM tags WHERE snapshot_id=? AND kind='art'", (self.snapshot_id,)).fetchone()[0]
+            row['authoring_fields_available'] = any(
+                column['name'] == 'authoring_json' for column in db.execute("PRAGMA table_info('printings')")
+            )
+            row['schema_version'] = SCHEMA_VERSION if row['authoring_fields_available'] else 1
             row['tag_note'] = 'Tags are advisory; a missing tag does not prove a card lacks a gameplay role.'
             row['datasets'] = [dict(r) for r in db.execute(
                 'SELECT kind, url, updated_at, compressed_size, sha256, downloaded_at '
@@ -354,10 +360,13 @@ class CardCatalog:
                     printing = db.execute('SELECT * FROM printings WHERE snapshot_id=? AND printing_id=? AND oracle_id=?',
                                           (self.snapshot_id, value, result['oracle_id'])).fetchone()
                     if printing:
-                        result['requested_printing'] = dict(printing)
-                        result['requested_printing']['faces'] = json.loads(result['requested_printing'].pop('faces_json'))
+                        result['requested_printing'] = self._printing(db, printing)
                     else:
                         result['requested_printing'] = None
+                    result['requested_printing_note'] = (
+                        'Use requested_printing for printing-specific details. '
+                        'Top-level card fields describe the representative Oracle printing.'
+                    )
                 if len(results) > 1:
                     return {'snapshot_id': self.snapshot_id, 'printing_id': value,
                             'oracle_faces': results, 'tags_advisory': True}
@@ -381,6 +390,18 @@ class CardCatalog:
             (self.snapshot_id, result['oracle_id']))]
         result['price_usd'] = result['price_usd'] or None
         result['price_note'] = 'Missing price means unavailable, not zero.' if result['price_usd'] is None else None
+        representative = db.execute(
+            'SELECT * FROM printings WHERE snapshot_id=? AND printing_id=? AND oracle_id=?',
+            (self.snapshot_id, result['printing_id'], result['oracle_id']),
+        ).fetchone()
+        if representative is not None:
+            details = self._printing(db, representative)
+            for field in ('mana_cost', 'rarity', 'artist', 'flavor_text', 'image_uris'):
+                result[field] = details[field]
+            result['authoring_fields_available'] = details['authoring_fields_available']
+        else:
+            result.update({field: None for field in ('mana_cost', 'rarity', 'artist', 'flavor_text', 'image_uris')})
+            result['authoring_fields_available'] = False
         result['tags_advisory'] = True
         result['printing_count'] = db.execute(
             'SELECT count(*) FROM printings WHERE snapshot_id=? AND oracle_id=?',
@@ -396,4 +417,23 @@ class CardCatalog:
             'SELECT source, published_at, comment FROM rulings WHERE snapshot_id=? AND oracle_id=? '
             'ORDER BY published_at DESC, source, comment LIMIT 20',
             (self.snapshot_id, result['oracle_id']))]
+        return result
+
+    def _printing(self, db: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:
+        result = dict(row)
+        result['faces'] = json.loads(result.pop('faces_json'))
+        if 'authoring_json' in result:
+            result.update(json.loads(result.pop('authoring_json')))
+            result['authoring_fields_available'] = True
+        else:
+            result.update({field: None for field in ('mana_cost', 'rarity', 'artist', 'flavor_text', 'image_uris')})
+            result['authoring_fields_available'] = False
+        result['provenance'] = {
+            'snapshot_id': self.snapshot_id,
+            'dataset': 'default_cards',
+            'source_url': db.execute(
+                'SELECT card_source FROM snapshots WHERE snapshot_id=?', (self.snapshot_id,)
+            ).fetchone()[0],
+            'printing_id': result['printing_id'],
+        }
         return result
