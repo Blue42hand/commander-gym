@@ -31,10 +31,14 @@ class OpenAIRunBudget:
     # Covers long-context pricing and a possible regional/Fast surcharge.
     SAFETY_MULTIPLIER = 2.2
     MAX_OUTPUT_TOKENS = 2048
+    LONG_CONTEXT_INPUT_TOKENS = 272_000
 
     def __init__(
         self, path: Path, cap_usd: float, *, authorized_max_usd: float = 5.0,
         max_requests: int | None = None, initialize_new_ledger: bool = False,
+        session_cap_usd: float | None = None,
+        session_max_requests: int | None = None,
+        require_cache_usage_details: bool = False,
     ) -> None:
         if not isinstance(path, Path) or not path.is_absolute():
             raise ValueError("budget ledger path must be absolute")
@@ -50,6 +54,19 @@ class OpenAIRunBudget:
             raise ValueError("max_requests must be a nonnegative absolute ledger count")
         if type(initialize_new_ledger) is not bool:
             raise ValueError("initialize_new_ledger must be boolean")
+        if (session_cap_usd is not None and (
+            type(session_cap_usd) not in (int, float)
+            or not math.isfinite(session_cap_usd)
+            or session_cap_usd <= 0 or session_cap_usd > cap_usd
+        )):
+            raise ValueError("session cap must be positive and within the shared cap")
+        if (session_max_requests is not None and (
+            type(session_max_requests) is not int or session_max_requests < 0
+            or max_requests is None or session_max_requests > max_requests
+        )):
+            raise ValueError("session request limit must be within the shared limit")
+        if type(require_cache_usage_details) is not bool:
+            raise ValueError("require_cache_usage_details must be boolean")
         if cap_usd > 5 and max_requests is None:
             raise ValueError("a budget above $5 requires an absolute request limit")
         if not path.parent.is_dir():
@@ -59,6 +76,9 @@ class OpenAIRunBudget:
         self.authorized_max_usd = float(authorized_max_usd)
         self.max_requests = max_requests
         self.initialize_new_ledger = initialize_new_ledger
+        self.session_cap_usd = session_cap_usd
+        self.session_max_requests = session_max_requests
+        self.require_cache_usage_details = require_cache_usage_details
 
     def _write_data(self, data: Mapping[str, Any]) -> None:
         encoded = json.dumps(data, sort_keys=True)
@@ -187,10 +207,20 @@ class OpenAIRunBudget:
         return result
 
     @classmethod
-    def _cost(cls, input_tokens: int, output_tokens: int) -> float:
+    def _cost(
+        cls, input_tokens: int, output_tokens: int, *,
+        cached_tokens: int = 0, cache_write_tokens: int = 0,
+    ) -> float:
+        if (min(input_tokens, output_tokens, cached_tokens, cache_write_tokens) < 0
+            or cached_tokens + cache_write_tokens > input_tokens):
+            raise ValueError("cache token counts exceed total input")
+        tier = 2 if input_tokens > cls.LONG_CONTEXT_INPUT_TOKENS else 1
+        ordinary_tokens = input_tokens - cached_tokens - cache_write_tokens
         return cls.SAFETY_MULTIPLIER * (
-            input_tokens * cls.INPUT_USD_PER_MILLION
-            + output_tokens * cls.OUTPUT_USD_PER_MILLION
+            tier * cls.INPUT_USD_PER_MILLION * (
+                ordinary_tokens + 0.1 * cached_tokens + 1.25 * cache_write_tokens
+            )
+            + (1.5 if tier == 2 else 1) * output_tokens * cls.OUTPUT_USD_PER_MILLION
         ) / 1_000_000
 
     def create(self, create: Callable[..., Any], request: Mapping[str, Any]) -> Any:
@@ -202,13 +232,23 @@ class OpenAIRunBudget:
         # includes the request-local schema. Failed/ambiguous attempts keep that
         # reservation because the provider may have processed them.
         request_bytes = len(json.dumps(request, ensure_ascii=False).encode("utf-8"))
-        reserved = self._cost(request_bytes + 4096, self.MAX_OUTPUT_TOKENS)
+        reserved_input = request_bytes + 4096
+        reserved = self._cost(
+            reserved_input, self.MAX_OUTPUT_TOKENS,
+            cache_write_tokens=reserved_input,
+        )
 
         def reserve(data: dict[str, Any]) -> None:
             if self.max_requests is not None and data["requests"] >= self.max_requests:
                 raise OpenAIRunBudgetError("absolute request limit reached before dispatch")
+            if (self.session_max_requests is not None
+                and data["requests"] >= self.session_max_requests):
+                raise OpenAIRunBudgetError("session request limit reached before dispatch")
             if data["estimatedUsd"] + reserved > self.cap_usd:
                 raise OpenAIRunBudgetError("the next OpenAI request exceeds the cumulative run cap")
+            if (self.session_cap_usd is not None
+                and data["estimatedUsd"] + reserved > self.session_cap_usd):
+                raise OpenAIRunBudgetError("the next OpenAI request exceeds the session cap")
             data["estimatedUsd"] += reserved
             data["requests"] += 1
             data["unsettledRequests"] += 1
@@ -224,8 +264,32 @@ class OpenAIRunBudget:
             usage.get("output_tokens") if isinstance(usage, Mapping)
             else getattr(usage, "output_tokens", None)
         )
-        if type(input_tokens) is int and type(output_tokens) is int:
-            actual = self._cost(input_tokens, output_tokens)
+        if (type(input_tokens) is int and type(output_tokens) is int
+            and input_tokens >= 0 and output_tokens >= 0):
+            details = (
+                usage.get("input_tokens_details") if isinstance(usage, Mapping)
+                else getattr(usage, "input_tokens_details", None)
+            )
+            cached = (
+                details.get("cached_tokens") if isinstance(details, Mapping)
+                else getattr(details, "cached_tokens", None)
+            )
+            writes = (
+                details.get("cache_write_tokens") if isinstance(details, Mapping)
+                else getattr(details, "cache_write_tokens", None)
+            )
+            valid_details = (
+                type(cached) is int and type(writes) is int
+                and cached >= 0 and writes >= 0 and cached + writes <= input_tokens
+            )
+            # Unknown usage cannot silently claim a cache discount. The strict
+            # experiment mode also stops after settling conservatively.
+            if not valid_details:
+                cached, writes = 0, input_tokens
+            actual = self._cost(
+                input_tokens, output_tokens,
+                cached_tokens=cached, cache_write_tokens=writes,
+            )
             def settle(data: dict[str, Any]) -> None:
                 data["estimatedUsd"] -= reserved - actual
                 data["inputTokens"] += input_tokens
@@ -246,4 +310,20 @@ class OpenAIRunBudget:
                     "provider usage exceeded conservative reservation",
                     dispatched=True, response=response,
                 )
+            if self.require_cache_usage_details and not valid_details:
+                raise OpenAIRunBudgetError(
+                    "provider cache usage details are missing or invalid",
+                    dispatched=True, response=response,
+                )
+        elif self.require_cache_usage_details:
+            raise OpenAIRunBudgetError(
+                "provider token usage is missing or invalid",
+                dispatched=True, response=response,
+            )
+        elif (type(input_tokens) is int and input_tokens < 0
+              or type(output_tokens) is int and output_tokens < 0):
+            raise OpenAIRunBudgetError(
+                "provider token usage is invalid",
+                dispatched=True, response=response,
+            )
         return response
