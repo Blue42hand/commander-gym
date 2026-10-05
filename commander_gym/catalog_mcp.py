@@ -1,0 +1,102 @@
+"""Local stdio MCP adapter for the public, read-only card catalog.
+
+Network reachability, authentication, and ChatGPT connection are separate
+deployment decisions. This module never opens a listener.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+from typing import Any
+
+from .catalog_access import CatalogAccess
+from .card_catalog import CatalogError
+
+
+MAX_RESULT_BYTES = 500_000
+
+
+def _bounded(result: Any) -> Any:
+    if len(json.dumps(result, ensure_ascii=False).encode("utf-8")) > MAX_RESULT_BYTES:
+        raise CatalogError("catalog result too large; narrow the query")
+    return result
+
+
+def build_server(root: str | Path):
+    """Register only the four bounded discovery tools on the official MCP SDK."""
+    from mcp.server import MCPServer
+    from mcp.types import ToolAnnotations
+
+    access = CatalogAccess(root)
+    server = MCPServer(
+        "commander-gym-public-cards",
+        instructions=("Public Scryfall card discovery only. Call catalog_status first and pass its "
+                      "snapshot_id to subsequent tools. Tags are advisory, missing price is unknown, "
+                      "and Argentum is authoritative for game rules and card implementations."),
+    )
+    readonly = ToolAnnotations(readOnlyHint=True, destructiveHint=False,
+                               idempotentHint=True, openWorldHint=False)
+
+    @server.tool(annotations=readonly)
+    def catalog_status(snapshot_id: str | None = None) -> dict[str, Any]:
+        """Get current or pinned snapshot counts, source dates, hashes, and freshness context.
+
+        Omit snapshot_id to discover the current immutable snapshot. Pass that ID
+        to all other calls; later refreshes will not change a pinned session.
+        """
+        return _bounded(access.catalog_status(snapshot_id))
+
+    @server.tool(annotations=readonly)
+    def search_tags(snapshot_id: str, query: str, kind: str = "oracle",
+                    limit: int = 20, cursor: str | None = None) -> dict[str, Any]:
+        """Search advisory tag labels; a missing tag does not prove absence.
+
+        Only oracle tags are loaded in the current catalog. Use an exact tag_id
+        returned here to filter cards. Pagination is pinned to snapshot_id.
+        """
+        return _bounded(access.search_tags(snapshot_id, query, kind=kind, limit=limit, cursor=cursor))
+
+    @server.tool(annotations=readonly)
+    def search_cards(snapshot_id: str, name: str | None = None,
+                     oracle_text: str | None = None, type_line: str | None = None,
+                     tag_id: str | None = None, tag_kind: str = "oracle",
+                     commander_legal: bool | None = None,
+                     color_identity: str | None = None,
+                     mana_value_min: float | None = None,
+                     mana_value_max: float | None = None,
+                     limit: int = 20, cursor: str | None = None) -> dict[str, Any]:
+        """Search cards using bounded structured filters, not Scryfall syntax.
+
+        Returns Oracle and printing IDs with source evidence. Commander legality
+        is catalog data for discovery; Argentum remains the rules authority.
+        """
+        return _bounded(access.search_cards(
+            snapshot_id, name=name, oracle_text=oracle_text, type_line=type_line,
+            tag_id=tag_id, tag_kind=tag_kind, commander_legal=commander_legal,
+            color_identity=color_identity, mana_value_min=mana_value_min,
+            mana_value_max=mana_value_max, limit=limit, cursor=cursor))
+
+    @server.tool(annotations=readonly)
+    def get_card(snapshot_id: str, oracle_id: str | None = None,
+                 printing_id: str | None = None) -> dict[str, Any] | None:
+        """Get one Oracle identity or printing with faces, rulings, tags, and sources.
+
+        Supply exactly one ID. Missing prices stay null, and tags are advisory.
+        """
+        return _bounded(access.get_card(snapshot_id, oracle_id=oracle_id, printing_id=printing_id))
+
+    return server
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Run the local read-only catalog MCP adapter over stdio")
+    parser.add_argument("--catalog-root", type=Path, required=True,
+                        help="private configured catalog root (never supplied by tool callers)")
+    args = parser.parse_args()
+    build_server(args.catalog_root).run(transport="stdio")
+
+
+if __name__ == "__main__":
+    main()
