@@ -4,6 +4,7 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from contextlib import redirect_stdout
 from io import StringIO
+import multiprocessing
 import json
 import unittest
 
@@ -49,7 +50,95 @@ def dispatch(session, budget, trial_index, *, retry=False, valid=True):
     session.verify(budget.snapshot())
 
 
+def try_second_runner(run_dir, ledger_path, outcome):
+    try:
+        budget = OpenAIRunBudget(ledger_path, 18, authorized_max_usd=18,
+                                 max_requests=2212)
+        with ProbeSession.open(run_dir, budget, trace_sha256="a" * 64,
+                               source_head="head-a", requests=sample_requests()):
+            outcome.send("acquired")
+    except ProbeSessionError as error:
+        outcome.send(str(error))
+    finally:
+        outcome.close()
+
+
 class CacheProbeSessionTests(unittest.TestCase):
+    def test_second_process_cannot_open_held_session(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            budget = ledger(root / "ledger.json")
+            with ProbeSession.open(root / "run", budget,
+                    trace_sha256="a" * 64, source_head="head-a",
+                    requests=sample_requests()):
+                receiver, sender = multiprocessing.get_context("spawn").Pipe()
+                contender = multiprocessing.get_context("spawn").Process(
+                    target=try_second_runner,
+                    args=(root / "run", root / "ledger.json", sender),
+                )
+                contender.start()
+                sender.close()
+                self.assertEqual(receiver.recv(), "another process owns the probe session")
+                contender.join(timeout=5)
+                self.assertEqual(contender.exitcode, 0)
+                self.assertEqual(budget.snapshot()["requests"], 0)
+
+    def test_retry_budget_error_stops_resumed_session(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            budget = ledger(root / "ledger.json")
+            session = ProbeSession.open(root / "run", budget,
+                trace_sha256="a" * 64, source_head="head-a", requests=sample_requests())
+            dispatch(session, budget, 0, valid=False)
+            retry_request = {**sample_requests()[0], "input": "JSON trial 0 correction"}
+            ordinal, reserved = session.begin(0, retry_request, retry=True)
+            missing_details = SimpleNamespace(usage={
+                "input_tokens": 100, "output_tokens": 10,
+                "input_tokens_details": {},
+            }, id="retry-response", output_text="invalid")
+            from commander_gym.openai_run_budget import OpenAIRunBudgetError
+            with self.assertRaises(OpenAIRunBudgetError) as caught:
+                session.guarded_budget(budget.path).create(
+                    lambda **_request: missing_details, retry_request)
+            self.assertTrue(caught.exception.dispatched)
+            session.record_response(ordinal, retry_request, missing_details,
+                                    result_kind="budget_error")
+            session.finish(ordinal, usage=missing_details.usage, reserved=reserved,
+                           valid=False, result_kind="budget_error")
+            session.verify(budget.snapshot())
+            session.close()
+            with ProbeSession.open(root / "run", budget,
+                    trace_sha256="a" * 64, source_head="head-a",
+                    requests=sample_requests()) as resumed:
+                with self.assertRaisesRegex(ProbeSessionError, "earlier provider error"):
+                    execute_trials(resumed, resumed.guarded_budget(budget.path), None, [])
+            receipt = json.loads((root / "run" / "attempt-01.json").read_text())
+            self.assertEqual(receipt["response"]["id"], "retry-response")
+
+    def test_final_retry_transport_error_never_reports_completed(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            budget = ledger(root / "ledger.json")
+            session = ProbeSession.open(root / "run", budget,
+                trace_sha256="a" * 64, source_head="head-a", requests=sample_requests())
+            for trial_index in range(len(TRIALS)):
+                dispatch(session, budget, trial_index, valid=trial_index != 9)
+            retry_request = {**sample_requests()[9], "input": "JSON trial 9 correction"}
+            ordinal, reserved = session.begin(9, retry_request, retry=True)
+            def disconnected(**_request):
+                raise RuntimeError("simulated ambiguous transport")
+            with self.assertRaisesRegex(RuntimeError, "ambiguous transport"):
+                session.guarded_budget(budget.path).create(disconnected, retry_request)
+            session.finish(ordinal, usage=None, reserved=reserved,
+                           valid=False, result_kind="transport_error")
+            session.verify(budget.snapshot())
+            session.close()
+            with ProbeSession.open(root / "run", budget,
+                    trace_sha256="a" * 64, source_head="head-a",
+                    requests=sample_requests()) as resumed:
+                with self.assertRaisesRegex(ProbeSessionError, "earlier provider error"):
+                    execute_trials(resumed, resumed.guarded_budget(budget.path), None, [])
+
     def test_runner_resumes_and_counts_warmups_and_validation_retry(self):
         observation = {
             "type": "Game", "perspectivePlayerId": "p1", "agentToAct": "p1",
@@ -89,6 +178,7 @@ class CacheProbeSessionTests(unittest.TestCase):
             client = SimpleNamespace(responses=FakeResponses())
             with redirect_stdout(StringIO()):
                 execute_trials(session, session.guarded_budget(budget.path), client, rows)
+                session.close()
                 # A second process resumes the same frozen session without a request.
                 resumed = ProbeSession.open(root / "run", budget,
                     trace_sha256="a" * 64, source_head="head-a", requests=requests)
@@ -98,6 +188,9 @@ class CacheProbeSessionTests(unittest.TestCase):
             self.assertEqual(budget.snapshot()["requests"], 11)
             self.assertEqual(sum(item["retry"] for item in intents), 1)
             self.assertEqual(sum(not item["retry"] for item in intents), 10)
+            self.assertEqual((root / "run" / "attempt-00.json").stat().st_mode & 0o777, 0o600)
+            self.assertIn("output_text", json.loads(
+                (root / "run" / "attempt-00.json").read_text())["response"])
             self.assertEqual([(item["trialIndex"], item["retry"]) for item in intents[3:7]],
                              [(2, False), (3, False), (4, False), (5, False)])
 
@@ -114,12 +207,14 @@ class CacheProbeSessionTests(unittest.TestCase):
             self.assertEqual(original["sessionMaxRequests"], 12)
             self.assertEqual(original["sessionCapUsd"], 0.5)
             dispatch(session, budget, 0)
+            session.close()
             resumed = ProbeSession.open(
                 root / "run", budget, trace_sha256="a" * 64,
                 source_head="head-a", requests=sample_requests(),
             )
             self.assertEqual(resumed.manifest, original)
             self.assertEqual(resumed.guarded_budget(budget.path).session_cap_usd, 0.5)
+            resumed.close()
             with self.assertRaisesRegex(ProbeSessionError, "source, or payload"):
                 ProbeSession.open(root / "run", budget, trace_sha256="b" * 64,
                                   source_head="head-a", requests=sample_requests())
@@ -138,6 +233,7 @@ class CacheProbeSessionTests(unittest.TestCase):
             session = ProbeSession.open(root / "run", budget,
                 trace_sha256="a" * 64, source_head="head-a", requests=sample_requests())
             session.begin(0, sample_requests()[0])
+            session.close()
             with self.assertRaisesRegex(ProbeSessionError, "unresolved attempt intent"):
                 ProbeSession.open(root / "run", budget,
                     trace_sha256="a" * 64, source_head="head-a", requests=sample_requests())

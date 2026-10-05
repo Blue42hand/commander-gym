@@ -149,6 +149,8 @@ def _dispatch(session: ProbeSession, budget: OpenAIRunBudget, client: Any,
             # restart cannot mistake this window for permission to retry.
             raise ProbeSessionError("reservation rejected; unresolved intent requires review") from error
         response = error.response
+        if response is not None:
+            session.record_response(ordinal, request, response, result_kind="budget_error")
         session.finish(ordinal, usage=getattr(response, "usage", None),
                        reserved=reserved, valid=False, result_kind="budget_error",
                        diagnostics={"error": str(error)[:256],
@@ -181,6 +183,7 @@ def _dispatch(session: ProbeSession, budget: OpenAIRunBudget, client: Any,
         valid = False
         validation_error = str(error)[:1024]
     output = getattr(response, "output_text", "")
+    session.record_response(ordinal, request, response, result_kind="provider_response")
     session.finish(ordinal, usage=getattr(response, "usage", None),
                    reserved=reserved, valid=valid, result_kind="provider_response",
                    diagnostics={
@@ -205,11 +208,12 @@ def execute_trials(
         results = _read_jsonl(session.run_dir / "results.jsonl")
         intents = _read_jsonl(session.run_dir / "intents.jsonl")
         session.verify(budget.snapshot())
+        if results and (results[-1]["resultKind"] != "provider_response"
+                        or results[-1]["unsettledDelta"]):
+            raise ProbeSessionError("earlier provider error requires review")
         primary_count = sum(not intent["retry"] for intent in intents)
         if results and not results[-1]["valid"] and not results[-1]["retry"]:
             previous = results[-1]
-            if previous["resultKind"] != "provider_response":
-                raise ProbeSessionError("earlier provider error requires review")
             if sum(bool(intent["retry"]) for intent in intents) < MAX_RETRIES:
                 trial_index = previous["trialIndex"]
                 position, variant = TRIALS[trial_index]
@@ -239,20 +243,20 @@ def run(args: argparse.Namespace) -> None:
     ).strip()
     shared = OpenAIRunBudget(ledger_path, 18, authorized_max_usd=18,
                              max_requests=2212)
-    session = ProbeSession.open(args.run_dir.absolute(), shared,
-        trace_sha256=trace_sha, source_head=source_head, requests=requests)
-    budget = session.guarded_budget(ledger_path)
-    if not args.execute:
-        print(json.dumps({"status": "preflight-only", "sourceHead": source_head,
-                          "sessionCapUsd": session.manifest["sessionCapUsd"],
-                          "sessionMaxRequests": session.manifest["sessionMaxRequests"],
-                          "worstReservationUsd": session.manifest["worstTotalReservationUsd"]}))
-        return
-    key = _read_key(args.api_key_file.resolve(strict=True))
-    import openai
-    client = openai.OpenAI(api_key=key, max_retries=0)
-    del key
-    execute_trials(session, budget, client, rows)
+    with ProbeSession.open(args.run_dir.absolute(), shared,
+            trace_sha256=trace_sha, source_head=source_head, requests=requests) as session:
+        budget = session.guarded_budget(ledger_path)
+        if not args.execute:
+            print(json.dumps({"status": "preflight-only", "sourceHead": source_head,
+                              "sessionCapUsd": session.manifest["sessionCapUsd"],
+                              "sessionMaxRequests": session.manifest["sessionMaxRequests"],
+                              "worstReservationUsd": session.manifest["worstTotalReservationUsd"]}))
+            return
+        key = _read_key(args.api_key_file.resolve(strict=True))
+        import openai
+        client = openai.OpenAI(api_key=key, max_retries=0)
+        del key
+        execute_trials(session, budget, client, rows)
 
 
 def main() -> int:

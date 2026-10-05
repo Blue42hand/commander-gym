@@ -7,6 +7,7 @@ ledger ceilings; every later process must reuse them exactly.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import fcntl
 import hashlib
 import json
 import math
@@ -32,6 +33,14 @@ class ProbeSessionError(RuntimeError):
     pass
 
 
+def _fsync_dir(directory: Path) -> None:
+    fd = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 def _private_json(path: Path, value: Mapping[str, Any]) -> None:
     encoded = json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n"
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -40,17 +49,21 @@ def _private_json(path: Path, value: Mapping[str, Any]) -> None:
             stream.write(encoded)
             stream.flush()
             os.fsync(stream.fileno())
+        _fsync_dir(path.parent)
     except Exception:
         path.unlink(missing_ok=True)
         raise
 
 
 def _append(path: Path, value: Mapping[str, Any]) -> None:
+    newly_created = not path.exists()
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as stream:
         stream.write(json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n")
         stream.flush()
         os.fsync(stream.fileno())
+    if newly_created:
+        _fsync_dir(path.parent)
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -109,6 +122,7 @@ def _usage_charge(usage: Any, reserved: float) -> tuple[float, int, int, int]:
 class ProbeSession:
     run_dir: Path
     manifest: dict[str, Any]
+    _lock_fd: int | None = None
 
     @classmethod
     def open(
@@ -124,6 +138,27 @@ class ProbeSession:
         run_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         if run_dir.is_symlink():
             raise ProbeSessionError("run directory cannot be a symlink")
+        lock_fd = os.open(run_dir / ".session.lock", os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            os.close(lock_fd)
+            raise ProbeSessionError("another process owns the probe session") from error
+        try:
+            return cls._open_locked(run_dir, budget, trace_sha256=trace_sha256,
+                                    source_head=source_head, requests=requests,
+                                    lock_fd=lock_fd)
+        except BaseException:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            os.close(lock_fd)
+            raise
+
+    @classmethod
+    def _open_locked(
+        cls, run_dir: Path, budget: OpenAIRunBudget, *,
+        trace_sha256: str, source_head: str,
+        requests: list[Mapping[str, Any]], lock_fd: int,
+    ) -> "ProbeSession":
         manifest_path = run_dir / "manifest.json"
         bounds = []
         for (position, variant), request in zip(TRIALS, requests, strict=True):
@@ -169,9 +204,29 @@ class ProbeSession:
                         "sessionCapUsd": min(18.0, start["estimatedUsd"] + INCREMENTAL_USD),
                         "sessionMaxRequests": min(2212, start["requests"] + MAX_ATTEMPTS)}
             _private_json(manifest_path, manifest)
-        session = cls(run_dir, manifest)
-        session.verify(budget.snapshot())
+        session = cls(run_dir, manifest, lock_fd)
+        try:
+            session.verify(budget.snapshot())
+        except BaseException:
+            # open() owns release while construction is still failing.
+            session._lock_fd = None
+            raise
         return session
+
+    def close(self) -> None:
+        if self._lock_fd is not None:
+            fcntl.flock(self._lock_fd, fcntl.LOCK_UN)
+            os.close(self._lock_fd)
+            self._lock_fd = None
+
+    def __enter__(self) -> "ProbeSession":
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()
+
+    def __del__(self) -> None:
+        self.close()
 
     def guarded_budget(self, ledger_path: Path) -> OpenAIRunBudget:
         """Reconstruct absolute, persisted limits; never derive new ones on resume."""
@@ -181,6 +236,24 @@ class ProbeSession:
             session_max_requests=self.manifest["sessionMaxRequests"],
             require_cache_usage_details=True,
         )
+
+    def record_response(
+        self, ordinal: int, request: Mapping[str, Any], response: Any,
+        *, result_kind: str,
+    ) -> None:
+        """Keep the complete returned content private before completing an intent."""
+        if self._lock_fd is None:
+            raise ProbeSessionError("probe session lock is not held")
+        if hasattr(response, "model_dump"):
+            returned = response.model_dump(mode="json")
+        elif isinstance(response, Mapping):
+            returned = dict(response)
+        else:
+            returned = vars(response)
+        _private_json(self.run_dir / f"attempt-{ordinal:02d}.json", {
+            "ordinal": ordinal, "resultKind": result_kind,
+            "request": dict(request), "response": returned,
+        })
 
     def verify(self, snapshot: Mapping[str, Any]) -> None:
         """Fail on ambiguous interruption, other writers, or historical settlement."""
@@ -213,6 +286,8 @@ class ProbeSession:
 
     def begin(self, trial_index: int, request: Mapping[str, Any], *, retry: bool = False) -> tuple[int, float]:
         """Fsync an intent before dispatch and charge its reservation permanently."""
+        if self._lock_fd is None:
+            raise ProbeSessionError("probe session lock is not held")
         intents = _read_jsonl(self.run_dir / "intents.jsonl")
         results = _read_jsonl(self.run_dir / "results.jsonl")
         if len(intents) != len(results):
