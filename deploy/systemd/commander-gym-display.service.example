@@ -1,0 +1,19 @@
+[Unit]
+Description=Commander Gym local display
+After=network.target
+
+[Service]
+Type=simple
+User=commander-gym
+WorkingDirectory=/opt/commander-gym
+Environment=COMMANDER_GYM_DISPLAY_HOST=127.0.0.1
+Environment=COMMANDER_GYM_DISPLAY_PORT=8090
+Environment=COMMANDER_GYM_DISPLAY_PROVENANCE=/var/lib/commander-gym/policy-provenance.jsonl
+Environment=COMMANDER_GYM_DISPLAY_REPO_DIR=/opt/commander-gym
+Environment=COMMANDER_GYM_DISPLAY_ARGENTUM_DIR=/opt/argentum-engine
+ExecStart=/usr/bin/python3 -m commander_gym.local_display
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
