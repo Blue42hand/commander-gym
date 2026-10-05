@@ -5,13 +5,20 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import threading
+import uuid
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Mapping
 
 from commander_gym.game_server_seat import GameServerSeatAdapter, SeatProvenance
-from commander_gym.game_server_sidecar import GameServerSidecarConfig, GameServerSidecarServer
+from commander_gym.game_server_sidecar import (
+    MAX_REQUEST_BYTES,
+    GameServerSidecarConfig,
+    GameServerSidecarHandler,
+    GameServerSidecarServer,
+)
 from commander_gym.pilot import ArgentumActionChoice, ArgentumDecisionChoice
 
 
@@ -29,6 +36,36 @@ class EvidenceWriter:
 
     def provenance(self, record: SeatProvenance) -> None:
         self.write({"event": "provenance", **asdict(record)})
+
+
+class _CaptureHandler(GameServerSidecarHandler):
+    """Test-only exact HTTP body capture; production transport is untouched."""
+
+    def _read_json(self):
+        if self.headers.get("Content-Type", "").split(";", 1)[0].strip() != "application/json":
+            raise ValueError("callback requires application/json")
+        try:
+            length = int(self.headers.get("Content-Length", ""))
+        except ValueError as exc:
+            raise ValueError("callback requires a valid Content-Length") from exc
+        if length <= 0 or length > MAX_REQUEST_BYTES:
+            raise ValueError("callback body is empty or exceeds the sidecar limit")
+        raw = self.rfile.read(length)
+        capture_dir = os.getenv("COMMANDER_GYM_HTTP_CAPTURE_DIR")
+        if capture_dir:
+            destination = Path(capture_dir) / (uuid.uuid4().hex + ".json")
+            temporary = destination.with_suffix(".tmp")
+            fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "wb") as output:
+                output.write(raw)
+            os.replace(temporary, destination)
+        try:
+            payload = json.loads(raw)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("callback body must be valid JSON") from exc
+        if not isinstance(payload, Mapping):
+            raise ValueError("callback body must be an object")
+        return payload
 
 
 class AcceptancePilot:
@@ -166,6 +203,12 @@ def main() -> None:
     parser.add_argument("--evidence", type=Path, required=True)
     args = parser.parse_args()
 
+    capture_dir = os.getenv("COMMANDER_GYM_HTTP_CAPTURE_DIR")
+    if capture_dir:
+        target = Path(capture_dir)
+        if not target.is_dir() or target.stat().st_mode & 0o077:
+            raise RuntimeError("HTTP capture directory must exist and be private")
+
     args.mode_file.write_text("normal\n", encoding="utf-8")
     args.evidence.write_text("", encoding="utf-8")
     evidence = EvidenceWriter(args.evidence)
@@ -184,6 +227,8 @@ def main() -> None:
         config,
         seat_factory=factory,
     )
+    if os.getenv("COMMANDER_GYM_HTTP_CAPTURE_DIR"):
+        server.RequestHandlerClass = _CaptureHandler
     try:
         server.serve_forever()
     finally:

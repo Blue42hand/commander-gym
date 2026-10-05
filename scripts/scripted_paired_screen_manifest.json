@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 1,
+  "sourceSetSha256": "ef2dec32b22f4f65d0cb3968ea4bf1349877c46156e88877fa838f0a5a31808e",
+  "catalogSha256": "9d74341d523889c13f5f3c1376453e9ea97689db8bca736a62dce2b975afb960",
+  "captureSummarySha256": "b270cef5cc587444827481a0c2935139656ef3378428c83cfb62d006acde78ac",
+  "captureGymCommit": "d24ef6b824fe10acfa51d4e34b6c6b6154059fe1",
+  "engineCommit": "fdeca4461ee4ef85389f6cf1465efeb6f5decdca",
+  "capturedCallbacks": 78,
+  "actionCallbacks": 76,
+  "selected": [
+    {
+      "index": 0,
+      "httpSha256": "a0fd8a4c08caac72678b4b2b91aab870dfea6a42f1c86e2a3918679e54bf5024",
+      "fullRequestSha256": "f9512bbfc8d6267d13e4b49082c6562ceb58c5af0fa547937d73955346525080",
+      "compactRequestSha256": "fd6a389920d14b0eba766f99f63fa874f4828037241eb2543f44a96e0f0f9bea"
+    },
+    {
+      "index": 1,
+      "httpSha256": "0d717c2f674a28a8423a34085316592771466821c44168ac4ff95bb0f11c9498",
+      "fullRequestSha256": "0601ac10a7af53c35f0bed0c1bb331717afaaed91aab480e4d1c90f2630c8887",
+      "compactRequestSha256": "6b90647a7ac18fbc81fdb0d62d623095e72fca8f2c9248efc4215b342a2fac9f"
+    },
+    {
+      "index": 2,
+      "httpSha256": "872a4086ae259c05c29e3f2c2e454e5e7090a0ad4f0d5675856cc342208b8b27",
+      "fullRequestSha256": "0538c4c5907303734cc5a7858d0ee9df7ddf3796bfc2994ad9fc58efb8be270c",
+      "compactRequestSha256": "536a1189793a47cda5d0802db8a721e2d802815e676daad4800ec71873106e7e"
+    },
+    {
+      "index": 3,
+      "httpSha256": "0c536cbaadf47753a4885079ec05c75585eadf44255b6c4ff876b528d024aedc",
+      "fullRequestSha256": "a6aeeab645e7f0ebe237d60c8fdfaff48469dc7cfb1a7f821bcf3b62ca011b5f",
+      "compactRequestSha256": "88912cea4b03b92a36a1d01d044f1896661afa22977183bdd59c1663730f9081"
+    },
+    {
+      "index": 4,
+      "httpSha256": "986db95a85cd82c8ec7e97e57e12dff9f16a642ddab2c5f9487ac7b70241d5f5",
+      "fullRequestSha256": "ae414b6266748e3e4552294228778d1e8c13822d0e2c5dce45a451bfb9f4b308",
+      "compactRequestSha256": "7f0a2a2302ea5694df4529be2ee4d9c2e71edebaba1e2bc63fad2f00a463ce2e"
+    },
+    {
+      "index": 5,
+      "httpSha256": "0ccdf71ebc23b82bae3704793ef66c4423c112d6ab4aefc01d8be6ce6f5a6791",
+      "fullRequestSha256": "e4d6e85d1c123451092aa0e8fefca4454357af765247157b8045fb839423df29",
+      "compactRequestSha256": "ef69f81bfe2fa67d4eb16e87f50d7a4425bb372d6ea613cbcf2345ce8739140e"
+    },
+    {
+      "index": 6,
+      "httpSha256": "cf3f74b9f59201b5a770e45970ee7c86b325748076c33571c6559680cf05a1ec",
+      "fullRequestSha256": "765d5184bf7ba9f946f3896dcf9bfb91d3fb8a04db39f3b5b1c53f03a92b3f50",
+      "compactRequestSha256": "9dd3c12fc79f60f2d8076897133473d1c68e6e01608add4d3297d413637054d3"
+    },
+    {
+      "index": 7,
+      "httpSha256": "da8d2bef2fababa1315074df074790f6772ff07adc8ee1d716e369578d6af2f9",
+      "fullRequestSha256": "2defe484cc5d9e21fa96f8dffca7c6d0c10c68c2126351ecfbc39fe555d410d7",
+      "compactRequestSha256": "7458bbeea75d6446e31acb0d67b7fd026fc1b982c092eee81dbcaa20afa77b36"
+    }
+  ],
+  "model": "gpt-6-luna",
+  "maxOutputTokens": 2048,
+  "maxNewRequests": 16,
+  "wallSeconds": 360,
+  "expectedLedgerRequests": 590,
+  "absoluteLedgerRequestLimit": 610,
+  "authorizedCapUsd": 6
+}

@@ -78,8 +78,30 @@ class GameServerSidecarTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(response["kind"], "action")
         self.assertEqual(response["action"], body["legalActions"][0]["action"])
+        self.assertEqual(response["params"], {})
         self.assertEqual(self.pilot.observations[0]["state"], body["state"])
         self.assertNotIn("snapshot", self.pilot.observations[0])
+
+    def test_native_payment_error_reaches_same_seat_only_for_mana_decision(self):
+        pilot = ScriptedPilot(ArgentumDecisionChoice({
+                "type": "ManaSourcesSelectedResponse", "decisionId": "payment-fresh",
+                "autoPay": False, "declined": True, "selectedSources": [],
+                "waterbendPermanents": [],
+            }))
+        self.server.seats["ai"] = GameServerSeatAdapter(pilot, "ai")
+        body = {
+            "playerId": "ai", "state": {"viewingPlayerId": "ai"}, "legalActions": [],
+            "pendingDecision": {"kind": "SelectManaSourcesDecision", "decisionId": "payment-fresh",
+                                "responseSpec": {"responseType": "ManaSourcesSelectedResponse"}},
+            "recentGameLog": [], "nativePaymentError": "Native underpayment",
+        }
+        status, response = self.post("/v1/choose-action", body)
+        self.assertEqual(status, 200)
+        self.assertEqual(response["kind"], "decision")
+        self.assertEqual(response["response"]["decisionId"], "payment-fresh")
+        self.assertEqual(pilot.observations[0]["nativePaymentError"], "Native underpayment")
+        self.assertEqual(self.post("/v1/choose-action", body | {"pendingDecision": None})[0], 422)
+        self.assertEqual(self.post("/v1/choose-action", body | {"nativePaymentError": None})[0], 422)
 
     def test_mulligan_bottom_cards_and_fail_closed_provider_path(self):
         bottom_pilot = ScriptedPilot(

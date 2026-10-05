@@ -23,9 +23,13 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 import json
+from time import perf_counter
 from typing import Any, Mapping
 
 from .pilot import ArgentumActionChoice, ArgentumDecisionChoice, PilotChoice
+from .openai_run_budget import OpenAIRunBudget, OpenAIRunBudgetError
+from .observation_projection import compact_seat_observation
+from .delegated_autopass import _NATIVE_PHASES, _NATIVE_STEPS
 
 MODEL_IO_SCHEMA_VERSION = 1
 
@@ -271,13 +275,13 @@ def _matches_native_field_kind(value: Any, kind: str) -> bool:
     if kind == "BOOLEAN":
         return type(value) is bool
     if kind == "INTEGER":
-        return type(value) is int
+        return type(value) is int and -(2**31) <= value < 2**31
     if kind == "STRING":
         return isinstance(value, str)
     if kind == "ENTITY_ID_ARRAY":
         return isinstance(value, list) and all(isinstance(item, str) for item in value)
     if kind == "INTEGER_ARRAY":
-        return isinstance(value, list) and all(type(item) is int for item in value)
+        return isinstance(value, list) and all(_matches_native_field_kind(item, "INTEGER") for item in value)
     if kind == "ENTITY_ID_ARRAY_ARRAY":
         return isinstance(value, list) and all(
             isinstance(group, list) and all(isinstance(item, str) for item in group)
@@ -288,6 +292,81 @@ def _matches_native_field_kind(value: Any, kind: str) -> bool:
     if kind == "DAMAGE_EDGE_AMOUNT_ARRAY":
         return isinstance(value, list)
     return False
+
+
+_NATIVE_DECISION_FIELD_SCHEMAS: dict[str, dict[str, Any]] = {
+    "BOOLEAN": {"type": "boolean"},
+    "INTEGER": {"type": "integer", "minimum": -(2**31), "maximum": 2**31 - 1},
+    "STRING": {"type": "string"},
+    "ENTITY_ID_ARRAY": {"type": "array", "items": {"type": "string"}},
+    "INTEGER_ARRAY": {"type": "array", "items": {"type": "integer", "minimum": -(2**31), "maximum": 2**31 - 1}},
+    "ENTITY_ID_ARRAY_ARRAY": {
+        "type": "array", "items": {"type": "array", "items": {"type": "string"}},
+    },
+    # Argentum's MAP kind does not describe its values. The response DTOs do.
+    "MAP": {"type": "object"},
+    "DAMAGE_EDGE_AMOUNT_ARRAY": {
+        "type": "array", "items": {
+            "type": "object",
+            "properties": {"edgeId": {"type": "string"}, "amount": {"type": "integer", "minimum": -(2**31), "maximum": 2**31 - 1}},
+            "required": ["edgeId", "amount"], "additionalProperties": False,
+        },
+    },
+}
+
+# Optional fields present in native response DTOs but absent from requiredFields.
+_NATIVE_OPTIONAL_RESPONSE_FIELDS = {
+    "CombatResolutionResponse": {
+        "orderedBlockers": "ENTITY_ID_ARRAY_MAP",
+        "orderedAttackers": "ENTITY_ID_ARRAY_MAP",
+    },
+}
+
+
+def _native_response_field_schema(response_type: str, field: str, kind: str) -> dict[str, Any] | None:
+    if kind == "ENTITY_ID_ARRAY_MAP" and (
+        _NATIVE_OPTIONAL_RESPONSE_FIELDS.get(response_type, {}).get(field) == kind
+    ):
+        # The set of native entity-ID keys is dynamic. Validate values locally;
+        # OpenAI's structured-output subset does not support typed map entries.
+        return {"type": "object"}
+    if kind == "MAP":
+        if (response_type, field) in {
+            ("DistributionResponse", "distribution"),
+            ("DamageAssignmentResponse", "assignments"),
+        }:
+            return {"type": "object"}
+        return None  # TargetsResponse uses the offered requirement indices below.
+    if (response_type, field, kind) == ("ColorChosenResponse", "color", "STRING"):
+        return {"type": "string", "enum": ["WHITE", "BLUE", "BLACK", "RED", "GREEN"]}
+    return _NATIVE_DECISION_FIELD_SCHEMAS.get(kind)
+
+
+def _matches_native_response_field(value: Any, response_type: str, field: str, kind: str) -> bool:
+    if kind == "ENTITY_ID_ARRAY_MAP":
+        return isinstance(value, dict) and all(
+            isinstance(key, str) and _matches_native_field_kind(ids, "ENTITY_ID_ARRAY")
+            for key, ids in value.items()
+        )
+    if kind == "MAP":
+        if (response_type, field) in {
+            ("DistributionResponse", "distribution"),
+            ("DamageAssignmentResponse", "assignments"),
+        }:
+            return isinstance(value, dict) and all(
+                isinstance(key, str) and _matches_native_field_kind(amount, "INTEGER")
+                for key, amount in value.items()
+            )
+        return response_type == "TargetsResponse" and field == "selectedTargets" and isinstance(value, dict)
+    if kind == "DAMAGE_EDGE_AMOUNT_ARRAY":
+        return response_type == "CombatResolutionResponse" and field == "edges" and isinstance(value, list) and all(
+            isinstance(edge, dict) and set(edge) == {"edgeId", "amount"}
+            and isinstance(edge["edgeId"], str) and _matches_native_field_kind(edge["amount"], "INTEGER")
+            for edge in value
+        )
+    if (response_type, field, kind) == ("ColorChosenResponse", "color", "STRING"):
+        return isinstance(value, str) and value in {"WHITE", "BLUE", "BLACK", "RED", "GREEN"}
+    return _matches_native_field_kind(value, kind)
 
 
 _ACTION_PARAM_SCHEMAS: dict[str, dict[str, Any]] = {
@@ -318,10 +397,93 @@ def _native_action_param_fields(action: Mapping[str, Any]) -> Mapping[str, str] 
     return fields
 
 
-def _native_action_format(observation: Mapping[str, Any]) -> dict[str, Any] | None:
+def _native_block_targets(action: Mapping[str, Any]) -> dict[str, list[str]] | None:
+    """Read native pairwise block offers; absence keeps older engine contracts usable."""
+    if action.get("kind", action.get("actionType")) != "DeclareBlockers" or "validBlockTargets" not in action:
+        return None
+    offered = action["validBlockTargets"]
+    if not isinstance(offered, Mapping) or not all(
+        isinstance(blocker, str) and blocker
+        and isinstance(attackers, list) and attackers
+        and all(isinstance(attacker, str) and attacker for attacker in attackers)
+        for blocker, attackers in offered.items()
+    ):
+        raise OpenAIResponsesPilotError("native validBlockTargets is malformed")
+    return {blocker: list(attackers) for blocker, attackers in offered.items()}
+
+
+def _native_attack_targets(action: Mapping[str, Any]) -> tuple[list[str], list[str]] | None:
+    """Read the current native attacker and defender candidates as one offer."""
+    if action.get("kind", action.get("actionType")) != "DeclareAttackers":
+        return None
+    if "validAttackers" not in action or "validAttackTargets" not in action:
+        raise OpenAIResponsesPilotError("native attacker candidates are malformed")
+    # Argentum uses null for an empty candidate list in GameServer legal actions.
+    attackers = [] if action["validAttackers"] is None else action["validAttackers"]
+    targets = [] if action["validAttackTargets"] is None else action["validAttackTargets"]
+    if not all(
+        isinstance(ids, list) and all(isinstance(entity_id, str) and entity_id for entity_id in ids)
+        for ids in (attackers, targets)
+    ):
+        raise OpenAIResponsesPilotError("native attacker candidates are malformed")
+    return attackers, targets
+
+
+def _native_action_field_schema(action: Mapping[str, Any], name: str, kind: str) -> dict[str, Any]:
+    if name == "attackers" and kind == "ENTITY_ID_MAP":
+        offered = _native_attack_targets(action)
+        if offered is not None:
+            attackers, targets = offered
+            return {"type": "object", "properties": {
+                attacker: {"type": "string", "enum": list(dict.fromkeys(targets))}
+                for attacker in attackers if targets
+            }, "additionalProperties": False}
+    if name == "blockers" and kind == "ENTITY_ID_ARRAY_MAP":
+        targets = _native_block_targets(action)
+        if targets is not None:
+            return {"type": "object", "properties": {
+                blocker: {"type": "array", "items": {"type": "string", "enum": attackers}}
+                for blocker, attackers in targets.items()
+            }, "additionalProperties": False}
+    return _ACTION_PARAM_SCHEMAS[kind]
+
+
+def _native_card_options(pending: Mapping[str, Any]) -> list[str] | None:
+    if pending.get("responseSpec", {}).get("responseType") != "CardsSelectedResponse":
+        return None
+    if "options" not in pending and pending.get("kind") != "SelectCardsDecision":
+        return None  # Older fixtures may carry the response shape without native candidates.
+    options = pending.get("options")
+    if not isinstance(options, list) or not all(
+        isinstance(entity_id, str) and entity_id for entity_id in options
+    ):
+        raise OpenAIResponsesPilotError("native card options are malformed")
+    return options
+
+
+def _offered_id_array_schema(ids: list[str]) -> dict[str, Any]:
+    """Keep an empty native offer satisfiable only by [], without enum: []."""
+    offered = list(dict.fromkeys(ids))
+    schema: dict[str, Any] = {"type": "array", "items": {"type": "string"}}
+    if offered:
+        schema["items"]["enum"] = offered
+    else:
+        schema["maxItems"] = 0
+    return schema
+
+
+def _native_action_format(
+    observation: Mapping[str, Any], *, allow_priority_delegation: bool = False,
+    allow_named_deferrals: bool = False,
+    require_nonempty_named_deferrals: bool = False,
+    allow_declarative_continuation: bool = False,
+) -> dict[str, Any] | None:
     """Constrain each semantic action to its own Argentum-authored parameter fields."""
 
     legal = observation.get("legalActions")
+    pending = observation.get("pendingDecision")
+    if isinstance(pending, Mapping) and pending.get("requiresStructuredResponse") is True:
+        return None
     if not isinstance(legal, list) or not legal:
         return None
     variants: list[dict[str, Any]] = []
@@ -339,7 +501,8 @@ def _native_action_format(observation: Mapping[str, Any]) -> dict[str, Any] | No
                 "params": {
                     "type": "object",
                     "properties": {
-                        name: _ACTION_PARAM_SCHEMAS[kind] for name, kind in fields.items()
+                        name: _native_action_field_schema(action, name, kind)
+                        for name, kind in fields.items()
                     },
                     "additionalProperties": False,
                 },
@@ -347,20 +510,251 @@ def _native_action_format(observation: Mapping[str, Any]) -> dict[str, Any] | No
             "required": ["semanticId", "params"],
             "additionalProperties": False,
         })
+    root_properties: dict[str, Any] = {
+        "channel": {"type": "string", "const": "action"},
+        "choice": {"anyOf": variants},
+    }
+    if allow_priority_delegation:
+        root_properties["priorityDelegation"] = {
+            "type": "object",
+            "properties": {
+                "until": {"type": "string", "enum": ["phase_end", "next_own_main", "turn_end"] if allow_named_deferrals else ["phase_end", "next_own_main"]},
+                "reason": {"type": "string"},
+                "watchOpponents": {"type": "boolean"},
+                **({"deferAbilities": {"type": "array", **({"minItems": 1} if require_nonempty_named_deferrals else {}), "items": {
+                    "type": "object", "properties": {
+                        "sourceId": {"type": "string"}, "abilityId": {"type": "string"},
+                    }, "required": ["sourceId", "abilityId"], "additionalProperties": False,
+                }}} if allow_named_deferrals else {}),
+            },
+            "required": ["until", "reason"],
+            "additionalProperties": False,
+        }
+    if allow_named_deferrals:
+        root_properties["thenCast"] = {
+            "type": "object",
+            "properties": {"cardId": {"type": "string"}, "reason": {"type": "string"}},
+            "required": ["cardId", "reason"],
+            "additionalProperties": False,
+        }
+    if allow_declarative_continuation:
+        root_properties["continuation"] = {
+            "type": "object", "properties": {
+                "reason": {"type": "string"},
+                "steps": {"type": "array", "minItems": 1, "maxItems": 4,
+                          "items": {"anyOf": [
+                              {"type": "object", "properties": {
+                                  "type": {"type": "string", "const": "wait"},
+                                  "until": {"type": "string", "enum": ["phase_end", "next_own_main"]},
+                                  "maxPasses": {"type": "integer", "minimum": 1, "maximum": 16},
+                              }, "required": ["type", "until", "maxPasses"],
+                                  "additionalProperties": False},
+                              {"type": "object", "properties": {
+                                  "type": {"type": "string", "enum": ["playLand", "cast"]},
+                                  "cardId": {"type": "string"},
+                                  "when": {"type": "object", "properties": {
+                                      "phase": {"type": "string", "enum": sorted(_NATIVE_PHASES)},
+                                      "step": {"type": "string", "enum": sorted(_NATIVE_STEPS)},
+                                      "stackEmpty": {"type": "boolean"},
+                                  }, "required": ["stackEmpty"],
+                                     "additionalProperties": False},
+                                  "params": {"type": "object", "properties": {},
+                                             "additionalProperties": False},
+                              }, "required": ["type", "cardId", "when", "params"],
+                                  "additionalProperties": False},
+                          ]}},
+            }, "required": ["reason", "steps"], "additionalProperties": False,
+        }
     return {
         "type": "json_schema",
         "name": "commander_gym_native_action",
         "strict": False,
         "schema": {
             "type": "object",
-            "properties": {
-                "channel": {"type": "string", "const": "action"},
-                "choice": {"anyOf": variants},
-            },
+            "properties": root_properties,
             "required": ["channel", "choice"],
             "additionalProperties": False,
         },
     }
+
+
+def _native_auto_pay_available(pending: Mapping[str, Any]) -> bool | None:
+    """Use the engine's payment verdict; older and context-sensitive windows remain unknown."""
+    value = pending.get("canAutoPayNow")
+    if value is not None and type(value) is not bool:
+        raise OpenAIResponsesPilotError("native canAutoPayNow must be boolean or null")
+    return value
+
+
+def _native_mana_source_format(observation: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Constrain a native mana-source response to this decision's offered IDs."""
+
+    pending = observation.get("pendingDecision")
+    if not isinstance(pending, Mapping) or pending.get("requiresStructuredResponse") is not True:
+        return None
+    spec = pending.get("responseSpec")
+    if not isinstance(spec, Mapping) or spec.get("responseType") != "ManaSourcesSelectedResponse":
+        return None
+    can_auto_pay = _native_auto_pay_available(pending)
+    legal = observation.get("legalActions")
+    if isinstance(legal, list) and any(
+        isinstance(action, Mapping)
+        and action.get("kind") == "ActivateAbility"
+        and action.get("isManaAbility") is True
+        for action in legal
+    ):
+        # A mixed payment window permits a native mana action before answering
+        # the decision; a decision-only schema would hide that legal channel.
+        return None
+    fields = spec.get("requiredFields")
+    if fields != {
+        "autoPay": "BOOLEAN", "declined": "BOOLEAN",
+        "selectedSources": "ENTITY_ID_ARRAY", "waterbendPermanents": "ENTITY_ID_ARRAY",
+    }:
+        return None
+    available = pending.get("availableSources")
+    if not isinstance(available, list) or any(
+        not isinstance(source, Mapping) or not isinstance(source.get("entityId"), str)
+        for source in available
+    ):
+        return None
+    offered_ids = list(dict.fromkeys(source["entityId"] for source in available))
+    return {
+        "type": "json_schema", "name": "commander_gym_native_mana_sources", "strict": False,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "channel": {"type": "string", "const": "decision"},
+                "response": {
+                    "type": "object",
+                    "properties": {
+                        "type": {"type": "string", "const": "ManaSourcesSelectedResponse"},
+                        "autoPay": {"type": "boolean", **(
+                            {"const": False} if can_auto_pay is False else {}
+                        )},
+                        "declined": {"type": "boolean"},
+                        "selectedSources": _offered_id_array_schema(offered_ids),
+                        "waterbendPermanents": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "required": ["type", *fields],
+                    "additionalProperties": False,
+                },
+            },
+            "required": ["channel", "response"],
+            "additionalProperties": False,
+        },
+    }
+
+
+def _native_targets_format(observation: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Constrain a target response to Argentum's current requirement indices and IDs."""
+
+    pending = observation.get("pendingDecision")
+    if not isinstance(pending, Mapping) or pending.get("requiresStructuredResponse") is not True:
+        return None
+    spec = pending.get("responseSpec")
+    if not isinstance(spec, Mapping) or spec.get("responseType") != "TargetsResponse":
+        return None
+    if spec.get("requiredFields") != {"selectedTargets": "MAP"}:
+        return None
+    legal_targets = pending.get("legalTargets")
+    if not isinstance(legal_targets, Mapping) or any(
+        not isinstance(index, str)
+        or not index.isdecimal()
+        or not _matches_native_field_kind(ids, "ENTITY_ID_ARRAY")
+        for index, ids in legal_targets.items()
+    ):
+        return None
+    return {
+        "type": "json_schema", "name": "commander_gym_native_targets", "strict": False,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "channel": {"type": "string", "const": "decision"},
+                "response": {
+                    "type": "object",
+                    "properties": {
+                        "type": {"type": "string", "const": "TargetsResponse"},
+                        "selectedTargets": {
+                            "type": "object",
+                            "properties": {
+                                index: _offered_id_array_schema(ids)
+                                for index, ids in legal_targets.items()
+                            },
+                            "additionalProperties": False,
+                        },
+                    },
+                    "required": ["type", "selectedTargets"],
+                    "additionalProperties": False,
+                },
+            },
+            "required": ["channel", "response"],
+            "additionalProperties": False,
+        },
+    }
+
+
+def _native_decision_format(observation: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Build a request-local wire schema from Argentum's live responseSpec."""
+
+    pending = observation.get("pendingDecision")
+    if not isinstance(pending, Mapping) or pending.get("requiresStructuredResponse") is not True:
+        return None
+    spec = pending.get("responseSpec")
+    if not isinstance(spec, Mapping):
+        return None
+    # A payment window can also offer a native mana action before the decision.
+    special = _native_mana_source_format(observation) or _native_targets_format(observation)
+    if special is not None:
+        return _with_native_cancel_schema(special, spec)
+    response_type, fields = spec.get("responseType"), spec.get("requiredFields")
+    if not isinstance(response_type, str) or not isinstance(fields, Mapping):
+        return None
+    if response_type == "ManaSourcesSelectedResponse":
+        return None  # Preserve the mixed mana-action channel.
+    card_options = _native_card_options(pending)
+    properties: dict[str, Any] = {"type": {"type": "string", "const": response_type}}
+    for field, kind in fields.items():
+        if not isinstance(field, str) or not isinstance(kind, str):
+            return None
+        schema = _native_response_field_schema(response_type, field, kind)
+        if schema is None:
+            return None
+        if field == "selectedCards" and kind == "ENTITY_ID_ARRAY" and card_options is not None:
+            schema = _offered_id_array_schema(card_options)
+        properties[field] = schema
+    for field, kind in _NATIVE_OPTIONAL_RESPONSE_FIELDS.get(response_type, {}).items():
+        properties[field] = _native_response_field_schema(response_type, field, kind)
+    result = {
+        "type": "json_schema", "name": "commander_gym_native_decision", "strict": False,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "channel": {"type": "string", "const": "decision"},
+                "response": {
+                    "type": "object", "properties": properties,
+                    "required": ["type", *fields], "additionalProperties": False,
+                },
+            },
+            "required": ["channel", "response"], "additionalProperties": False,
+        },
+    }
+    return _with_native_cancel_schema(result, spec)
+
+
+def _with_native_cancel_schema(format_: dict[str, Any], spec: Mapping[str, Any]) -> dict[str, Any]:
+    if spec.get("cancelAllowed") is not True:
+        return format_
+    cancel = {
+        "type": "object",
+        "properties": {"type": {"type": "string", "const": "CancelDecisionResponse"}},
+        "required": ["type"], "additionalProperties": False,
+    }
+    schema = deepcopy(format_["schema"])
+    schema["properties"]["response"] = {"anyOf": [
+        schema["properties"]["response"], cancel,
+    ]}
+    return {**format_, "schema": schema}
 
 
 def _matches_action_param_kind(value: Any, kind: str) -> bool:
@@ -400,22 +794,40 @@ def _validate_native_action_params(
         kind = fields[name]
         if not _matches_action_param_kind(value, kind):
             raise OpenAIResponsesPilotError(f"ActionParams.{name} requires {kind}")
+    targets = _native_block_targets(action)
+    if targets is not None and "blockers" in params and any(
+        blocker not in targets or any(attacker not in targets[blocker] for attacker in attackers)
+        for blocker, attackers in params["blockers"].items()
+    ):
+        raise OpenAIResponsesPilotError("ActionParams.blockers contains a pair outside native validBlockTargets")
+    attack_offer = _native_attack_targets(action)
+    if attack_offer is not None and "attackers" in params:
+        attackers, targets = attack_offer
+        if any(attacker not in attackers or target not in targets
+               for attacker, target in params["attackers"].items()):
+            raise OpenAIResponsesPilotError(
+                "ActionParams.attackers contains an ID outside native validAttackers or validAttackTargets"
+            )
     return dict(params)
 
 
-def _with_model_io(choice: PilotChoice, model_io: Mapping[str, Any]) -> PilotChoice:
+def _with_model_io(
+    choice: PilotChoice, model_io: Mapping[str, Any], provider_wall_time_ms: float,
+) -> PilotChoice:
     """Attach exact provider attempts without changing the chosen Argentum payload."""
 
     if isinstance(choice, ArgentumActionChoice):
         return ArgentumActionChoice(
             action_id=choice.action_id,
             params=choice.params,
-            metadata={**dict(choice.metadata), "modelIo": dict(model_io)},
+            metadata={**dict(choice.metadata), "modelIo": dict(model_io),
+                      "providerWallTimeMs": round(provider_wall_time_ms, 3)},
         )
     if isinstance(choice, ArgentumDecisionChoice):
         return ArgentumDecisionChoice(
             response=choice.response,
-            metadata={**dict(choice.metadata), "modelIo": dict(model_io)},
+            metadata={**dict(choice.metadata), "modelIo": dict(model_io),
+                      "providerWallTimeMs": round(provider_wall_time_ms, 3)},
         )
     raise OpenAIResponsesPilotError("provider returned unsupported pilot choice type")
 
@@ -425,9 +837,8 @@ class OpenAIResponsesPilot:
     """Concrete strategic ``ArtificialPlayer`` backed by OpenAI Responses.
 
     ``client`` must expose ``client.responses.create(**kwargs)``.  The adapter uses
-    Responses JSON mode because native structured Argentum DecisionResponse payloads
-    have decision-kind-specific fields and therefore cannot be represented by one
-    closed static JSON Schema without duplicating Argentum's decision ontology here.
+    Responses JSON mode for most native structured decisions; mana-source and
+    target decisions use request-local schemas constrained to Argentum's offered IDs.
     Commander Gym parses and validates the returned channel locally, then the existing
     pilot/execution validators and Argentum perform authoritative validation.
     """
@@ -437,12 +848,27 @@ class OpenAIResponsesPilot:
     instructions: str = _DEFAULT_INSTRUCTIONS
     strategy: str | None = None
     max_attempts: int = 2
+    budget: OpenAIRunBudget | None = None
+    allow_priority_delegation: bool = False
+    allow_named_deferrals: bool = False
+    require_nonempty_named_deferrals: bool = False
+    compact_model_observation: bool = False
+    guarded_then_cast_templates: bool = False
+    allow_declarative_continuation: bool = False
     name: str = "openai-responses"
     version: str = "1"
 
     def __post_init__(self) -> None:
         _require_string(self.model, "OpenAI model")
         _require_string(self.instructions, "OpenAI pilot instructions")
+        if self.require_nonempty_named_deferrals and not (
+            self.allow_priority_delegation and self.allow_named_deferrals
+        ):
+            raise OpenAIResponsesPilotError(
+                "nonempty named deferrals require the named-deferral Pilot"
+            )
+        if type(self.compact_model_observation) is not bool:
+            raise OpenAIResponsesPilotError("compact_model_observation must be boolean")
         if self.strategy is not None:
             _require_string(self.strategy, "OpenAI pilot strategy")
         if type(self.max_attempts) is not int or self.max_attempts < 1:
@@ -455,8 +881,23 @@ class OpenAIResponsesPilot:
             )
 
     def choose(self, observation: Mapping[str, Any]) -> PilotChoice:
-        action_format = _native_action_format(observation)
+        native_payment_error = observation.get("nativePaymentError")
+        if native_payment_error is not None:
+            if not isinstance(native_payment_error, str) or not native_payment_error.strip():
+                raise OpenAIResponsesPilotError("nativePaymentError must be a non-empty string")
+            pending = observation.get("pendingDecision")
+            if not isinstance(pending, Mapping) or pending.get("kind", pending.get("type")) != "SelectManaSourcesDecision":
+                raise OpenAIResponsesPilotError("native payment correction requires the current mana decision")
+        decision_format = _native_decision_format(observation)
+        action_format = None if decision_format is not None else _native_action_format(
+            observation, allow_priority_delegation=self.allow_priority_delegation,
+            allow_named_deferrals=self.allow_named_deferrals,
+            require_nonempty_named_deferrals=self.require_nonempty_named_deferrals,
+            allow_declarative_continuation=self.allow_declarative_continuation,
+        )
         model_observation = _without_live_routing(observation)
+        if self.compact_model_observation:
+            model_observation = compact_seat_observation(model_observation)
         base_input = "Return one JSON object for this observation:\n" + json.dumps(
             model_observation,
             sort_keys=True,
@@ -469,9 +910,27 @@ class OpenAIResponsesPilot:
             # The Responses JSON-object mode requires the user input itself to name
             # JSON; mentioning it only in instructions is not sufficient.
             "input": base_input,
-            "text": {"format": action_format or {"type": "json_object"}},
+            "text": {"format": decision_format or action_format or {"type": "json_object"}},
             "store": False,
         }
+        if native_payment_error is not None:
+            request["instructions"] += (
+                "\n\nArgentum rejected your previous payment response. "
+                "nativePaymentError in the observation is the native reason. "
+                "Use only this fresh legal action and pending-decision offer to correct it. "
+                "You may activate an offered mana ability before answering the payment decision."
+            )
+        if self.compact_model_observation:
+            request["instructions"] += (
+                "\n\nThis request uses argentum-seat-sparse-cards-v1. The observation "
+                "is inside observation; cardDefaults lists exact values for omitted "
+                "fields on every state.cards entry. Restore those fields mentally "
+                "before choosing. No other state fields or legal choices are "
+                "omitted. Ephemeral routing handles are omitted as usual. Use "
+                "semanticId from observation.legalActions."
+            )
+        if self.budget is not None:
+            request["max_output_tokens"] = self.budget.MAX_OUTPUT_TOKENS
         pending = observation.get("pendingDecision")
         if action_format is not None:
             request["instructions"] += (
@@ -480,15 +939,128 @@ class OpenAIResponsesPilot:
                 "choice containing the exact semanticId and only the ActionParams "
                 "allowed by that action's parameterSpec."
             )
+        if self.allow_priority_delegation:
+            if self.allow_named_deferrals:
+                request["instructions"] += (
+                    "\n\nYou may include priorityDelegation only with PassPriority. "
+                    "For Forge-style conditional waiting across phases of the current "
+                    "turn, set until to turn_end, give a concrete reason, and set "
+                    "deferAbilities to every currently affordable nonmana "
+                    "ActivateAbility by its exact action.sourceId and action.abilityId. "
+                    "Omit currently unaffordable abilities. Include the complete set "
+                    "or omit delegation. You may set watchOpponents true; for turn_end "
+                    "it is always true. Only defer abilities you deliberately choose "
+                    "not to use through this turn. New legal alternatives, a changed "
+                    "stack, visible board, hand, resources, life, or required decision "
+                    "wake you. Do not defer tactical activations when timing matters. "
+                    "For shorter waits you may instead set until to phase_end or "
+                    "next_own_main without deferAbilities; those waits continue only "
+                    "while later menus have pass and mana abilities. Never delegate "
+                    "with floating mana or an unreviewed event you need to answer."
+                    " You may attach thenCast only to a selected PlayLand action: "
+                    "name one exact cardId already in your "
+                    + ("hand or command zone" if self.guarded_then_cast_templates else "hand")
+                    + " and a reason to "
+                    "cast it immediately after the land. Gym will execute that "
+                    "specific cast only if the land transition is isolated and "
+                    "Argentum then offers one affordable CastSpell for that card. "
+                    "A changed state or unavailable cast wakes you instead."
+                )
+                if self.guarded_then_cast_templates:
+                    request["instructions"] += (
+                        " When choosing PlayLand, attach thenCast if you already "
+                        "intend to cast one exact card from your hand or your "
+                        "commander from the command zone immediately afterward. "
+                        "This is only a conditional plan: Gym checks the fresh native "
+                        "offer and visible state before acting. Omit it if the cast "
+                        "needs targets, X, modes, alternative payment, or an "
+                        "additional cost; you will choose those after the land. "
+                        "Never guess a payment or target in thenCast."
+                    )
+                if self.require_nonempty_named_deferrals:
+                    request["instructions"] += (
+                        "\n\nFor turn_end only: deferAbilities must contain at least one "
+                        "exact affordable nonmana ability from the current legalActions. "
+                        "Never send an empty deferAbilities array. If no such ability "
+                        "is offered, choose a shorter lease or plain PassPriority. "
+                        "If one is offered, include every currently affordable "
+                        "nonmana ability in the offer, with "
+                        "its exact action.sourceId and action.abilityId. "
+                        "For a native additional cost, use only the ActionParams "
+                        "field named in that offered action's parameterSpec: "
+                        "tappedPermanents, sacrificedPermanents, discardedCards, "
+                        "or exiledCards. Select entity IDs from the corresponding "
+                        "additionalCostInfo valid candidates. The targets field "
+                        "selects spell or ability targets, not cost payments."
+                    )
+            else:
+                request["instructions"] += (
+                    "\n\nYou may optionally include priorityDelegation only when choosing "
+                    "PassPriority. Set until to phase_end or next_own_main and give a "
+                    "concrete reason. Optionally set watchOpponents true; by default "
+                    "opponent battlefield changes do not end the reviewed wait. This "
+                    "delegates later priority windows with only "
+                    "mana abilities until the boundary. New spells, nonmana actions, "
+                    "required decisions, or changed own hand/board, life, or mana wake "
+                    "you. Omit delegation when floating mana or unreviewed events matter."
+                )
+        if self.allow_declarative_continuation:
+            request["instructions"] += (
+                "\n\nYou may attach one declarative continuation to a chosen PlayLand "
+                "or PassPriority. Choose at most one of continuation, thenCast, "
+                "and priorityDelegation. For PlayLand, choose one exact cast cardId. "
+                "For PassPriority, choose a bounded wait, optionally followed "
+                "by one exact land cardId and one exact cast cardId. An optional "
+                "final bounded wait after the cast applies only if you regain "
+                "priority over that sole exact spell before it resolves. Each future "
+                "action has type, cardId, when, and empty params; when may name "
+                "the expected phase, step, and stackEmpty. The cards must "
+                "already be visible in your hand or command zone. Gym checks "
+                "each fresh native offer and wakes you on any changed state, "
+                "decision, stack object, or unknown event. A wait may pass "
+                "only when the legal menu has PassPriority and mana abilities. "
+                "Never plan targets, modes, X, payment, or an unreviewed spell. "
+                "Omit continuation when an intervening choice matters."
+            )
         if isinstance(pending, Mapping) and pending.get("requiresStructuredResponse") is True:
             request["instructions"] += (
                 "\n\nFor this structured decision, copy the exact responseType from "
                 "pendingDecision.responseSpec into response.type and provide every "
                 "requiredFields entry with its declared JSON value kind."
             )
+            spec = pending.get("responseSpec")
+            if isinstance(spec, Mapping) and spec.get("cancelAllowed") is True:
+                request["instructions"] += (
+                    " If cancelling is appropriate, use CancelDecisionResponse with no "
+                    "model-authored fields beyond type."
+                )
+            legal_actions = observation.get("legalActions")
+            if isinstance(spec, Mapping) and spec.get("responseType") == "ManaSourcesSelectedResponse" and isinstance(legal_actions, list) and any(
+                isinstance(action, Mapping)
+                and action.get("kind") == "ActivateAbility"
+                and action.get("isManaAbility") is True
+                for action in legal_actions
+            ):
+                request["instructions"] += (
+                    " You may instead choose an offered native mana ability via "
+                    "channel action before answering this payment decision. "
+                    "For selectedSources, use only IDs in pendingDecision.availableSources."
+                )
+            if isinstance(spec, Mapping) and spec.get("responseType") == "ManaSourcesSelectedResponse":
+                can_auto_pay = _native_auto_pay_available(pending)
+                request["instructions"] += (
+                    " AutoPay and selectedSources are exclusive: if autoPay is true, "
+                    "selectedSources must be empty."
+                )
+                if can_auto_pay is False:
+                    request["instructions"] += (
+                        " Native canAutoPayNow is false, so do not submit autoPay true; "
+                        "activate an offered mana ability first or choose a valid manual/decline response."
+                    )
 
         validation_error: OpenAIResponsesPilotError | None = None
         attempts: list[dict[str, Any]] = []
+        provider_wall_time_ms = 0.0
         for attempt in range(self.max_attempts):
             if validation_error is not None:
                 request["input"] = (
@@ -498,15 +1070,45 @@ class OpenAIResponsesPilot:
                     + "\nReturn a corrected JSON object using only the current observation."
                 )
             request_snapshot = deepcopy(request)
+            request_started = perf_counter()
             try:
-                response = self.client.responses.create(**request)
+                response = (
+                    self.budget.create(self.client.responses.create, request)
+                    if self.budget is not None
+                    else self.client.responses.create(**request)
+                )
+            except OpenAIRunBudgetError as exc:
+                # A rejected reservation is not a new provider attempt. Preserve
+                # any earlier invalid response when the retry hits the cap.
+                # Settlement failures happen after dispatch and get their own
+                # attempt with the response already returned by the provider.
+                if exc.dispatched:
+                    elapsed_ms = (perf_counter() - request_started) * 1000
+                    response_snapshot = (
+                        _provider_response_snapshot(exc.response)
+                        if exc.response is not None else {}
+                    )
+                    response_snapshot.update({
+                        "budgetError": str(exc),
+                        "providerWallTimeMs": round(elapsed_ms, 3),
+                    })
+                    attempts.append({
+                        "attempt": attempt, "request": request_snapshot,
+                        "response": response_snapshot,
+                    })
+                raise OpenAIResponsesPilotError(
+                    str(exc),
+                    model_io=_failed_model_io(attempts) if attempts else None,
+                ) from exc
             except Exception as exc:  # Provider SDK owns transport-level retries.
+                elapsed_ms = (perf_counter() - request_started) * 1000
                 failure_summary = _provider_failure_summary(exc)
                 attempts.append(
                     {
                         "attempt": attempt,
                         "request": request_snapshot,
-                        "response": {"transportError": failure_summary},
+                        "response": {"transportError": failure_summary,
+                                     "providerWallTimeMs": round(elapsed_ms, 3)},
                     }
                 )
                 raise OpenAIResponsesPilotError(
@@ -514,7 +1116,10 @@ class OpenAIResponsesPilot:
                     model_io=_failed_model_io(attempts),
                 ) from exc
 
+            elapsed_ms = (perf_counter() - request_started) * 1000
+            provider_wall_time_ms += elapsed_ms
             response_snapshot = _provider_response_snapshot(response)
+            response_snapshot["providerWallTimeMs"] = round(elapsed_ms, 3)
             try:
                 choice = self._choice_from_response(
                     response,
@@ -548,6 +1153,7 @@ class OpenAIResponsesPilot:
                     "selectedAttempt": attempt,
                     "attempts": attempts,
                 },
+                provider_wall_time_ms,
             )
 
         assert validation_error is not None
@@ -592,8 +1198,128 @@ class OpenAIResponsesPilot:
             action_decision = decision.get("choice") if "choice" in decision else decision
             if not isinstance(action_decision, Mapping):
                 raise OpenAIResponsesPilotError("OpenAI action choice must be a JSON object")
-            return self._action_choice(action_decision, observation, metadata)
+            choice = self._action_choice(action_decision, observation, metadata)
+            directive = decision.get("priorityDelegation")
+            then_cast = decision.get("thenCast")
+            continuation = decision.get("continuation")
+            if continuation is not None:
+                if not self.allow_declarative_continuation or directive is not None or then_cast is not None:
+                    raise OpenAIResponsesPilotError("continuation requires the versioned Pilot alone")
+                legal = observation.get("legalActions")
+                selected = next((item for item in legal if isinstance(item, Mapping)
+                                 and item.get("actionId") == choice.action_id), None) if isinstance(legal, list) else None
+                if not isinstance(continuation, Mapping) or set(continuation) != {"reason", "steps"}:
+                    raise OpenAIResponsesPilotError("continuation requires reason and steps")
+                steps = continuation.get("steps")
+                if (not isinstance(continuation.get("reason"), str)
+                    or not continuation["reason"].strip()
+                    or not isinstance(steps, list) or not 1 <= len(steps) <= 4
+                    or not isinstance(selected, Mapping) or choice.params != {}):
+                    raise OpenAIResponsesPilotError("continuation has invalid bounds or current choice")
+                kinds = []
+                for step in steps:
+                    if not isinstance(step, Mapping):
+                        raise OpenAIResponsesPilotError("continuation step must be an object")
+                    kind = step.get("type")
+                    if not isinstance(kind, str):
+                        raise OpenAIResponsesPilotError("continuation step type must be a string")
+                    if kind == "wait":
+                        if (set(step) != {"type", "until", "maxPasses"}
+                            or not isinstance(step.get("until"), str)
+                            or step.get("until") not in {"phase_end", "next_own_main"}
+                            or type(step.get("maxPasses")) is not int
+                            or not 1 <= step["maxPasses"] <= 16):
+                            raise OpenAIResponsesPilotError("continuation wait must be bounded")
+                    elif kind in {"playLand", "cast"}:
+                        when = step.get("when")
+                        if (set(step) != {"type", "cardId", "when", "params"}
+                            or not isinstance(step.get("cardId"), str) or not step["cardId"]
+                            or not isinstance(when, Mapping) or "stackEmpty" not in when
+                            or set(when) - {"phase", "step", "stackEmpty"}
+                            or any(not isinstance(when[key], str) or not when[key]
+                                   for key in ("phase", "step") if key in when)
+                            or ("stackEmpty" in when and type(when["stackEmpty"]) is not bool)
+                            or ("phase" in when and when["phase"] not in _NATIVE_PHASES)
+                            or ("step" in when and when["step"] not in _NATIVE_STEPS)
+                            or step.get("params") != {}):
+                            raise OpenAIResponsesPilotError("continuation action must be exact and guarded")
+                    else:
+                        raise OpenAIResponsesPilotError("unsupported continuation step")
+                    kinds.append(kind)
+                selected_kind = selected.get("kind")
+                if not isinstance(selected_kind, str):
+                    raise OpenAIResponsesPilotError("continuation requires a native action kind")
+                if (selected_kind == "PlayLand"
+                    and kinds not in (["cast"], ["cast", "wait"])
+                    or selected_kind == "PassPriority"
+                    and kinds not in (["wait"], ["wait", "playLand"],
+                                      ["wait", "playLand", "cast"],
+                                      ["wait", "playLand", "cast", "wait"])
+                    or selected_kind not in {"PlayLand", "PassPriority"}):
+                    raise OpenAIResponsesPilotError("unsupported continuation order")
+                return ArgentumActionChoice(
+                    action_id=choice.action_id, params=choice.params,
+                    metadata={**dict(choice.metadata), "continuation": dict(continuation)},
+                )
+            if then_cast is not None:
+                if not self.allow_named_deferrals or directive is not None:
+                    raise OpenAIResponsesPilotError("thenCast requires the versioned action-sequence Pilot")
+                legal = observation.get("legalActions")
+                selected = next((item for item in legal if isinstance(item, Mapping)
+                                 and item.get("actionId") == choice.action_id), None) if isinstance(legal, list) else None
+                if (
+                    not isinstance(then_cast, Mapping)
+                    or set(then_cast) != {"cardId", "reason"}
+                    or not isinstance(then_cast.get("cardId"), str) or not then_cast["cardId"]
+                    or not isinstance(then_cast.get("reason"), str) or not then_cast["reason"].strip()
+                    or not isinstance(selected, Mapping) or selected.get("kind") != "PlayLand"
+                ):
+                    raise OpenAIResponsesPilotError("thenCast requires an exact PlayLand and card intent")
+                return ArgentumActionChoice(
+                    action_id=choice.action_id, params=choice.params,
+                    metadata={**dict(choice.metadata), "thenCast": dict(then_cast)},
+                )
+            if directive is None:
+                return choice
+            if not self.allow_priority_delegation:
+                raise OpenAIResponsesPilotError("priority delegation is not enabled for this Pilot")
+            named = self.allow_named_deferrals and isinstance(directive, Mapping) and directive.get("until") == "turn_end"
+            deferred = directive.get("deferAbilities") if named else None
+            if (
+                not isinstance(directive, Mapping)
+                    or not {"until", "reason"}.issubset(directive)
+                    or set(directive) - ({"until", "reason", "deferAbilities", "watchOpponents"} if named else {"until", "reason", "watchOpponents"})
+                    or directive.get("until") not in ({"turn_end"} if named else {"phase_end", "next_own_main"})
+                    or (named and directive.get("watchOpponents", True) is not True)
+                    or (named and (not isinstance(deferred, list) or not deferred or any(
+                        not isinstance(item, Mapping) or set(item) != {"sourceId", "abilityId"}
+                        or not isinstance(item.get("sourceId"), str)
+                        or not isinstance(item.get("abilityId"), str)
+                        for item in deferred
+                    )))
+                    or not isinstance(directive.get("reason"), str)
+                    or not directive["reason"].strip()
+                    or type(directive.get("watchOpponents", False)) is not bool
+                or not any(
+                    isinstance(action, Mapping)
+                    and action.get("actionId") == choice.action_id
+                    and action.get("kind") == "PassPriority"
+                    for action in observation.get("legalActions", [])
+                )
+            ):
+                raise OpenAIResponsesPilotError(
+                    "priority delegation requires an exact current PassPriority and bounded reason"
+                )
+            return ArgentumActionChoice(
+                action_id=choice.action_id,
+                params=choice.params,
+                metadata={**dict(choice.metadata), "priorityDelegation": dict(directive)},
+            )
         if channel == "decision":
+            if "priorityDelegation" in decision or "thenCast" in decision or "continuation" in decision:
+                raise OpenAIResponsesPilotError(
+                    "priority delegation or action sequence cannot accompany a structured decision"
+                )
             return self._decision_choice(decision, observation, metadata)
         raise OpenAIResponsesPilotError(
             "OpenAI pilot output channel must be 'action' or 'decision'"
@@ -665,6 +1391,15 @@ class OpenAIResponsesPilot:
                 "Argentum structured decision is missing its native responseSpec"
             )
         expected_type = _require_string(spec.get("responseType"), "native responseType")
+        if response_type == "CancelDecisionResponse" and spec.get("cancelAllowed") is True:
+            if set(response) != {"type"}:
+                raise OpenAIResponsesPilotError(
+                    "native cancel response only permits type"
+                )
+            return ArgentumDecisionChoice(
+                response={"type": response_type, "decisionId": decision_id},
+                metadata=dict(metadata),
+            )
         if response_type != expected_type:
             raise OpenAIResponsesPilotError(
                 f"structured decision requires native Argentum response type {expected_type}"
@@ -674,25 +1409,76 @@ class OpenAIResponsesPilot:
             raise OpenAIResponsesPilotError("native responseSpec requiredFields must be an object")
         if any(not isinstance(field, str) for field in required):
             raise OpenAIResponsesPilotError("native responseSpec field names must be strings")
-        allowed_fields = {"type", *required}
+        optional = _NATIVE_OPTIONAL_RESPONSE_FIELDS.get(response_type, {})
+        allowed_fields = {"type", *required, *optional}
         unexpected = set(response) - allowed_fields
         if unexpected:
             raise OpenAIResponsesPilotError(
                 f"native response has unsupported fields: {sorted(unexpected)}"
             )
         for field, kind in required.items():
-            if kind not in {
-                "BOOLEAN", "INTEGER", "STRING", "ENTITY_ID_ARRAY", "INTEGER_ARRAY",
-                "ENTITY_ID_ARRAY_ARRAY", "MAP", "DAMAGE_EDGE_AMOUNT_ARRAY",
-            }:
+            if kind not in _NATIVE_DECISION_FIELD_SCHEMAS:
                 raise OpenAIResponsesPilotError(
                     f"unsupported native response field kind {kind!r}"
                 )
             value = response.get(field)
-            if not _matches_native_field_kind(value, kind):
+            if not _matches_native_response_field(value, response_type, field, kind):
                 raise OpenAIResponsesPilotError(
                     f"native response field {field} requires {kind}"
                 )
+        for field, kind in optional.items():
+            if field in response and not _matches_native_response_field(
+                response[field], response_type, field, kind,
+            ):
+                raise OpenAIResponsesPilotError(
+                    f"native response field {field} requires {kind}"
+                )
+
+        if response_type == "ManaSourcesSelectedResponse":
+            if response.get("autoPay") is True and _native_auto_pay_available(pending) is False:
+                raise OpenAIResponsesPilotError("native canAutoPayNow is false; autoPay is unavailable")
+            if response.get("autoPay") is True and response.get("selectedSources"):
+                raise OpenAIResponsesPilotError("autoPay cannot be combined with selectedSources")
+            available = pending.get("availableSources")
+            selected_sources = response.get("selectedSources")
+            if not isinstance(available, list) or any(
+                not isinstance(source, Mapping)
+                or not isinstance(source.get("entityId"), str)
+                for source in available
+            ) or not _matches_native_field_kind(selected_sources, "ENTITY_ID_ARRAY"):
+                raise OpenAIResponsesPilotError(
+                    "native mana-source decision requires exact availableSources and selectedSources"
+                )
+            offered_ids = {source["entityId"] for source in available}
+            if any(source_id not in offered_ids for source_id in selected_sources):
+                raise OpenAIResponsesPilotError(
+                    "native response selectedSources must be offered in availableSources"
+                )
+        if response_type == "TargetsResponse":
+            legal_targets = pending.get("legalTargets")
+            selected_targets = response.get("selectedTargets")
+            if not isinstance(legal_targets, Mapping) or not isinstance(selected_targets, Mapping):
+                raise OpenAIResponsesPilotError(
+                    "native target decision requires exact legalTargets and selectedTargets"
+                )
+            for index, ids in selected_targets.items():
+                offered = legal_targets.get(index)
+                if (
+                    not isinstance(index, str) or not index.isdecimal()
+                    or not _matches_native_field_kind(offered, "ENTITY_ID_ARRAY")
+                    or not _matches_native_field_kind(ids, "ENTITY_ID_ARRAY")
+                    or any(target_id not in offered for target_id in ids)
+                ):
+                    raise OpenAIResponsesPilotError(
+                        "native response selectedTargets requires arrays of offered target IDs"
+                    )
+        card_options = _native_card_options(pending)
+        if card_options is not None and "selectedCards" in response and any(
+            card_id not in card_options for card_id in response["selectedCards"]
+        ):
+            raise OpenAIResponsesPilotError(
+                "native response selectedCards must be offered in options"
+            )
 
         submitted = dict(response)
         submitted["decisionId"] = decision_id
