@@ -1,4 +1,4 @@
-"""Start isolated Argentum/Binding services and run one capped headless game."""
+"""Start isolated Argentum/Binding services and run one capped headless match or pod."""
 from __future__ import annotations
 import argparse
 import json
@@ -14,7 +14,9 @@ from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 
 from commander_gym.openai_run_budget import OpenAIRunBudget
-from commander_gym.qualified_v7_preflight import stage_qualified_v7_catalog
+from commander_gym.qualified_v7_preflight import (
+    BINDING_FINGERPRINTS, SELECTED_PROFILES, stage_qualified_v7_catalog,
+)
 
 
 def free_port():
@@ -88,14 +90,29 @@ def main():
     parser.add_argument("--expected-ledger-requests", type=int)
     parser.add_argument("--expected-unsettled-requests", type=int)
     parser.add_argument("--max-attempts", type=int, default=2)
-    parser.add_argument("--profile-a", required=True)
-    parser.add_argument("--profile-b", required=True)
+    parser.add_argument("--profile-a")
+    parser.add_argument("--profile-b")
+    parser.add_argument("--profile", dest="profiles", action="append",
+                        help="repeat Krenko, Talrand, Sythis, Lathril for one four-seat pod")
     parser.add_argument("--dry-run", action="store_true", help="reject model dispatch before spend")
     parser.add_argument("--qualified-v7-comparison", action="store_true",
                         help="pin and stage the reviewed v7 Binding/Pilot catalog closure")
     parser.add_argument("--timeout", type=float, default=3600)
     parser.add_argument("--stall-seconds", type=float, default=600)
     args = parser.parse_args()
+    if args.profiles:
+        args.profile_a = args.profile_a or args.profiles[0]
+        args.profile_b = args.profile_b or (args.profiles[1] if len(args.profiles) > 1 else None)
+    elif not args.profile_a or not args.profile_b:
+        parser.error("--profile-a and --profile-b are required for a two-seat run")
+    if args.profiles and (
+        tuple(args.profiles[:2]) != SELECTED_PROFILES
+        or tuple(args.profiles) != tuple(BINDING_FINGERPRINTS)
+        or (args.profile_a, args.profile_b) != SELECTED_PROFILES
+    ):
+        parser.error("four-seat run requires the exact qualified v7 Binding order")
+    if args.profiles and not args.qualified_v7_comparison:
+        parser.error("four-seat run requires --qualified-v7-comparison")
     if args.timeout <= 0 or args.stall_seconds <= 0 or args.max_attempts <= 0:
         parser.error("timeout and stall-seconds must be positive")
     if args.budget_ledger is not None and not args.budget_ledger.is_absolute():
@@ -121,6 +138,11 @@ def main():
             args.budget_max_requests, args.expected_ledger_requests,
             args.expected_unsettled_requests,
         )
+    if args.dry_run and not ledger.exists():
+        OpenAIRunBudget(
+            ledger, 0.000000001, authorized_max_usd=args.budget_authorized_max,
+            max_requests=args.budget_max_requests, initialize_new_ledger=True,
+        ).snapshot()
     run_dir = out / f"game-{int(time.time())}-{secrets.token_hex(4)}"
     run_dir.mkdir(mode=0o700)
     catalog_root = args.instance_root.resolve()
@@ -181,6 +203,7 @@ def main():
             "commander_gym.two_luna_debug", "--server-url", f"http://127.0.0.1:{server_port}",
             "--sidecar-url", f"http://127.0.0.1:{sidecar_port}",
             "--profile-a", args.profile_a, "--profile-b", args.profile_b,
+            *(item for profile in (args.profiles or ()) for item in ("--profile", profile)),
             "--budget-ledger", str(ledger),
             "--budget-cap", "0.000000001" if args.dry_run else str(args.budget_cap),
             "--budget-authorized-max", str(args.budget_authorized_max),

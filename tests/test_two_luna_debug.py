@@ -20,6 +20,52 @@ from commander_gym.two_luna_debug import (
 
 
 class TwoLunaDebugReportTests(unittest.TestCase):
+    def test_four_profiles_create_one_native_pod_with_exact_seat_decks(self):
+        ids = ("krenko", "talrand", "sythis", "lathril")
+        profiles = {"profiles": [
+            {"id": profile, "deck": {"commander": profile,
+                                      "cards": {f"Card-{profile}": 99}}}
+            for profile in ids
+        ]}
+        status = {"gameMode": "FREE_FOR_ALL", "ffaGamesPlayed": 0, "complete": True,
+                  "state": "TOURNAMENT_ACTIVE", "round": 0,
+                  "liveGames": [{"gameSessionId": "pod", "playerCount": 4,
+                                 "turnNumber": 1}], "completedGames": []}
+        snapshot = {"capUsd": 18, "estimatedUsd": 1, "requests": 1,
+                    "inputTokens": 0, "outputTokens": 0, "unsettledRequests": 0}
+        budget = type("Budget", (), {"snapshot": lambda self: snapshot})()
+        args = Namespace(profile_a=ids[0], profile_b=ids[1], profiles=ids,
+                         sidecar_url="http://sidecar", server_url="http://server",
+                         timeout=0.001, stall_seconds=10, poll_seconds=0.001,
+                         provenance=None, server_log=None, terminal_evidence_dir=None)
+        with patch.dict(os.environ, {"COMMANDER_GYM_SIDECAR_TOKEN": "test"}), \
+                patch("commander_gym.two_luna_debug._request_json",
+                      side_effect=[profiles, {"lobbyId": "lobby"}, status]) as request, \
+                patch("commander_gym.two_luna_debug._run_budget", return_value=budget), \
+                patch("commander_gym.two_luna_debug.time.sleep"), \
+                redirect_stdout(io.StringIO()):
+            run(args)
+        payload = request.call_args_list[1].kwargs["payload"]
+        self.assertEqual(payload["gameMode"], "FREE_FOR_ALL")
+        self.assertEqual(payload["rules"], "COMMANDER")
+        self.assertEqual([spec["profileId"] for spec in payload["controllerSpecs"]], list(ids))
+        self.assertEqual(payload["decks"], [{f"Card-{profile}": 99} for profile in ids])
+
+    def test_four_seat_terminal_replay_requires_four_native_players(self):
+        replay = {"metadata": {"gameId": "pod", "snapshotCount": 1}}
+        state = {"gameOver": True, "turnNumber": 15, "winnerId": "krenko",
+                 "turnOrder": ["krenko", "talrand"]}
+        with tempfile.TemporaryDirectory() as directory:
+            with patch("commander_gym.two_luna_debug._request_json",
+                       side_effect=[replay, state]):
+                with self.assertRaisesRegex(ValueError, "expected seats"):
+                    _capture_terminal_replay(
+                        "http://server", [{"gameSessionId": "pod", "winnerId": "krenko"}],
+                        Path(directory), timeout_seconds=0.001, poll_seconds=0.001,
+                        expected_player_count=4,
+                    )
+            self.assertFalse((Path(directory) / "terminal-state.json").exists())
+
     def test_recovered_live_payment_rejection_cannot_qualify_a_completed_game(self):
         records = [
             {

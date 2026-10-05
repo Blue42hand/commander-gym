@@ -1,7 +1,7 @@
-"""Automated two-Luna game-server debug run.
+"""Automated fixed-deck Luna game-server debug run.
 
 Starts from an already-running local Argentum game server with the Commander Gym provider
-loaded, creates a two-AI fixed-deck tournament through Argentum's dev endpoint, waits for one
+loaded, creates a two-seat match or four-seat pod through Argentum's dev endpoint, waits for one
 game to finish, then summarizes policy provenance for communication failures and avoidable
 strategic wakes.
 
@@ -102,6 +102,7 @@ def _write_private_json(path: Path, value: Mapping[str, Any]) -> str:
 def _capture_terminal_replay(
     base: str, finished: list[dict[str, Any]], evidence_dir: Path,
     *, timeout_seconds: float = 60, poll_seconds: float = 0.5,
+    expected_player_count: int | None = None,
 ) -> dict[str, Any]:
     """Retain the in-memory replay and its native final frame before server shutdown."""
 
@@ -142,6 +143,11 @@ def _capture_terminal_replay(
                 raise ValueError("last replay frame had no native final turn")
             if game.get("winnerId") != final_state.get("winnerId"):
                 raise ValueError("last replay frame winner disagreed with tournament result")
+            if expected_player_count is not None and (
+                not isinstance(final_state.get("turnOrder"), list)
+                or len(final_state["turnOrder"]) != expected_player_count
+            ):
+                raise ValueError("last replay frame did not contain the expected seats")
             expected_turn = game.get("finalTurnNumber")
             if type(expected_turn) is int and final_state["turnNumber"] != expected_turn:
                 raise ValueError("last replay frame turn disagreed with tournament result")
@@ -172,10 +178,12 @@ def _capture_terminal_replay(
 
 def _terminal_artifact_result(
     base: str, finished: Any, evidence_dir: Path,
+    *, expected_player_count: int | None = None,
 ) -> dict[str, Any]:
     try:
         return _capture_terminal_replay(
             base, finished if isinstance(finished, list) else [], evidence_dir,
+            expected_player_count=expected_player_count,
         )
     except Exception as exc:
         # Artifact capture must never hide the already-computed game result or
@@ -581,8 +589,10 @@ def _run_budget(args: argparse.Namespace) -> OpenAIRunBudget:
 
 def run(args: argparse.Namespace) -> int:
     run_started = time.monotonic()
-    if args.profile_a == args.profile_b:
-        raise RuntimeError("two-seat qualification requires distinct Binding profiles")
+    profile_ids = tuple(getattr(args, "profiles", ()) or (args.profile_a, args.profile_b))
+    four_seat = len(profile_ids) == 4
+    if len(profile_ids) not in (2, 4) or len(set(profile_ids)) != len(profile_ids):
+        raise RuntimeError("one game requires two or four distinct Binding profiles")
     token = os.environ.get("COMMANDER_GYM_SIDECAR_TOKEN", "")
     if not token:
         raise RuntimeError("COMMANDER_GYM_SIDECAR_TOKEN is required")
@@ -593,7 +603,7 @@ def run(args: argparse.Namespace) -> int:
     if not isinstance(profiles, list):
         raise RuntimeError("sidecar did not advertise controller profiles")
     selected = []
-    for binding_id in (args.profile_a, args.profile_b):
+    for binding_id in profile_ids:
         matches = [p for p in profiles if isinstance(p, Mapping) and p.get("id") == binding_id]
         if len(matches) != 1:
             raise RuntimeError(f"canonical Binding profile {binding_id!r} is unavailable")
@@ -613,10 +623,11 @@ def run(args: argparse.Namespace) -> int:
             "decks": selected,
             "gamesPerMatch": 1,
             "controllerSpecs": [
-                {"mode": "commander-gym", "profileId": args.profile_a},
-                {"mode": "commander-gym", "profileId": args.profile_b},
+                {"mode": "commander-gym", "profileId": binding_id}
+                for binding_id in profile_ids
             ],
             "rules": "COMMANDER",
+            **({"gameMode": "FREE_FOR_ALL"} if four_seat else {}),
         },
     )
     lobby_id = created.get("lobbyId")
@@ -638,6 +649,11 @@ def run(args: argparse.Namespace) -> int:
 
     while time.monotonic() < deadline:
         status = _request_json(f"{base}/api/dev/ai-tournament/{lobby_id}")
+        if four_seat and status.get("gameMode") != "FREE_FOR_ALL":
+            raise RuntimeError("native status did not confirm free-for-all game mode")
+        if four_seat and (type(status.get("ffaGamesPlayed")) is not int
+                          or status["ffaGamesPlayed"] > 1):
+            raise RuntimeError("native status did not confirm a single pod game")
         final_status = status
         live = status.get("liveGames")
         if not isinstance(live, list):
@@ -645,6 +661,8 @@ def run(args: argparse.Namespace) -> int:
         for game in live:
             if not isinstance(game, Mapping):
                 continue
+            if four_seat and game.get("playerCount") != 4:
+                raise RuntimeError("native live game did not confirm four players")
             game_id = game.get("gameSessionId")
             if isinstance(game_id, str) and game_id not in game_ids:
                 game_ids.append(game_id)
@@ -710,13 +728,30 @@ def run(args: argparse.Namespace) -> int:
         wall_time_seconds=time.monotonic() - run_started,
     )
     result["terminalEvidence"] = terminal_evidence
+    result["expectedSeats"] = len(profile_ids)
+    result["singlePodGame"] = not four_seat or (
+        final_status.get("ffaGamesPlayed") == 1
+        and len(game_ids) == 1
+    )
+    result["fourSeatProvenanceComplete"] = (
+        not four_seat or len(result["policySeats"]) == 4
+        and result["policySeats"] == result["deckContextSeats"]
+    )
+    if four_seat and (not result["fourSeatProvenanceComplete"]
+                      or not result["singlePodGame"]):
+        result["technicalQualified"] = False
+        result["result"] = "needs-debug"
     result["stopReason"] = stop_reason
     if fatal_action_failure is not None:
         result["fatalActionFailure"] = fatal_action_failure
     if final_status.get("complete") is True and args.terminal_evidence_dir:
         result["terminalArtifact"] = _terminal_artifact_result(
             base, final_status.get("completedGames"), Path(args.terminal_evidence_dir),
+            expected_player_count=4 if four_seat else None,
         )
+        if four_seat and "error" in result["terminalArtifact"]:
+            result["technicalQualified"] = False
+            result["result"] = "needs-debug"
     after = budget.snapshot()
     result["budget"] = {
         "capUsd": after["capUsd"],
@@ -739,8 +774,10 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--server-url", default="http://127.0.0.1:8080")
     parser.add_argument("--sidecar-url", required=True)
-    parser.add_argument("--profile-a", required=True)
-    parser.add_argument("--profile-b", required=True)
+    parser.add_argument("--profile-a")
+    parser.add_argument("--profile-b")
+    parser.add_argument("--profile", dest="profiles", action="append",
+                        help="repeat four times for one native free-for-all pod")
     parser.add_argument("--budget-ledger", required=True)
     parser.add_argument("--budget-cap", type=float, default=5.0)
     parser.add_argument("--budget-authorized-max", type=float, default=5.0)
@@ -755,8 +792,12 @@ def main() -> int:
     parser.add_argument("--terminal-evidence-dir",
                         help="owner-only run directory for final replay and native terminal state")
     args = parser.parse_args()
+    if not args.profiles and (not args.profile_a or not args.profile_b):
+        parser.error("--profile-a and --profile-b are required for a two-seat run")
     if args.timeout <= 0 or args.stall_seconds <= 0 or args.poll_seconds <= 0:
         parser.error("timeout, stall-seconds, and poll-seconds must be positive")
+    if args.profiles and len(args.profiles) != 4:
+        parser.error("--profile requires exactly four Binding IDs")
     return run(args)
 
 

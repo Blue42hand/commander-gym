@@ -14,6 +14,27 @@ from scripts.run_two_luna_binding_game import checked_existing_budget, main, sel
 
 
 class ExistingGameBudgetTests(unittest.TestCase):
+    def test_dry_run_initializes_zero_spend_ledger_before_services(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output = root / "dry-run"
+            argv = ["game", "--engine-dir", str(root), "--instance-root", str(root),
+                    "--catalog", str(root / "rosters/v7.json"),
+                    "--output-dir", str(output), "--profile-a", "krenko",
+                    "--profile-b", "talrand", "--qualified-v7-comparison",
+                    "--dry-run", "--python", sys.executable]
+            with patch("sys.argv", argv), patch(
+                "scripts.run_two_luna_binding_game.stage_qualified_v7_catalog",
+                side_effect=QualifiedV7PreflightError("stop before services"),
+            ), patch("scripts.run_two_luna_binding_game.subprocess.Popen") as start_process, \
+                    self.assertRaises(QualifiedV7PreflightError):
+                main()
+            ledger = OpenAIRunBudget(output / "openai-budget.json", 0.000000001,
+                                     authorized_max_usd=5).snapshot()
+            self.assertEqual(ledger["requests"], 0)
+            self.assertEqual(ledger["estimatedUsd"], 0)
+            start_process.assert_not_called()
+
     def test_paid_launcher_qualifies_effective_max_attempts_before_credentials(self):
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
