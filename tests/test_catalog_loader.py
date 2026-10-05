@@ -125,6 +125,8 @@ class CatalogLoaderTests(unittest.TestCase):
         self.assertEqual(representative['printing_id'], NEW)
         self.assertEqual(representative['artist'], 'Second Artist')
         self.assertIsNone(representative['image_uris'])
+        self.assertEqual(representative['faces'][0]['mana_cost'], '{1}')
+        self.assertEqual(representative['faces'][1]['artist'], 'Back Artist')
         requested = query.get_card(printing_id=OLD)
         self.assertEqual(requested['printing_id'], NEW)
         self.assertEqual(requested['requested_printing']['printing_id'], OLD)

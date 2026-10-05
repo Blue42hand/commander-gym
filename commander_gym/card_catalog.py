@@ -410,6 +410,13 @@ class CardCatalog:
             'SELECT face_index, face_oracle_id, mana_value, name, type_line, oracle_text FROM card_faces '
             'WHERE snapshot_id=? AND oracle_id=? ORDER BY face_index LIMIT 10',
             (self.snapshot_id, result['oracle_id']))]
+        representative_faces = details['faces'] if representative is not None else []
+        for face in result['faces']:
+            index = face['face_index']
+            source_face = representative_faces[index] if index < len(representative_faces) else {}
+            for field in ('mana_cost', 'rarity', 'artist', 'flavor_text', 'image_uris'):
+                face[field] = source_face.get(field)
+            face['authoring_fields_available'] = result['authoring_fields_available']
         result['ruling_count'] = db.execute(
             'SELECT count(*) FROM rulings WHERE snapshot_id=? AND oracle_id=?',
             (self.snapshot_id, result['oracle_id'])).fetchone()[0]
