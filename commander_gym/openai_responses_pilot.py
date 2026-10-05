@@ -29,6 +29,7 @@ from typing import Any, Mapping
 from .pilot import ArgentumActionChoice, ArgentumDecisionChoice, PilotChoice
 from .openai_run_budget import OpenAIRunBudget, OpenAIRunBudgetError
 from .observation_projection import compact_seat_observation
+from .cache_friendly_input import cache_friendly_observation_input
 from .delegated_autopass import _NATIVE_PHASES, _NATIVE_STEPS
 
 MODEL_IO_SCHEMA_VERSION = 1
@@ -892,6 +893,7 @@ class OpenAIResponsesPilot:
     allow_named_deferrals: bool = False
     require_nonempty_named_deferrals: bool = False
     compact_model_observation: bool = False
+    cache_friendly_history: bool = False
     guarded_then_cast_templates: bool = False
     allow_declarative_continuation: bool = False
     name: str = "openai-responses"
@@ -908,6 +910,8 @@ class OpenAIResponsesPilot:
             )
         if type(self.compact_model_observation) is not bool:
             raise OpenAIResponsesPilotError("compact_model_observation must be boolean")
+        if type(self.cache_friendly_history) is not bool:
+            raise OpenAIResponsesPilotError("cache_friendly_history must be boolean")
         if self.strategy is not None:
             _require_string(self.strategy, "OpenAI pilot strategy")
         if type(self.max_attempts) is not int or self.max_attempts < 1:
@@ -942,6 +946,8 @@ class OpenAIResponsesPilot:
             sort_keys=True,
             separators=(",", ":"),
         )
+        if self.cache_friendly_history:
+            base_input = cache_friendly_observation_input(model_observation)
         request = {
             "model": self.model,
             "instructions": self.instructions
@@ -952,6 +958,10 @@ class OpenAIResponsesPilot:
             "text": {"format": decision_format or action_format or {"type": "json_object"}},
             "store": False,
         }
+        if self.cache_friendly_history:
+            # Explicit-only writes only at the stable, seat-masked boundaries.
+            # Native request-local output schemas and all model settings remain.
+            request["prompt_cache_options"] = {"mode": "explicit"}
         if native_payment_error is not None:
             request["instructions"] += (
                 "\n\nArgentum rejected your previous payment response. "
@@ -1102,11 +1112,13 @@ class OpenAIResponsesPilot:
         provider_wall_time_ms = 0.0
         for attempt in range(self.max_attempts):
             if validation_error is not None:
-                request["input"] = (
-                    base_input
-                    + "\nThe previous response was invalid: "
-                    + str(validation_error)
+                correction = (
+                    "The previous response was invalid: " + str(validation_error)
                     + "\nReturn a corrected JSON object using only the current observation."
+                )
+                request["input"] = (
+                    [*base_input, {"role": "user", "content": correction}]
+                    if self.cache_friendly_history else base_input + "\n" + correction
                 )
             request_snapshot = deepcopy(request)
             request_started = perf_counter()

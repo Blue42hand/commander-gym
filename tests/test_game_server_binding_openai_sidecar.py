@@ -129,6 +129,23 @@ def synthetic_catalog(
 
 
 class BindingOpenAIGameServerSidecarTests(unittest.TestCase):
+    def test_cache_layout_opt_in_preserves_exact_component_resolution(self):
+        config = OpenAIGameServerSidecarConfig(
+            token="sidecar-secret", api_key="sk-test-secret", port=12345,
+        )
+        spec = PilotSubsystemSpec(
+            role="frontier_escalation", ordinal=0,
+            ref=BUILTIN_FORGE_DECLARATIVE_CONTINUATION_COMPONENT_REF,
+        )
+        default = OpenAIBindingPilotComponentResolver(
+            config=config, client=FakeClient(),
+        ).resolve(spec).player
+        opted_in = OpenAIBindingPilotComponentResolver(
+            config=config, client=FakeClient(), cache_friendly_history=True,
+        ).resolve(spec).player
+        self.assertFalse(default.strategic_pilot.cache_friendly_history)
+        self.assertTrue(opted_in.strategic_pilot.cache_friendly_history)
+
     def test_all_unaffordable_pass_requires_exact_new_component_ref(self):
         config = OpenAIGameServerSidecarConfig(
             token="sidecar-secret", api_key="sk-test-secret", port=12345,
@@ -320,6 +337,26 @@ class BindingOpenAIGameServerSidecarTests(unittest.TestCase):
             )
             self.assertEqual(config.catalog_path, catalog.resolve())
             self.assertEqual(config.instance_root, root.resolve())
+            self.assertFalse(config.cache_friendly_history)
+            opted_in = binding_openai_game_server_config_from_environment({
+                "COMMANDER_GYM_SIDECAR_TOKEN": "sidecar-secret",
+                "OPENAI_API_KEY": "sk-test-secret",
+                "COMMANDER_GYM_BINDING_CATALOG": str(catalog),
+                "COMMANDER_GYM_INSTANCE_ROOT": str(root),
+                "COMMANDER_GYM_CACHE_FRIENDLY_HISTORY": "true",
+            })
+            self.assertTrue(opted_in.cache_friendly_history)
+            with self.assertRaisesRegex(
+                OpenAIGameServerSidecarConfigurationError,
+                "CACHE_FRIENDLY_HISTORY must be true or false",
+            ):
+                binding_openai_game_server_config_from_environment({
+                    "COMMANDER_GYM_SIDECAR_TOKEN": "sidecar-secret",
+                    "OPENAI_API_KEY": "sk-test-secret",
+                    "COMMANDER_GYM_BINDING_CATALOG": str(catalog),
+                    "COMMANDER_GYM_INSTANCE_ROOT": str(root),
+                    "COMMANDER_GYM_CACHE_FRIENDLY_HISTORY": "maybe",
+                })
 
     def test_above_default_budget_requires_explicit_ceiling_and_request_limit(self):
         with tempfile.TemporaryDirectory() as directory:
