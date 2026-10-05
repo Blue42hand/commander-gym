@@ -1,0 +1,2 @@
+# Optional local stdio adapter; the offline query layer needs no MCP package.
+mcp==2.3.0
