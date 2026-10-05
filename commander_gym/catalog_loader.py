@@ -219,8 +219,8 @@ def _card_data(row: dict) -> tuple[tuple[dict, ...], tuple[dict, ...], tuple]:
     if not isinstance(faces, list) or len(faces) > 10:
         raise CatalogLoadError('invalid card_faces')
     reversible = row.get('layout') == 'reversible_card'
-    if reversible and len(faces) != 2:
-        raise CatalogLoadError('reversible card must have two faces')
+    if reversible and len(faces) < 2:
+        raise CatalogLoadError('reversible card requires multiple faces')
     face_data = tuple({'name': _text(f.get('name'), 'face name'),
                        'type_line': _text(f.get('type_line', ''), 'face type_line', empty=True),
                        'oracle_text': _text(f.get('oracle_text', ''), 'face oracle_text', empty=True),
@@ -236,8 +236,6 @@ def _card_data(row: dict) -> tuple[tuple[dict, ...], tuple[dict, ...], tuple]:
     legalities = row.get('legalities')
     if not isinstance(legalities, dict) or legalities.get('commander') not in ('legal', 'not_legal', 'banned', 'restricted'):
         raise CatalogLoadError('invalid commander legality')
-    if reversible and len({face['oracle_id'] for face in face_data}) != len(face_data):
-        raise CatalogLoadError('duplicate reversible face oracle_id')
     price = _price(row)
     common = {'printing_id': printing_id,
               'color_identity': ''.join(c for c in 'WUBRG' if c in colors),
@@ -247,10 +245,15 @@ def _card_data(row: dict) -> tuple[tuple[dict, ...], tuple[dict, ...], tuple]:
               'set_code': _text(row.get('set'), 'set'),
               'collector_number': _text(row.get('collector_number'), 'collector_number')}
     if reversible:
-        cards = tuple({**common, 'oracle_id': face['oracle_id'], 'name': face['name'],
-                       'type_line': face['type_line'], 'oracle_text': face['oracle_text'],
-                       'mana_value': face['mana_value'], 'face_index': index}
-                      for index, face in enumerate(face_data))
+        # Two faces may share one Oracle identity (e.g. Propaganda // Propaganda).
+        # Keep both in face_data, but associate the printing with that identity once.
+        by_oracle: dict[str, dict] = {}
+        for index, face in enumerate(face_data):
+            by_oracle.setdefault(face['oracle_id'],
+                                 {**common, 'oracle_id': face['oracle_id'], 'name': face['name'],
+                                  'type_line': face['type_line'], 'oracle_text': face['oracle_text'],
+                                  'mana_value': face['mana_value'], 'face_index': index})
+        cards = tuple(by_oracle.values())
     else:
         cards = ({**common, 'oracle_id': _id(row.get('oracle_id'), 'oracle_id'), 'name': name,
                   'type_line': _text(row.get('type_line') or ' // '.join(f['type_line'] for f in face_data),

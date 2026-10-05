@@ -208,6 +208,58 @@ class CatalogLoaderTests(unittest.TestCase):
         self.assertEqual(query.get_card(oracle_id=OTHER)['name'], 'Back')
         self.assertEqual(query.search_cards(name='Back')['cards'][0]['oracle_id'], OTHER)
 
+    def test_reversible_same_oracle_identity_keeps_both_faces(self):
+        # Scryfall's Propaganda // Propaganda reversible card has the same
+        # face oracle_id on both sides (official card 3e3f0bcd-0796-494d-bf51-94b33c1671e9).
+        reversible = card(OLD, '2025-01-01', '1.00')
+        reversible.pop('oracle_id')
+        reversible.pop('cmc')
+        reversible['layout'] = 'reversible_card'
+        reversible['name'] = 'Propaganda // Propaganda'
+        reversible['card_faces'] = [
+            {'name': 'Propaganda', 'type_line': 'Enchantment', 'oracle_text': 'Attack tax.',
+             'oracle_id': OID, 'cmc': 3},
+            {'name': 'Propaganda', 'type_line': 'Enchantment', 'oracle_text': 'Attack tax.',
+             'oracle_id': OID, 'cmc': 3},
+        ]
+        self.records['default_cards'] = [reversible]
+        metadata = publish_from_files(self.root / 'same-face-id', self.sources())
+        query = CardCatalog(self.root / 'same-face-id/snapshots' / f"{metadata['snapshot_id']}.sqlite",
+                            metadata['snapshot_id'])
+        result = query.get_card(printing_id=OLD)
+        self.assertEqual(result['oracle_id'], OID)
+        self.assertEqual(query.catalog_status()['card_count'], 1)
+        self.assertEqual(query.catalog_status()['printing_count'], 1)
+        self.assertEqual([face['face_oracle_id'] for face in result['faces']], [OID, OID])
+        self.assertEqual(len(result['requested_printing']['faces']), 2)
+
+    def test_reversible_adventure_name_does_not_imply_face_count(self):
+        # Official reversible Bloomvine Regent printing has three name parts,
+        # but two card_faces with one shared Oracle identity.
+        printing_id = '081f2de5-251a-41c9-a62f-11487f54d355'
+        oracle_id = 'da1e019c-2ffb-412d-90d7-f2e5e5c44c4b'
+        reversible = card(printing_id, '2025-01-01', None)
+        reversible.pop('oracle_id')
+        reversible.pop('cmc')
+        reversible['layout'] = 'reversible_card'
+        reversible['name'] = 'Bloomvine Regent // Claim Territory // Bloomvine Regent'
+        reversible['card_faces'] = [
+            {'name': 'Bloomvine Regent', 'type_line': 'Creature — Dragon', 'oracle_text': 'Flying.',
+             'oracle_id': oracle_id, 'cmc': 5},
+            {'name': 'Claim Territory', 'type_line': 'Sorcery — Omen', 'oracle_text': 'Flying.',
+             'oracle_id': oracle_id, 'cmc': 5},
+        ]
+        self.records['default_cards'] = [reversible]
+        self.records['rulings'][0]['oracle_id'] = oracle_id
+        self.records['oracle_tags'][0]['taggings'][0]['oracle_id'] = oracle_id
+        metadata = publish_from_files(self.root / 'reversible-adventure', self.sources())
+        query = CardCatalog(self.root / 'reversible-adventure/snapshots' / f"{metadata['snapshot_id']}.sqlite",
+                            metadata['snapshot_id'])
+        result = query.get_card(printing_id=printing_id)
+        self.assertEqual(result['oracle_id'], oracle_id)
+        self.assertEqual([face['name'] for face in result['faces']],
+                         ['Bloomvine Regent', 'Claim Territory'])
+
     def test_large_valid_cmc_and_non_commander_record_are_retained(self):
         self.records['default_cards'] = [self.records['default_cards'][0]]
         self.records['default_cards'][0]['cmc'] = 1_000_000

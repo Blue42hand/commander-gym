@@ -37,7 +37,10 @@ An exclusive file lock covers the whole download and import. The loader accepts
 a dedicated root with precreated `staging/` and `snapshots/` directories,
 refuses directory symlinks, and only removes publication files created by its
 own attempt. It syncs snapshot directory entries before switching the active
-pointer and syncs the root directory afterward.
+pointer and syncs the root directory afterward. The lock prevents accidental
+overlap among cooperating importer processes; it is not a defense against a
+hostile writer with access to the catalog directory. The expected host boundary
+is a private directory owned by one non-login catalog account.
 
 `default_cards` is printing-level data. Every printing is stored with its
 price and face evidence. For the one-row-per-Oracle search table, the selected
@@ -47,7 +50,10 @@ price comes only from that selected printing; a null price stays null even if
 another printing has a price. `get_card(printing_id=...)` returns that
 printing's separate evidence. Reversible printings have two face-level Oracle
 IDs and mana values; both become searchable Oracle identities, and printing-ID
-lookup returns both faces. No synthetic Oracle ID is assigned. Mana values are
+lookup returns both faces. When both faces share one Oracle ID, the printing
+has one Oracle association while retaining both face records (as in the
+[official Propaganda // Propaganda card](https://api.scryfall.com/cards/3e3f0bcd-0796-494d-bf51-94b33c1671e9)).
+No synthetic Oracle ID is assigned. Mana values are
 validated as nonnegative finite numbers, with no arbitrary game-value cap.
 Rulings retain source, date, and comment.
 
@@ -55,7 +61,10 @@ The reversible layout follows Scryfall's published
 [`Card.ts`](https://github.com/scryfall/api-types/blob/main/src/objects/Card/Card.ts)
 and [`CardFields.ts`](https://github.com/scryfall/api-types/blob/main/src/objects/Card/CardFields.ts)
 types: top-level `oracle_id` and `cmc` are absent, and each face carries its
-own Oracle ID and mana value.
+own Oracle ID and mana value. The [official reversible Bloomvine Regent
+printing](https://api.scryfall.com/cards/081f2de5-251a-41c9-a62f-11487f54d355)
+has three `//` name components but two `card_faces` with the same Oracle ID;
+the importer uses the face array, never name punctuation, for face identities.
 Oracle tag membership is advisory; absence never proves a gameplay role is
 absent. Only exact single-tag filtering is implemented.
 
