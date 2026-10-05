@@ -2,6 +2,7 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from commander_gym.card_catalog import CardCatalog, CatalogError, create_schema, normalize_oracle_tag
 
@@ -59,6 +60,8 @@ class CardCatalogTests(unittest.TestCase):
                                            cursor=first['next_cursor'])
         self.assertEqual([card['name'] for card in second['cards']], ['Ashnod’s Altar'])
         self.assertIsNone(second['next_cursor'])
+        with self.assertRaisesRegex(CatalogError, 'another query'):
+            self.catalog.search_cards(name='Arcane', cursor=first['next_cursor'])
         self.assertEqual(self.catalog.search_cards(tag_id='ramp')['cards'][0]['oracle_id'], 'oracle-a')
         self.assertEqual([c['name'] for c in self.catalog.search_cards(color_identity='R')['cards']],
                          ['Arcane Signet', 'Ashnod’s Altar'])
@@ -71,6 +74,10 @@ class CardCatalogTests(unittest.TestCase):
         self.assertTrue(result['advisory'])
         self.assertTrue(result['next_cursor'])
         self.assertIsNone(self.catalog.search_tags('a', limit=1, cursor=result['next_cursor'])['next_cursor'])
+        with self.assertRaisesRegex(CatalogError, 'another query'):
+            self.catalog.search_tags('Gear', cursor=result['next_cursor'])
+        with self.assertRaisesRegex(CatalogError, 'another query'):
+            self.catalog.search_cards(cursor=result['next_cursor'])
         self.assertEqual(self.catalog.search_tags('Gear', kind='art')['tags'][0]['tag_id'], 'gear')
 
     def test_validation_and_read_only(self):
@@ -97,6 +104,27 @@ class CardCatalogTests(unittest.TestCase):
             self.catalog.get_card(oracle_id='')
         with self.catalog._connect() as db, self.assertRaises(sqlite3.OperationalError):
             db.execute('DELETE FROM cards')
+
+    def test_connections_close_on_success_and_snapshot_error(self):
+        with self.catalog._connect() as db:
+            self.assertEqual(db.execute('SELECT 1').fetchone()[0], 1)
+        with self.assertRaises(sqlite3.ProgrammingError):
+            db.execute('SELECT 1')
+
+        original_connect = sqlite3.connect
+        connections = []
+
+        def tracked_connect(*args, **kwargs):
+            connection = original_connect(*args, **kwargs)
+            connections.append(connection)
+            return connection
+
+        with mock.patch('commander_gym.card_catalog.sqlite3.connect', side_effect=tracked_connect):
+            with self.assertRaisesRegex(CatalogError, 'snapshot not found'):
+                CardCatalog(self.catalog.path, 'missing').catalog_status()
+        self.assertEqual(len(connections), 1)
+        with self.assertRaises(sqlite3.ProgrammingError):
+            connections[0].execute('SELECT 1')
 
     def test_official_oracle_tag_record_projection(self):
         # Field structure checked against a bounded official oracle_tags sample.

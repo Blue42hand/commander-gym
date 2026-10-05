@@ -14,7 +14,10 @@ Oracle text, type line, exact tag ID, Commander legal status, color identity
 subset, and mana value range. It does not parse Scryfall search syntax. Results
 are ordered by name and Oracle ID, limited to 50 records per page, and carry a
 cursor tied to the selected snapshot. The caller supplies `snapshot_id`; there
-is no implicit switch to newer data in the middle of a session.
+is no implicit switch to newer data in the middle of a session. Cursors also
+bind to the operation and normalized filters; changing a filter requires a
+fresh search. One exact tag ID can be used as a card filter. Multi-tag
+all/any/exclude searches are future work, not part of this prototype.
 
 `create_schema()` defines the offline loader contract. Each card row has a
 Scryfall Oracle ID and one selected printing ID. This prototype does not
