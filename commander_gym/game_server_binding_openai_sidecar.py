@@ -151,6 +151,7 @@ class BindingOpenAIGameServerConfig:
     catalog_path: Path
     instance_root: Path
     budget: OpenAIRunBudget | None = None
+    cache_friendly_history: bool = False
 
 
 def binding_openai_game_server_config_from_environment(
@@ -202,6 +203,11 @@ def binding_openai_game_server_config_from_environment(
         raise OpenAIGameServerSidecarConfigurationError(
             "a budget above $5 requires an absolute request limit"
         )
+    cache_value = environment.get("COMMANDER_GYM_CACHE_FRIENDLY_HISTORY", "false").lower()
+    if cache_value not in ("true", "false"):
+        raise OpenAIGameServerSidecarConfigurationError(
+            "COMMANDER_GYM_CACHE_FRIENDLY_HISTORY must be true or false"
+        )
     return BindingOpenAIGameServerConfig(
         sidecar=sidecar,
         catalog_path=catalog_path,
@@ -215,6 +221,7 @@ def binding_openai_game_server_config_from_environment(
             if ledger_value and cap_value
             else None
         ),
+        cache_friendly_history=cache_value == "true",
     )
 
 
@@ -271,6 +278,7 @@ class OpenAIBindingPilotComponentResolver:
     config: OpenAIGameServerSidecarConfig
     client: Any
     budget: OpenAIRunBudget | None = None
+    cache_friendly_history: bool = False
 
     def resolve(self, spec: PilotSubsystemSpec):
         key = spec.component_key()
@@ -319,6 +327,7 @@ class OpenAIBindingPilotComponentResolver:
                     model=self.config.model,
                     max_attempts=self.config.max_attempts,
                     budget=self.budget,
+                    cache_friendly_history=self.cache_friendly_history,
                 )
             )
         if (
@@ -332,6 +341,7 @@ class OpenAIBindingPilotComponentResolver:
                         model=self.config.model,
                         max_attempts=self.config.max_attempts,
                         budget=self.budget,
+                        cache_friendly_history=self.cache_friendly_history,
                         allow_priority_delegation=True,
                     )
                 )
@@ -347,6 +357,7 @@ class OpenAIBindingPilotComponentResolver:
                         model=self.config.model,
                         max_attempts=self.config.max_attempts,
                         budget=self.budget,
+                        cache_friendly_history=self.cache_friendly_history,
                         allow_priority_delegation=True,
                         allow_named_deferrals=True,
                     ),
@@ -365,6 +376,7 @@ class OpenAIBindingPilotComponentResolver:
                         model=self.config.model,
                         max_attempts=self.config.max_attempts,
                         budget=self.budget,
+                        cache_friendly_history=self.cache_friendly_history,
                         allow_priority_delegation=True,
                         allow_named_deferrals=True,
                         require_nonempty_named_deferrals=True,
@@ -384,6 +396,7 @@ class OpenAIBindingPilotComponentResolver:
                         model=self.config.model,
                         max_attempts=self.config.max_attempts,
                         budget=self.budget,
+                        cache_friendly_history=self.cache_friendly_history,
                         allow_priority_delegation=True,
                         allow_named_deferrals=True,
                         require_nonempty_named_deferrals=True,
@@ -404,6 +417,7 @@ class OpenAIBindingPilotComponentResolver:
                         model=self.config.model,
                         max_attempts=self.config.max_attempts,
                         budget=self.budget,
+                        cache_friendly_history=self.cache_friendly_history,
                         allow_priority_delegation=True,
                         allow_named_deferrals=True,
                         require_nonempty_named_deferrals=True,
@@ -426,6 +440,7 @@ class OpenAIBindingPilotComponentResolver:
                         model=self.config.model,
                         max_attempts=self.config.max_attempts,
                         budget=self.budget,
+                        cache_friendly_history=self.cache_friendly_history,
                         allow_priority_delegation=True,
                         allow_named_deferrals=True,
                         require_nonempty_named_deferrals=True,
@@ -491,6 +506,7 @@ def build_binding_openai_game_server_sidecar(
             config=config.sidecar,
             client=provider_client,
             budget=config.budget,
+            cache_friendly_history=config.cache_friendly_history,
         )
 
     if provenance_sink is None and config.sidecar.provenance_path is not None:

@@ -17,6 +17,10 @@ from commander_gym.pilot import (
 )
 from commander_gym.openai_run_budget import OpenAIRunBudget
 from commander_gym.observation_projection import expand_seat_observation
+from commander_gym.cache_friendly_input import (
+    cache_friendly_observation_input,
+    reconstruct_cache_friendly_observation,
+)
 
 
 class FakeResponse:
@@ -114,6 +118,67 @@ def structured_observation():
 
 
 class OpenAIResponsesPilotTests(unittest.TestCase):
+    def test_cache_friendly_layout_is_opt_in_and_preserves_masked_view(self):
+        obs = action_observation()
+        obs["knownDeck"] = {"cards": [{"name": "Visible deck card"}]}
+        obs["state"] = {"deck": {"commander": "Visible commander"},
+                        "gameLog": [{"description": f"event {i}"} for i in range(130)],
+                        "cards": {"visible": {"id": "visible", "isTapped": False}}}
+        output = json.dumps({"channel": "action", "semanticId": "argentum-action-v1:pass",
+                             "params": {}})
+        client = FakeClient(FakeResponse(output))
+        pilot = OpenAIResponsesPilot(client=client, model="gpt-test",
+                                    compact_model_observation=True,
+                                    cache_friendly_history=True)
+        pilot.choose(obs)
+        request = client.responses.calls[0]
+        self.assertFalse(request["store"])
+        self.assertEqual(request["prompt_cache_options"], {"mode": "explicit"})
+        self.assertEqual(sum("prompt_cache_breakpoint" in msg["content"][0]
+                             for msg in request["input"]), 3)
+        restored = expand_seat_observation(
+            reconstruct_cache_friendly_observation(request["input"])
+        )
+        self.assertEqual(restored["state"], obs["state"])
+        self.assertEqual(restored["knownDeck"], obs["knownDeck"])
+        self.assertEqual(restored["legalActions"][0].get("actionId"), None)
+        baseline = FakeClient(FakeResponse(output))
+        OpenAIResponsesPilot(client=baseline, model="gpt-test",
+                             compact_model_observation=True).choose(obs)
+        self.assertIsInstance(baseline.responses.calls[0]["input"], str)
+        self.assertNotIn("prompt_cache_options", baseline.responses.calls[0])
+        self.assertEqual(request["text"], baseline.responses.calls[0]["text"])
+        self.assertEqual(request["instructions"], baseline.responses.calls[0]["instructions"])
+
+    def test_cache_friendly_history_keeps_fixed_prefix_and_missing_log(self):
+        obs = action_observation()
+        self.assertEqual(reconstruct_cache_friendly_observation(
+            cache_friendly_observation_input(obs)),
+            {key: value for key, value in obs.items()})
+        obs["state"] = {"gameLog": [{"description": f"event {i}"} for i in range(33)]}
+        first = cache_friendly_observation_input(obs)
+        obs["state"]["gameLog"].append({"description": "event 33"})
+        second = cache_friendly_observation_input(obs)
+        self.assertEqual(first[:2], second[:2])
+        self.assertEqual(reconstruct_cache_friendly_observation(second), obs)
+
+    def test_cache_friendly_retry_keeps_original_masked_history(self):
+        obs = action_observation()
+        obs["state"] = {"gameLog": [{"description": "masked event"}]}
+        valid = json.dumps({"channel": "action", "semanticId": "argentum-action-v1:pass",
+                            "params": {}})
+        client = FakeClient([FakeResponse("{}"), FakeResponse(valid)])
+        choice = OpenAIResponsesPilot(client=client, model="gpt-test",
+                                      cache_friendly_history=True).choose(obs)
+        first, retry = client.responses.calls
+        self.assertEqual(choice.metadata["retryCount"], 1)
+        self.assertEqual(retry["input"][:-1], first["input"])
+        self.assertIn("previous response was invalid", retry["input"][-1]["content"])
+        self.assertEqual(reconstruct_cache_friendly_observation(first["input"]),
+                         {**obs, "legalActions": [
+                             {key: value for key, value in action.items() if key != "actionId"}
+                             for action in obs["legalActions"]]})
+
     def test_saved_turn_13_attack_target_typo_retries_against_native_offer(self):
         observation = action_observation()
         observation["legalActions"] = [{
