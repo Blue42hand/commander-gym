@@ -22,6 +22,27 @@ class CatalogError(ValueError):
     pass
 
 
+def normalize_oracle_tag(record: dict[str, Any]) -> tuple[dict[str, str], tuple[str, ...]]:
+    """Project an official oracle_tags JSONL record into tag and membership IDs.
+
+    The record shape was checked against a bounded official sample. The caller
+    remains responsible for joining memberships to a complete card snapshot.
+    """
+    if not isinstance(record, dict) or record.get('object') != 'tag' or record.get('type') != 'oracle':
+        raise CatalogError('expected an oracle tag record')
+    tag_id = _term(record.get('id'), 'tag id')
+    label = _term(record.get('label'), 'tag label')
+    taggings = record.get('taggings')
+    if not isinstance(taggings, list):
+        raise CatalogError('taggings must be an array')
+    ids: set[str] = set()
+    for tagging in taggings:
+        if not isinstance(tagging, dict):
+            raise CatalogError('tagging must be an object')
+        ids.add(_term(tagging.get('oracle_id'), 'oracle_id'))
+    return {'tag_id': tag_id, 'label': label}, tuple(sorted(ids))
+
+
 def create_schema(connection: sqlite3.Connection) -> None:
     """Create the storage contract; intended for an offline loader or fixtures."""
     connection.executescript("""

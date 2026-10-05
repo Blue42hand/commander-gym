@@ -2,7 +2,7 @@ import sqlite3
 
 import pytest
 
-from commander_gym.card_catalog import CardCatalog, CatalogError, create_schema
+from commander_gym.card_catalog import CardCatalog, CatalogError, create_schema, normalize_oracle_tag
 
 
 @pytest.fixture
@@ -84,3 +84,19 @@ def test_validation_and_read_only(catalog):
         catalog.search_tags('a', cursor='bogus')
     with catalog._connect() as db, pytest.raises(sqlite3.OperationalError):
         db.execute('DELETE FROM cards')
+
+
+def test_official_oracle_tag_record_projection():
+    # Field structure checked against a bounded official oracle_tags sample.
+    record = {
+        'object': 'tag', 'type': 'oracle',
+        'id': '00155182-3099-4742-be68-f8b4ea259d78',
+        'label': 'tutor-creature-giant', 'slug': 'tutor-creature-giant',
+        'aliases': ['tutor-giant'], 'parent_ids': [], 'child_ids': [],
+        'taggings': [{'oracle_id': '2445e58b-87ed-4ab2-8209-a5e1f566fba7', 'weight': 'median'}],
+    }
+    tag, membership = normalize_oracle_tag(record)
+    assert tag == {'tag_id': record['id'], 'label': record['label']}
+    assert membership == ('2445e58b-87ed-4ab2-8209-a5e1f566fba7',)
+    with pytest.raises(CatalogError):
+        normalize_oracle_tag({**record, 'type': 'art'})

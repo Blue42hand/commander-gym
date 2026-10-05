@@ -1,5 +1,8 @@
 # Read-only card discovery prototype
 
+This is a design and test note, not repository guidance. `ARCHITECTURE.md`
+continues to define the ownership boundary and Argentum rules authority.
+
 `commander_gym.card_catalog.CardCatalog` is a local query layer for a prepared
 SQLite snapshot. It does not download Scryfall data, run a service, access deck
 files, or start games. It can later sit behind a narrow Commander Gym tool
@@ -27,15 +30,21 @@ game rules and legal actions. No private deck or experiment data is read.
 
 ## Source check and remaining integration work
 
-The designated official source is `https://api.scryfall.com/bulk-data` with a
-meaningful User-Agent and `Accept: application/json`. On this task host, its
-DNS lookup failed with `[Errno 8] nodename nor servname provided, or not known`
-on the first request. Therefore this prototype uses synthetic fixtures only.
-The current manifest fields and `oracle_tags` record shape remain unverified
-here. Before authoring a loader, fetch the current manifest and a small bounded
-official tag sample, verify fields including `jsonl_download_uri` and
-`compressed_size`, and map actual tag records to this schema. Full card bulk
-downloads, scheduled refresh, and remote MCP transport are outside this
-prototype.
+The official `https://api.scryfall.com/bulk-data` manifest was read with a
+meaningful User-Agent and `Accept: application/json` on 2026-10-05. It listed
+`oracle_cards`, `default_cards`, `all_cards`, `unique_artwork`, `rulings`,
+`oracle_tags`, and `art_tags`, using `jsonl_download_uri` and
+`compressed_size` (not legacy `size`). The `oracle_tags` entry had
+`compressed_size: 5978797` and `updated_at: 2026-10-04T21:00:33.620+00:00`.
+An HTTP range request read only the first 131,072 bytes of the official
+`oracle_tags` gzip (206 Partial Content). Its complete sampled records had
+`object: tag`, `type: oracle`, `id`, `label`, and `taggings` containing
+`oracle_id` and `weight`; they also carried `slug`, `uri`, `description`,
+`parent_ids`, `child_ids`, and `aliases`. `normalize_oracle_tag()` projects
+the observed tag ID, label, and Oracle memberships. It does not claim that
+the sample covers all record variants. Card and art-tag record shapes were
+not downloaded or validated. All query tests still use synthetic fixtures.
+Full card bulk downloads, scheduled refresh, and remote MCP transport are
+outside this prototype.
 
 Run fixture tests with `PYTHONPATH=. pytest tests/test_card_catalog.py -q`.
