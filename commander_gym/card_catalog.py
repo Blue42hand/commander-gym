@@ -7,6 +7,7 @@ network listener. A separate, explicitly scoped loader can populate the schema.
 from __future__ import annotations
 
 import base64
+import binascii
 import json
 import sqlite3
 from pathlib import Path
@@ -30,8 +31,8 @@ def normalize_oracle_tag(record: dict[str, Any]) -> tuple[dict[str, str], tuple[
     """
     if not isinstance(record, dict) or record.get('object') != 'tag' or record.get('type') != 'oracle':
         raise CatalogError('expected an oracle tag record')
-    tag_id = _term(record.get('id'), 'tag id')
-    label = _term(record.get('label'), 'tag label')
+    tag_id = _required_term(record.get('id'), 'tag id')
+    label = _required_term(record.get('label'), 'tag label')
     taggings = record.get('taggings')
     if not isinstance(taggings, list):
         raise CatalogError('taggings must be an array')
@@ -39,7 +40,7 @@ def normalize_oracle_tag(record: dict[str, Any]) -> tuple[dict[str, str], tuple[
     for tagging in taggings:
         if not isinstance(tagging, dict):
             raise CatalogError('tagging must be an object')
-        ids.add(_term(tagging.get('oracle_id'), 'oracle_id'))
+        ids.add(_required_term(tagging.get('oracle_id'), 'oracle_id'))
     return {'tag_id': tag_id, 'label': label}, tuple(sorted(ids))
 
 
@@ -106,6 +107,13 @@ def _term(value: str | None, field: str) -> str | None:
     return value.strip()
 
 
+def _required_term(value: Any, field: str) -> str:
+    result = _term(value, field)
+    if result is None:
+        raise CatalogError(f'{field} is required')
+    return result
+
+
 def _like(value: str) -> str:
     return '%' + value.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_') + '%'
 
@@ -130,7 +138,7 @@ def _cursor_decode(value: str | None, snapshot: str) -> tuple[str, str] | None:
         return parts[1], parts[2]
     except CatalogError:
         raise
-    except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except (ValueError, UnicodeDecodeError, binascii.Error) as exc:
         raise CatalogError('invalid cursor') from exc
 
 
@@ -139,9 +147,7 @@ class CardCatalog:
 
     def __init__(self, path: str | Path, snapshot_id: str):
         self.path = Path(path)
-        self.snapshot_id = _term(snapshot_id, 'snapshot_id')
-        if self.snapshot_id is None:
-            raise CatalogError('snapshot_id is required')
+        self.snapshot_id = _required_term(snapshot_id, 'snapshot_id')
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path.resolve().as_uri() + '?mode=ro', uri=True)
@@ -162,7 +168,7 @@ class CardCatalog:
             return row
 
     def search_tags(self, query: str, *, kind: str = 'oracle', limit: int = 20, cursor: str | None = None) -> dict[str, Any]:
-        query = _term(query, 'query')
+        query = _required_term(query, 'query')
         if kind not in ('oracle', 'art'):
             raise CatalogError('kind must be oracle or art')
         limit = _limit(limit)
@@ -211,7 +217,7 @@ class CardCatalog:
                 args.append(_like(value))
         if tag_id is not None:
             where.append('EXISTS (SELECT 1 FROM card_tags ct WHERE ct.snapshot_id=c.snapshot_id AND ct.oracle_id=c.oracle_id AND ct.kind=? AND ct.tag_id=?)')
-            args.extend([tag_kind, _term(tag_id, 'tag_id')])
+            args.extend([tag_kind, _required_term(tag_id, 'tag_id')])
         if commander_legal is not None:
             where.append('c.commander_legal=?')
             args.append(int(commander_legal))
@@ -244,7 +250,7 @@ class CardCatalog:
         field, value = ('oracle_id', oracle_id) if oracle_id is not None else ('printing_id', printing_id)
         with self._connect() as db:
             row = db.execute(f'SELECT * FROM cards WHERE snapshot_id=? AND {field}=?',
-                             (self.snapshot_id, _term(value, field))).fetchone()
+                             (self.snapshot_id, _required_term(value, field))).fetchone()
             return self._card(db, row) if row else None
 
     def _card(self, db: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:

@@ -37,7 +37,9 @@ meaningful User-Agent and `Accept: application/json` on 2026-10-05. It listed
 `compressed_size` (not legacy `size`). The `oracle_tags` entry had
 `compressed_size: 5978797` and `updated_at: 2026-10-04T21:00:33.620+00:00`.
 An HTTP range request read only the first 131,072 bytes of the official
-`oracle_tags` gzip (206 Partial Content). Its complete sampled records had
+[`oracle_tags` gzip](https://data.scryfall.io/oracle-tags/oracle-tags-20261004210033.jsonl.gz)
+(206 Partial Content, `Content-Range: bytes 0-131071/5978797`). Its complete
+sampled records had
 `object: tag`, `type: oracle`, `id`, `label`, and `taggings` containing
 `oracle_id` and `weight`; they also carried `slug`, `uri`, `description`,
 `parent_ids`, `child_ids`, and `aliases`. `normalize_oracle_tag()` projects
@@ -46,5 +48,10 @@ the sample covers all record variants. Card and art-tag record shapes were
 not downloaded or validated. All query tests still use synthetic fixtures.
 Full card bulk downloads, scheduled refresh, and remote MCP transport are
 outside this prototype.
+
+The first complete sampled record had tag ID
+`00155182-3099-4742-be68-f8b4ea259d78`, label
+`tutor-creature-giant`, alias `tutor-giant`, and one tagging with Oracle ID
+`2445e58b-87ed-4ab2-8209-a5e1f566fba7` and weight `median`.
 
 Run fixture tests with `python -m unittest discover -s tests -p test_card_catalog.py -v`.

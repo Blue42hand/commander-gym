@@ -85,6 +85,16 @@ class CardCatalogTests(unittest.TestCase):
             CardCatalog(self.catalog.path, 's2').search_cards(cursor=cursor)
         with self.assertRaises(CatalogError):
             self.catalog.search_tags('a', cursor='bogus')
+        with self.assertRaises(CatalogError):
+            self.catalog.search_tags('a', cursor='a')
+        with self.assertRaises(CatalogError):
+            self.catalog.search_tags(None)
+        with self.assertRaises(CatalogError):
+            self.catalog.search_cards(tag_id='')
+        with self.assertRaises(CatalogError):
+            CardCatalog(self.catalog.path, None)
+        with self.assertRaises(CatalogError):
+            self.catalog.get_card(oracle_id='')
         with self.catalog._connect() as db, self.assertRaises(sqlite3.OperationalError):
             db.execute('DELETE FROM cards')
 
@@ -102,6 +112,16 @@ class CardCatalogTests(unittest.TestCase):
         self.assertEqual(membership, ('2445e58b-87ed-4ab2-8209-a5e1f566fba7',))
         with self.assertRaises(CatalogError):
             normalize_oracle_tag({**record, 'type': 'art'})
+        for invalid in (
+            {**record, 'id': None},
+            {**record, 'label': None},
+            {**record, 'taggings': [{}]},
+            {**record, 'taggings': [{'oracle_id': None}, {'oracle_id': 'valid'}]},
+            {**record, 'taggings': [{'oracle_id': 42}]},
+            {**record, 'taggings': 'not an array'},
+        ):
+            with self.subTest(invalid=invalid), self.assertRaises(CatalogError):
+                normalize_oracle_tag(invalid)
 
 
 if __name__ == '__main__':
