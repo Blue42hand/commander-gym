@@ -178,6 +178,7 @@ class CatalogLoaderTests(unittest.TestCase):
         with self.assertRaisesRegex(CatalogLoadError, 'non-catalog'):
             publish_from_files(target, self.sources())
         self.assertEqual((target / 'important.txt').read_text(), 'keep')
+        self.assertFalse((target / '.catalog-import.lock').exists())
         link = self.root / 'catalog-link'
         link.symlink_to(target, target_is_directory=True)
         with self.assertRaisesRegex(CatalogLoadError, 'symlink'):

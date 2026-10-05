@@ -344,15 +344,11 @@ def _load(db: sqlite3.Connection, snapshot: str, sources: dict[str, Source]) -> 
 @contextmanager
 def _exclusive_output(output_dir: Path):
     output_dir = Path(output_dir)
-    if output_dir.is_symlink():
-        raise CatalogLoadError('catalog output must not be a symlink')
-    output_dir.mkdir(parents=True, exist_ok=True)
-    lock_fd = os.open(output_dir / '.catalog-import.lock', os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
-    try:
-        try:
-            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as exc:
-            raise CatalogLoadError('catalog import already in progress') from exc
+    def check_layout() -> None:
+        if output_dir.is_symlink():
+            raise CatalogLoadError('catalog output must not be a symlink')
+        if not output_dir.exists():
+            return
         entries = {p.name for p in output_dir.iterdir()} - {'.catalog-import.lock'}
         if entries - {'snapshots', 'staging', 'current.json'}:
             raise CatalogLoadError('non-catalog output directory is not allowed')
@@ -367,6 +363,18 @@ def _exclusive_output(output_dir: Path):
             raise CatalogLoadError('unpublished snapshots require operator review')
         if current.exists() and (not current.is_file() or not snapshots.is_dir()):
             raise CatalogLoadError('invalid catalog output directory')
+
+    check_layout()  # Refuse an obvious wrong target without writing a lock file.
+    output_dir.mkdir(parents=True, exist_ok=True)
+    lock_fd = os.open(output_dir / '.catalog-import.lock', os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise CatalogLoadError('catalog import already in progress') from exc
+        check_layout()  # Recheck after the lock in case another actor raced preflight.
+        snapshots = output_dir / 'snapshots'
+        staging = output_dir / 'staging'
         snapshots.mkdir(exist_ok=True, mode=0o700)
         staging.mkdir(exist_ok=True, mode=0o700)
         yield
