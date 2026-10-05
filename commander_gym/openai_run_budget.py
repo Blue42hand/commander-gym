@@ -264,7 +264,8 @@ class OpenAIRunBudget:
             usage.get("output_tokens") if isinstance(usage, Mapping)
             else getattr(usage, "output_tokens", None)
         )
-        if type(input_tokens) is int and type(output_tokens) is int:
+        if (type(input_tokens) is int and type(output_tokens) is int
+            and input_tokens >= 0 and output_tokens >= 0):
             details = (
                 usage.get("input_tokens_details") if isinstance(usage, Mapping)
                 else getattr(usage, "input_tokens_details", None)
@@ -317,6 +318,12 @@ class OpenAIRunBudget:
         elif self.require_cache_usage_details:
             raise OpenAIRunBudgetError(
                 "provider token usage is missing or invalid",
+                dispatched=True, response=response,
+            )
+        elif (type(input_tokens) is int and input_tokens < 0
+              or type(output_tokens) is int and output_tokens < 0):
+            raise OpenAIRunBudgetError(
+                "provider token usage is invalid",
                 dispatched=True, response=response,
             )
         return response

@@ -52,6 +52,29 @@ class OpenAIRunBudgetTests(unittest.TestCase):
                 OpenAIRunBudget._cost(1000, 100, cached_tokens=400, cache_write_tokens=300)
                 + OpenAIRunBudget._cost(1000, 100, cache_write_tokens=1000))
 
+    def test_negative_provider_usage_keeps_dispatched_response_and_reservation(self):
+        for input_tokens, output_tokens in ((-1, 10), (10, -1)):
+            with self.subTest(input_tokens=input_tokens, output_tokens=output_tokens):
+                with TemporaryDirectory() as temporary:
+                    budget = OpenAIRunBudget(
+                        Path(temporary) / "budget.json", 5,
+                        initialize_new_ledger=True, require_cache_usage_details=True,
+                    )
+                    response = SimpleNamespace(usage={
+                        "input_tokens": input_tokens, "output_tokens": output_tokens,
+                        "input_tokens_details": {
+                            "cached_tokens": 0, "cache_write_tokens": 0,
+                        },
+                    })
+                    with self.assertRaisesRegex(OpenAIRunBudgetError, "token usage") as error:
+                        budget.create(lambda **_request: response, self.request())
+                    self.assertTrue(error.exception.dispatched)
+                    self.assertIs(error.exception.response, response)
+                    snapshot = budget.snapshot()
+                    self.assertEqual(snapshot["requests"], 1)
+                    self.assertEqual(snapshot["unsettledRequests"], 1)
+                    self.assertGreater(snapshot["estimatedUsd"], 0)
+
     def test_session_subcap_rejects_before_dispatch_without_changing_shared_cap(self):
         with TemporaryDirectory() as temporary:
             path = Path(temporary) / "budget.json"
