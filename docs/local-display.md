@@ -2,6 +2,28 @@
 
 A deliberately thin, read-only kiosk dashboard for a Commander Gym host.
 
+## Text-only terminal mode
+
+For a server without a graphical desktop, run a text-only display from an
+already authenticated local terminal:
+
+```sh
+python3 -m commander_gym.local_display_text
+```
+
+It refreshes every five seconds and exits with Ctrl-C. Use `--once` to print a
+single snapshot over SSH or for a smoke test. It opens no network listener and
+always reads host and systemd process status **without** reading provenance,
+even if `COMMANDER_GYM_DISPLAY_PROVENANCE` is set. Service activity is not an
+authenticated gateway health check. Optional `COMMANDER_GYM_DISPLAY_REVISION`,
+`COMMANDER_GYM_RUNTIME_REVISION`, and `COMMANDER_GYM_ARGENTUM_REVISION` variables
+show operator-supplied pinned revisions; set them from verified deployment
+metadata. Terminal mode does not require a display manager or browser.
+
+The terminal command is manual; starting it on a physical screen after reboot
+requires an operator login. Do not enable automatic login or change virtual
+terminal permissions just to launch the display.
+
 ## Data sources
 
 The display does not add a game-server seam. It reads only information already
