@@ -72,8 +72,8 @@ Oracle tag membership is advisory; absence never proves a gameplay role is
 absent. Only exact single-tag filtering is implemented.
 
 The full public corpus has not yet been downloaded or validated in this
-worktree. A real import should be reviewed and run in the separate
-`/var/lib/commander-gym/public-catalog` directory prepared on tolaria's data
-volume by the migration owner. It must not be pointed at existing Gym service,
+worktree. A real import should be reviewed and run in a separate private
+catalog directory on the data volume, prepared by the migration owner. It must
+not be pointed at existing Gym service,
 backup, or private deck directories. No service configuration changes are
 needed for the import.
