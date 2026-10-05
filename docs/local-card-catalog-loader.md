@@ -33,18 +33,35 @@ failed build. Metadata records each official URL, update time, byte size,
 SHA-256, and download time. The raw gzip downloads are temporary and are not
 retained after publication.
 
+An exclusive file lock covers the whole download and import. The loader accepts
+a dedicated root with precreated `staging/` and `snapshots/` directories,
+refuses directory symlinks, and only removes publication files created by its
+own attempt. It syncs snapshot directory entries before switching the active
+pointer and syncs the root directory afterward.
+
 `default_cards` is printing-level data. Every printing is stored with its
 price and face evidence. For the one-row-per-Oracle search table, the selected
 printing is deterministic: English before other languages, physical before
 digital, newest release date first, then printing UUID. The displayed USD
 price comes only from that selected printing; a null price stays null even if
 another printing has a price. `get_card(printing_id=...)` returns that
-printing's separate evidence. Rulings retain source, date, and comment.
+printing's separate evidence. Reversible printings have two face-level Oracle
+IDs and mana values; both become searchable Oracle identities, and printing-ID
+lookup returns both faces. No synthetic Oracle ID is assigned. Mana values are
+validated as nonnegative finite numbers, with no arbitrary game-value cap.
+Rulings retain source, date, and comment.
+
+The reversible layout follows Scryfall's published
+[`Card.ts`](https://github.com/scryfall/api-types/blob/main/src/objects/Card/Card.ts)
+and [`CardFields.ts`](https://github.com/scryfall/api-types/blob/main/src/objects/Card/CardFields.ts)
+types: top-level `oracle_id` and `cmc` are absent, and each face carries its
+own Oracle ID and mana value.
 Oracle tag membership is advisory; absence never proves a gameplay role is
 absent. Only exact single-tag filtering is implemented.
 
 The full public corpus has not yet been downloaded or validated in this
-worktree. A real import should be reviewed and run in a private local public
-catalog directory on the data volume, coordinated with the tolaria migration
-owner. It must not be pointed at existing Gym service, backup, or private deck
-directories. No service configuration changes are needed for the import.
+worktree. A real import should be reviewed and run in the separate
+`/var/lib/commander-gym/public-catalog` directory prepared on tolaria's data
+volume by the migration owner. It must not be pointed at existing Gym service,
+backup, or private deck directories. No service configuration changes are
+needed for the import.

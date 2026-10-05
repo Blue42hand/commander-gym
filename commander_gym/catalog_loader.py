@@ -6,13 +6,15 @@ No listener, scheduler, private data source, or game runner is involved.
 from __future__ import annotations
 
 import argparse
-from contextlib import closing
+from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
+import fcntl
 import gzip
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -60,6 +62,14 @@ class Source:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _fsync_directory(path: Path) -> None:
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
 
 
 def _id(value: object, field: str) -> str:
@@ -184,10 +194,17 @@ def _price(row: dict) -> str | None:
     return value
 
 
-def _card_data(row: dict) -> tuple[dict, tuple[dict, ...], tuple]:
+def _mana(value: object) -> float:
+    if (isinstance(value, bool) or not isinstance(value, (int, float))
+            or not math.isfinite(value) or value < 0):
+        raise CatalogLoadError('invalid cmc')
+    return float(value)
+
+
+def _card_data(row: dict) -> tuple[tuple[dict, ...], tuple[dict, ...], tuple]:
     if row.get('object') != 'card':
         raise CatalogLoadError('default_cards record is not a card')
-    oracle_id, printing_id = _id(row.get('oracle_id'), 'oracle_id'), _id(row.get('id'), 'printing id')
+    printing_id = _id(row.get('id'), 'printing id')
     name = _text(row.get('name'), 'name')
     lang = _text(row.get('lang'), 'lang')
     digital = row.get('digital')
@@ -201,34 +218,48 @@ def _card_data(row: dict) -> tuple[dict, tuple[dict, ...], tuple]:
     faces = row.get('card_faces') or []
     if not isinstance(faces, list) or len(faces) > 10:
         raise CatalogLoadError('invalid card_faces')
+    reversible = row.get('layout') == 'reversible_card'
+    if reversible and len(faces) != 2:
+        raise CatalogLoadError('reversible card must have two faces')
     face_data = tuple({'name': _text(f.get('name'), 'face name'),
                        'type_line': _text(f.get('type_line', ''), 'face type_line', empty=True),
-                       'oracle_text': _text(f.get('oracle_text', ''), 'face oracle_text', empty=True)}
+                       'oracle_text': _text(f.get('oracle_text', ''), 'face oracle_text', empty=True),
+                       'oracle_id': _id(f.get('oracle_id'), 'face oracle_id') if reversible else None,
+                       'mana_value': _mana(f.get('cmc')) if reversible else None}
                       for f in faces if isinstance(f, dict))
     if len(face_data) != len(faces):
         raise CatalogLoadError('card face must be object')
-    type_line = _text(row.get('type_line') or ' // '.join(f['type_line'] for f in face_data), 'type_line', empty=True)
-    oracle_text = _text(row.get('oracle_text') or ' // '.join(f['oracle_text'] for f in face_data), 'oracle_text', empty=True)
     colors = row.get('color_identity')
     if (not isinstance(colors, list) or any(not isinstance(c, str) or c not in 'WUBRG' for c in colors)
             or len(set(colors)) != len(colors)):
         raise CatalogLoadError('invalid color_identity')
-    mana = row.get('cmc')
-    if isinstance(mana, bool) or not isinstance(mana, (int, float)) or not 0 <= mana <= 1000:
-        raise CatalogLoadError('invalid cmc')
     legalities = row.get('legalities')
     if not isinstance(legalities, dict) or legalities.get('commander') not in ('legal', 'not_legal', 'banned', 'restricted'):
         raise CatalogLoadError('invalid commander legality')
-    card = {'oracle_id': oracle_id, 'printing_id': printing_id, 'name': name,
-            'type_line': type_line, 'oracle_text': oracle_text, 'mana_value': mana,
-            'color_identity': ''.join(c for c in 'WUBRG' if c in colors),
-            'commander_legal': int(legalities['commander'] == 'legal'),
-            'price_usd': _price(row), 'scryfall_uri': row.get('scryfall_uri'),
-            'lang': lang, 'digital': int(digital), 'released_at': released,
-            'set_code': _text(row.get('set'), 'set'),
-            'collector_number': _text(row.get('collector_number'), 'collector_number')}
+    if reversible and len({face['oracle_id'] for face in face_data}) != len(face_data):
+        raise CatalogLoadError('duplicate reversible face oracle_id')
+    price = _price(row)
+    common = {'printing_id': printing_id,
+              'color_identity': ''.join(c for c in 'WUBRG' if c in colors),
+              'commander_legal': int(legalities['commander'] == 'legal'),
+              'price_usd': price, 'scryfall_uri': row.get('scryfall_uri'),
+              'lang': lang, 'digital': int(digital), 'released_at': released,
+              'set_code': _text(row.get('set'), 'set'),
+              'collector_number': _text(row.get('collector_number'), 'collector_number')}
+    if reversible:
+        cards = tuple({**common, 'oracle_id': face['oracle_id'], 'name': face['name'],
+                       'type_line': face['type_line'], 'oracle_text': face['oracle_text'],
+                       'mana_value': face['mana_value'], 'face_index': index}
+                      for index, face in enumerate(face_data))
+    else:
+        cards = ({**common, 'oracle_id': _id(row.get('oracle_id'), 'oracle_id'), 'name': name,
+                  'type_line': _text(row.get('type_line') or ' // '.join(f['type_line'] for f in face_data),
+                                     'type_line', empty=True),
+                  'oracle_text': _text(row.get('oracle_text') or ' // '.join(f['oracle_text'] for f in face_data),
+                                       'oracle_text', empty=True),
+                  'mana_value': _mana(row.get('cmc')), 'face_index': 0},)
     rank = (lang != 'en', digital, -day.toordinal(), printing_id)
-    return card, face_data, rank
+    return cards, face_data, rank
 
 
 def _load(db: sqlite3.Connection, snapshot: str, sources: dict[str, Source]) -> dict[str, int]:
@@ -243,30 +274,37 @@ def _load(db: sqlite3.Connection, snapshot: str, sources: dict[str, Source]) -> 
         for kind, source in sources.items()
     ])
     ranks: dict[str, tuple] = {}
+    seen_printings: set[str] = set()
     counts = {kind: 0 for kind in KINDS}
     for row in _records(sources['default_cards']):
-        card, faces, rank = _card_data(row)
-        oid = card['oracle_id']
-        if oid not in ranks:
-            db.execute('INSERT INTO cards VALUES (?,?,?,?,?,?,?,?,?,?,?)',
-                       (snapshot, oid, card['printing_id'], card['name'], card['type_line'], card['oracle_text'],
-                        card['mana_value'], card['color_identity'], card['commander_legal'], card['price_usd'], card['scryfall_uri']))
-        elif rank < ranks[oid]:
-            db.execute('UPDATE cards SET printing_id=?, name=?, type_line=?, oracle_text=?, mana_value=?, '
-                       'color_identity=?, commander_legal=?, price_usd=?, scryfall_uri=? WHERE snapshot_id=? AND oracle_id=?',
-                       (card['printing_id'], card['name'], card['type_line'], card['oracle_text'], card['mana_value'],
-                        card['color_identity'], card['commander_legal'], card['price_usd'], card['scryfall_uri'], snapshot, oid))
-            db.execute('DELETE FROM card_faces WHERE snapshot_id=? AND oracle_id=?', (snapshot, oid))
-        if oid not in ranks or rank < ranks[oid]:
-            ranks[oid] = rank
-            for index, face in enumerate(faces):
-                db.execute('INSERT INTO card_faces VALUES (?,?,?,?,?,?)',
-                           (snapshot, oid, index, face['name'], face['type_line'], face['oracle_text']))
-        db.execute('INSERT INTO printings VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-                   (snapshot, card['printing_id'], oid, card['name'], card['type_line'], card['oracle_text'],
-                    card['lang'], card['digital'], card['released_at'],
-                    card['set_code'], card['collector_number'], card['price_usd'], card['scryfall_uri'],
-                    json.dumps(faces, ensure_ascii=False)))
+        cards, faces, rank = _card_data(row)
+        printing_id = cards[0]['printing_id']
+        if printing_id in seen_printings:
+            raise CatalogLoadError(f'duplicate printing ID {printing_id}')
+        seen_printings.add(printing_id)
+        for card in cards:
+            oid = card['oracle_id']
+            if oid not in ranks:
+                db.execute('INSERT INTO cards VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+                           (snapshot, oid, printing_id, card['name'], card['type_line'], card['oracle_text'],
+                            card['mana_value'], card['color_identity'], card['commander_legal'], card['price_usd'], card['scryfall_uri']))
+            elif rank < ranks[oid]:
+                db.execute('UPDATE cards SET printing_id=?, name=?, type_line=?, oracle_text=?, mana_value=?, '
+                           'color_identity=?, commander_legal=?, price_usd=?, scryfall_uri=? WHERE snapshot_id=? AND oracle_id=?',
+                           (printing_id, card['name'], card['type_line'], card['oracle_text'], card['mana_value'],
+                            card['color_identity'], card['commander_legal'], card['price_usd'], card['scryfall_uri'], snapshot, oid))
+                db.execute('DELETE FROM card_faces WHERE snapshot_id=? AND oracle_id=?', (snapshot, oid))
+            if oid not in ranks or rank < ranks[oid]:
+                ranks[oid] = rank
+                for index, face in enumerate(faces):
+                    db.execute('INSERT INTO card_faces VALUES (?,?,?,?,?,?,?,?)',
+                               (snapshot, oid, index, face['oracle_id'], face['mana_value'],
+                                face['name'], face['type_line'], face['oracle_text']))
+            db.execute('INSERT INTO printings VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                       (snapshot, printing_id, oid, card['face_index'], card['name'], card['type_line'], card['oracle_text'],
+                        card['lang'], card['digital'], card['released_at'],
+                        card['set_code'], card['collector_number'], card['price_usd'], card['scryfall_uri'],
+                        json.dumps(faces, ensure_ascii=False)))
         counts['default_cards'] += 1
     for row in _records(sources['rulings']):
         if row.get('object') != 'ruling':
@@ -303,8 +341,40 @@ def _load(db: sqlite3.Connection, snapshot: str, sources: dict[str, Source]) -> 
     return counts
 
 
-def publish_from_files(output_dir: Path, sources: dict[str, Source]) -> dict:
-    """Validate local official gzip files and atomically publish a new snapshot."""
+@contextmanager
+def _exclusive_output(output_dir: Path):
+    output_dir = Path(output_dir)
+    if output_dir.is_symlink():
+        raise CatalogLoadError('catalog output must not be a symlink')
+    output_dir.mkdir(parents=True, exist_ok=True)
+    lock_fd = os.open(output_dir / '.catalog-import.lock', os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise CatalogLoadError('catalog import already in progress') from exc
+        entries = {p.name for p in output_dir.iterdir()} - {'.catalog-import.lock'}
+        if entries - {'snapshots', 'staging', 'current.json'}:
+            raise CatalogLoadError('non-catalog output directory is not allowed')
+        snapshots = output_dir / 'snapshots'
+        staging = output_dir / 'staging'
+        current = output_dir / 'current.json'
+        if (snapshots.is_symlink() or staging.is_symlink() or current.is_symlink()
+                or (snapshots.exists() and not snapshots.is_dir())
+                or (staging.exists() and not staging.is_dir())):
+            raise CatalogLoadError('catalog path must not be a symlink or non-directory')
+        if not current.exists() and snapshots.exists() and any(snapshots.iterdir()):
+            raise CatalogLoadError('unpublished snapshots require operator review')
+        if current.exists() and (not current.is_file() or not snapshots.is_dir()):
+            raise CatalogLoadError('invalid catalog output directory')
+        snapshots.mkdir(exist_ok=True, mode=0o700)
+        staging.mkdir(exist_ok=True, mode=0o700)
+        yield
+    finally:
+        os.close(lock_fd)
+
+
+def _publish_locked(output_dir: Path, sources: dict[str, Source]) -> dict:
     if set(sources) != set(KINDS):
         raise CatalogLoadError('exactly three source datasets required')
     for kind, source in sources.items():
@@ -316,19 +386,12 @@ def publish_from_files(output_dir: Path, sources: dict[str, Source]) -> dict:
             raise CatalogLoadError(f'{kind} compressed size mismatch')
     snapshot = hashlib.sha256(''.join(sources[k].sha256 for k in KINDS).encode()).hexdigest()[:24]
     output_dir = Path(output_dir)
-    if output_dir.is_symlink():
-        raise CatalogLoadError('catalog output must not be a symlink')
-    if output_dir.exists() and any(output_dir.iterdir()):
-        if not ((output_dir / 'current.json').is_file() and (output_dir / 'snapshots').is_dir()):
-            raise CatalogLoadError('non-catalog output directory is not allowed')
-    output_dir.mkdir(parents=True, exist_ok=True)
     final_dir = output_dir / 'snapshots'
-    final_dir.mkdir(exist_ok=True)
     final_db = final_dir / f'{snapshot}.sqlite'
     final_meta = final_dir / f'{snapshot}.json'
     if final_db.exists() or final_meta.exists():
         raise CatalogLoadError('snapshot already exists')
-    with tempfile.TemporaryDirectory(prefix='.catalog-stage-', dir=output_dir) as work:
+    with tempfile.TemporaryDirectory(prefix='.catalog-stage-', dir=output_dir / 'staging') as work:
         stage = Path(work)
         database = stage / 'catalog.sqlite'
         try:
@@ -350,27 +413,49 @@ def publish_from_files(output_dir: Path, sources: dict[str, Source]) -> dict:
             os.fsync(handle.fileno())
         database.chmod(0o444)
         stage_meta.chmod(0o444)
+        created_db = created_meta = False
         try:
             os.link(database, final_db)
+            created_db = True
             os.link(stage_meta, final_meta)
+            created_meta = True
+            _fsync_directory(final_dir)
             active = stage / 'current.json'
             active.write_text(json.dumps({'snapshot_id': snapshot, 'database': str(final_db),
                                           'metadata': str(final_meta)}, indent=2) + '\n')
             with active.open('rb') as handle:
                 os.fsync(handle.fileno())
+        except OSError:
+            if created_db:
+                final_db.unlink(missing_ok=True)
+            if created_meta:
+                final_meta.unlink(missing_ok=True)
+            raise
+        try:
             os.replace(active, output_dir / 'current.json')
         except OSError:
             final_db.unlink(missing_ok=True)
             final_meta.unlink(missing_ok=True)
             raise
+        try:
+            _fsync_directory(output_dir)
+        except OSError as exc:
+            raise CatalogLoadError('snapshot published but directory durability is uncertain') from exc
     return metadata
 
 
+def publish_from_files(output_dir: Path, sources: dict[str, Source]) -> dict:
+    """Validate local official gzip files and atomically publish a new snapshot."""
+    with _exclusive_output(output_dir):
+        return _publish_locked(output_dir, sources)
+
+
 def download_and_publish(output_dir: Path) -> dict:
-    manifest = fetch_manifest()
-    with tempfile.TemporaryDirectory(prefix='commander-gym-catalog-') as work:
-        sources = {kind: download_source(kind, manifest[kind], Path(work)) for kind in KINDS}
-        return publish_from_files(output_dir, sources)
+    with _exclusive_output(output_dir):
+        manifest = fetch_manifest()
+        with tempfile.TemporaryDirectory(prefix='commander-gym-catalog-') as work:
+            sources = {kind: download_source(kind, manifest[kind], Path(work)) for kind in KINDS}
+            return _publish_locked(output_dir, sources)
 
 
 def main() -> None:

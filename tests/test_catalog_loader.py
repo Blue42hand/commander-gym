@@ -1,6 +1,8 @@
 import gzip
 import hashlib
 import io
+import fcntl
+import os
 import json
 from pathlib import Path
 import tempfile
@@ -9,7 +11,7 @@ from unittest import mock
 
 from commander_gym.card_catalog import CardCatalog
 from commander_gym.catalog_loader import (
-    CatalogLoadError, Source, _source_url, download_source, publish_from_files,
+    CatalogLoadError, Source, _source_url, download_and_publish, download_source, publish_from_files,
 )
 
 
@@ -180,6 +182,97 @@ class CatalogLoaderTests(unittest.TestCase):
         link.symlink_to(target, target_is_directory=True)
         with self.assertRaisesRegex(CatalogLoadError, 'symlink'):
             publish_from_files(link, self.sources())
+
+    def test_reversible_card_preserves_both_real_oracle_identities(self):
+        reversible = card(OLD, '2025-01-01', None)
+        reversible.pop('oracle_id')
+        reversible.pop('cmc')
+        reversible['layout'] = 'reversible_card'
+        reversible['name'] = 'Front // Back'
+        reversible['card_faces'] = [
+            {'name': 'Front', 'type_line': 'Creature', 'oracle_text': 'Front text.',
+             'oracle_id': OID, 'cmc': 2},
+            {'name': 'Back', 'type_line': 'Artifact', 'oracle_text': 'Back text.',
+             'oracle_id': OTHER, 'cmc': 3},
+        ]
+        self.records['default_cards'] = [reversible]
+        metadata = publish_from_files(self.root / 'reversible', self.sources())
+        query = CardCatalog(self.root / 'reversible/snapshots' / f"{metadata['snapshot_id']}.sqlite",
+                            metadata['snapshot_id'])
+        result = query.get_card(printing_id=OLD)
+        self.assertEqual(query.catalog_status()['printing_count'], 1)
+        self.assertEqual(result['printing_id'], OLD)
+        self.assertEqual([face['oracle_id'] for face in result['oracle_faces']], [OID, OTHER])
+        self.assertEqual([face['mana_value'] for face in result['oracle_faces']], [2, 3])
+        self.assertEqual(query.get_card(oracle_id=OTHER)['name'], 'Back')
+        self.assertEqual(query.search_cards(name='Back')['cards'][0]['oracle_id'], OTHER)
+
+    def test_large_valid_cmc_and_non_commander_record_are_retained(self):
+        self.records['default_cards'] = [self.records['default_cards'][0]]
+        self.records['default_cards'][0]['cmc'] = 1_000_000
+        self.records['default_cards'][0]['legalities']['commander'] = 'not_legal'
+        metadata = publish_from_files(self.root / 'large', self.sources())
+        query = CardCatalog(self.root / 'large/snapshots' / f"{metadata['snapshot_id']}.sqlite",
+                            metadata['snapshot_id'])
+        result = query.get_card(printing_id=OLD)['requested_printing']
+        self.assertEqual(result['oracle_id'], OID)
+        self.assertEqual(result['name'], 'Example')
+        self.assertEqual(query.search_cards(mana_value_min=1_000_000)['cards'][0]['oracle_id'], OID)
+        self.assertEqual(query.search_cards(commander_legal=False)['cards'][0]['oracle_id'], OID)
+
+    def test_import_lock_blocks_concurrent_publication(self):
+        root = self.root / 'locked'
+        root.mkdir()
+        lock_fd = os.open(root / '.catalog-import.lock', os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with self.assertRaisesRegex(CatalogLoadError, 'already in progress'):
+                publish_from_files(root, self.sources())
+            with mock.patch('commander_gym.catalog_loader.fetch_manifest') as manifest:
+                with self.assertRaisesRegex(CatalogLoadError, 'already in progress'):
+                    download_and_publish(root)
+                manifest.assert_not_called()
+            self.assertFalse((root / 'current.json').exists())
+        finally:
+            os.close(lock_fd)
+
+    def test_link_collision_never_unlinks_another_publishers_files(self):
+        root = self.root / 'collision'
+        real_link = os.link
+        winner = []
+
+        def collide(source, target, *args, **kwargs):
+            target = Path(target)
+            if target.suffix == '.sqlite':
+                target.write_bytes(b'winner database')
+                other = target.with_suffix('.json')
+                other.write_bytes(b'winner metadata')
+                winner.extend([target, other])
+                raise FileExistsError('another publisher won')
+            return real_link(source, target, *args, **kwargs)
+
+        with mock.patch('commander_gym.catalog_loader.os.link', side_effect=collide):
+            with self.assertRaises(FileExistsError):
+                publish_from_files(root, self.sources())
+        self.assertEqual([path.read_bytes() for path in winner],
+                         [b'winner database', b'winner metadata'])
+
+    def test_failed_first_build_can_retry_with_precreated_directories(self):
+        root = self.root / 'precreated'
+        (root / 'staging').mkdir(parents=True)
+        (root / 'snapshots').mkdir()
+        self.records['rulings'][0]['oracle_id'] = OTHER
+        with self.assertRaisesRegex(CatalogLoadError, 'unknown oracle_id'):
+            publish_from_files(root, self.sources())
+        self.records['rulings'][0]['oracle_id'] = OID
+        published = publish_from_files(root, self.sources())
+        self.assertEqual(json.loads((root / 'current.json').read_text())['snapshot_id'],
+                         published['snapshot_id'])
+        symlink_root = self.root / 'symlink-snapshots'
+        symlink_root.mkdir()
+        (symlink_root / 'snapshots').symlink_to(root / 'snapshots', target_is_directory=True)
+        with self.assertRaisesRegex(CatalogLoadError, 'symlink'):
+            publish_from_files(symlink_root, self.sources())
 
 
 if __name__ == '__main__':
