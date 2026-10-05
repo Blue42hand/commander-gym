@@ -93,9 +93,29 @@ class _FakeResponses:
         })}
 
 
+def _verified_runtime_config_digest(spec: Any, runtime: Any, strategic: Any) -> str:
+    runtime_config = {
+        "model": strategic.model, "maxAttempts": strategic.max_attempts,
+        "delegatedPilotVersion": runtime.version,
+        "providerRef": asdict(spec.ref),
+        "runtimeFlags": {field: getattr(runtime, field) for field in (
+            "allow_named_deferrals", "guarded_then_cast_templates", "allow_declarative_continuation",
+        )},
+        "strategicFlags": {field: getattr(strategic, field) for field in (
+            "allow_priority_delegation", "allow_named_deferrals", "require_nonempty_named_deferrals",
+            "compact_model_observation", "guarded_then_cast_templates", "allow_declarative_continuation",
+        )},
+    }
+    digest = _sha(json.dumps(runtime_config, sort_keys=True, separators=(",", ":")).encode())
+    if digest != CONFIG_SHA256:
+        raise QualifiedV7PreflightError("v7 runtime config digest changed")
+    return digest
+
+
 def verify_qualified_v7_catalog(
     instance_root: Path, catalog_path: Path, profile_a: str, profile_b: str,
-) -> dict[str, str]:
+    max_attempts: int,
+) -> dict[str, str | int]:
     """Verify exact private closure, canonical refs, runtime flags and prompt, offline."""
     root = instance_root.expanduser().resolve()
     catalog = catalog_path.expanduser().resolve()
@@ -126,7 +146,7 @@ def verify_qualified_v7_catalog(
         raise QualifiedV7PreflightError("v7 Pilot provider component changed")
     responses = _FakeResponses()
     resolver = OpenAIBindingPilotComponentResolver(
-        config=SimpleNamespace(model="gpt-6-luna", max_attempts=2),
+        config=SimpleNamespace(model="gpt-6-luna", max_attempts=max_attempts),
         client=SimpleNamespace(responses=responses),
     )
     component = resolver.resolve(specs[0])
@@ -140,23 +160,10 @@ def verify_qualified_v7_catalog(
             "allow_priority_delegation", "allow_named_deferrals", "require_nonempty_named_deferrals",
             "compact_model_observation", "guarded_then_cast_templates", "allow_declarative_continuation",
         ))
-        or strategic.model != "gpt-6-luna"):
+        or strategic.model != "gpt-6-luna"
+        or strategic.max_attempts != max_attempts):
         raise QualifiedV7PreflightError("v7 runtime features or model are disabled")
-    runtime_config = {
-        "model": strategic.model, "maxAttempts": strategic.max_attempts,
-        "delegatedPilotVersion": runtime.version,
-        "providerRef": asdict(specs[0].ref),
-        "runtimeFlags": {field: getattr(runtime, field) for field in (
-            "allow_named_deferrals", "guarded_then_cast_templates", "allow_declarative_continuation",
-        )},
-        "strategicFlags": {field: getattr(strategic, field) for field in (
-            "allow_priority_delegation", "allow_named_deferrals", "require_nonempty_named_deferrals",
-            "compact_model_observation", "guarded_then_cast_templates", "allow_declarative_continuation",
-        )},
-    }
-    config_digest = _sha(json.dumps(runtime_config, sort_keys=True, separators=(",", ":")).encode())
-    if config_digest != CONFIG_SHA256:
-        raise QualifiedV7PreflightError("v7 runtime config digest changed")
+    config_digest = _verified_runtime_config_digest(specs[0], runtime, strategic)
     strategic.choose({
         "type": "GameServerSeat", "perspectivePlayerId": "preflight-seat",
         "agentToAct": "preflight-seat", "pendingDecision": None, "state": {},
@@ -173,15 +180,17 @@ def verify_qualified_v7_catalog(
         raise QualifiedV7PreflightError("v7 resolved active Bindings changed")
     return {"catalogClosureSha256": closure_digest, "pilotFingerprint": PILOT_FINGERPRINT,
             "promptSha256": prompt_digest, "configSha256": config_digest,
-            "model": strategic.model}
+            "model": strategic.model, "maxAttempts": strategic.max_attempts}
 
 
 def stage_qualified_v7_catalog(
     instance_root: Path, catalog_path: Path, run_dir: Path,
-    profile_a: str, profile_b: str,
-) -> tuple[Path, Path, dict[str, str]]:
+    profile_a: str, profile_b: str, max_attempts: int,
+) -> tuple[Path, Path, dict[str, str | int]]:
     """Copy the exact reviewed closure into the private run before services start."""
-    receipt = verify_qualified_v7_catalog(instance_root, catalog_path, profile_a, profile_b)
+    receipt = verify_qualified_v7_catalog(
+        instance_root, catalog_path, profile_a, profile_b, max_attempts,
+    )
     root = instance_root.expanduser().resolve()
     roster = json.loads((root / ROSTER_PATH).read_bytes())
     staged_root = run_dir / "qualified-v7-catalog"
@@ -194,7 +203,7 @@ def stage_qualified_v7_catalog(
         destination.chmod(0o600)
     staged_catalog = staged_root / ROSTER_PATH
     staged_receipt = verify_qualified_v7_catalog(
-        staged_root, staged_catalog, profile_a, profile_b,
+        staged_root, staged_catalog, profile_a, profile_b, max_attempts,
     )
     if staged_receipt != receipt:
         raise QualifiedV7PreflightError("staged v7 catalog closure changed")

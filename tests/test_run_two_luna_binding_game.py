@@ -3,15 +3,39 @@ from tempfile import TemporaryDirectory
 from contextlib import redirect_stderr
 from io import StringIO
 import subprocess
+import sys
 import unittest
 from unittest.mock import patch
 import venv
 
 from commander_gym.openai_run_budget import OpenAIRunBudget, OpenAIRunBudgetError
+from commander_gym.qualified_v7_preflight import QualifiedV7PreflightError
 from scripts.run_two_luna_binding_game import checked_existing_budget, main, selected_python
 
 
 class ExistingGameBudgetTests(unittest.TestCase):
+    def test_paid_launcher_qualifies_effective_max_attempts_before_credentials(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            argv = ["game", "--engine-dir", str(root), "--instance-root", str(root),
+                    "--catalog", str(root / "rosters/v7.json"),
+                    "--output-dir", str(root / "out"), "--api-key-file", str(root / "unused-key"),
+                    "--profile-a", "krenko", "--profile-b", "talrand",
+                    "--qualified-v7-comparison", "--max-attempts", "3",
+                    "--python", sys.executable]
+            with patch("sys.argv", argv), patch(
+                "scripts.run_two_luna_binding_game.stage_qualified_v7_catalog",
+                side_effect=QualifiedV7PreflightError("v7 runtime config digest changed"),
+            ) as stage, patch("scripts.run_two_luna_binding_game.read_key") as read_key, patch(
+                "scripts.run_two_luna_binding_game.subprocess.Popen"
+            ) as start_process, self.assertRaisesRegex(
+                QualifiedV7PreflightError, "runtime config digest changed"
+            ):
+                main()
+            self.assertEqual(stage.call_args.args[-1], 3)
+            read_key.assert_not_called()
+            start_process.assert_not_called()
+
     def test_paid_launcher_requires_explicit_v7_qualification_before_setup(self):
         with TemporaryDirectory() as temporary:
             root = Path(temporary)

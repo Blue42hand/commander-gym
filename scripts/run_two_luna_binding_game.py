@@ -128,6 +128,7 @@ def main():
     if args.qualified_v7_comparison:
         catalog_root, catalog_path, qualification = stage_qualified_v7_catalog(
             catalog_root, catalog_path, run_dir, args.profile_a, args.profile_b,
+            args.max_attempts,
         )
         print("TWO_LUNA_QUALIFICATION_PREFLIGHT " + json.dumps(qualification, sort_keys=True))
     sidecar_port, server_port = free_port(), free_port()
