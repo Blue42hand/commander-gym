@@ -16,12 +16,13 @@ from .catalog_loader import (
     CatalogLoadError, KINDS, _exclusive_output, _publish_locked,
     download_source, fetch_manifest,
 )
+from .card_catalog import SCHEMA_VERSION
 
 
 _SNAPSHOT_ID = re.compile(r"[0-9a-f]{24}\Z")
 
 
-def _current_sources(root: Path) -> tuple[str, dict] | None:
+def _current_sources(root: Path) -> tuple[str, dict, int] | None:
     pointer = root / "current.json"
     if pointer.is_symlink():
         raise CatalogLoadError("invalid catalog pointer")
@@ -46,16 +47,20 @@ def _current_sources(root: Path) -> tuple[str, dict] | None:
                 or set(metadata["sources"]) != set(KINDS)
                 or any(not isinstance(metadata["sources"][kind], dict) for kind in KINDS)):
             raise ValueError("invalid snapshot metadata")
-        return snapshot_id, metadata["sources"]
+        version = metadata.get("schema_version", 1)
+        if isinstance(version, bool) or not isinstance(version, int) or version < 1:
+            raise ValueError("invalid snapshot schema version")
+        return snapshot_id, metadata["sources"], version
     except (OSError, KeyError, TypeError, ValueError) as exc:
         raise CatalogLoadError("invalid current catalog metadata") from exc
 
 
-def _changed(manifest: dict, current: tuple[str, dict] | None) -> bool:
+def _changed(manifest: dict, current: tuple[str, dict, int] | None) -> bool:
     if current is None:
         return True
-    _, sources = current
-    return any(sources[kind].get("url") != manifest[kind]["jsonl_download_uri"]
+    _, sources, version = current
+    return version != SCHEMA_VERSION or any(
+               sources[kind].get("url") != manifest[kind]["jsonl_download_uri"]
                or sources[kind].get("compressed_size") != manifest[kind]["compressed_size"]
                for kind in KINDS)
 
