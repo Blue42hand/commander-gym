@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from contextlib import redirect_stdout
 from io import StringIO
 import multiprocessing
+from unittest.mock import patch
 import json
 import unittest
 
@@ -64,6 +65,20 @@ def try_second_runner(run_dir, ledger_path, outcome):
 
 
 class CacheProbeSessionTests(unittest.TestCase):
+    def test_new_nested_run_directories_are_synced_before_manifest(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            budget = ledger(root / "ledger.json")
+            from commander_gym import cache_probe_session as module
+            with patch.object(module, "_fsync_dir", wraps=module._fsync_dir) as sync:
+                with ProbeSession.open(root / "parent" / "run", budget,
+                        trace_sha256="a" * 64, source_head="head-a",
+                        requests=sample_requests()):
+                    pass
+            synced = [call.args[0] for call in sync.call_args_list]
+            self.assertLess(synced.index(root), synced.index(root / "parent"))
+            self.assertTrue((root / "parent" / "run" / "manifest.json").exists())
+
     def test_second_process_cannot_open_held_session(self):
         with TemporaryDirectory() as temporary:
             root = Path(temporary)

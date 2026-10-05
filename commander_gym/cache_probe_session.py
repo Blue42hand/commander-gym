@@ -41,6 +41,26 @@ def _fsync_dir(directory: Path) -> None:
         os.close(fd)
 
 
+def _durable_mkdir(directory: Path) -> None:
+    """Persist every newly created directory entry before any spend intent."""
+    missing = []
+    current = directory
+    while not current.exists():
+        missing.append(current)
+        current = current.parent
+    if not current.is_dir():
+        raise ProbeSessionError("run directory ancestor is not a directory")
+    for path in reversed(missing):
+        try:
+            path.mkdir(mode=0o700)
+        except FileExistsError:
+            if not path.is_dir():
+                raise
+        _fsync_dir(path.parent)
+    # Also cover a second process that observed an entry created elsewhere.
+    _fsync_dir(directory.parent)
+
+
 def _private_json(path: Path, value: Mapping[str, Any]) -> None:
     encoded = json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n"
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -135,7 +155,7 @@ class ProbeSession:
             raise ProbeSessionError("probe requires the exact ten primary requests")
         if not run_dir.is_absolute():
             raise ProbeSessionError("run directory must be absolute")
-        run_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        _durable_mkdir(run_dir)
         if run_dir.is_symlink():
             raise ProbeSessionError("run directory cannot be a symlink")
         lock_fd = os.open(run_dir / ".session.lock", os.O_RDWR | os.O_CREAT, 0o600)
