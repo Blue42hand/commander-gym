@@ -11,6 +11,7 @@ import binascii
 from contextlib import contextmanager
 import hashlib
 import json
+import math
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -58,6 +59,16 @@ def create_schema(connection: sqlite3.Connection) -> None:
             card_source TEXT NOT NULL,
             tag_source TEXT NOT NULL
         );
+        CREATE TABLE dataset_sources (
+            snapshot_id TEXT NOT NULL REFERENCES snapshots(snapshot_id),
+            kind TEXT NOT NULL,
+            url TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            compressed_size INTEGER NOT NULL,
+            sha256 TEXT NOT NULL,
+            downloaded_at TEXT NOT NULL,
+            PRIMARY KEY(snapshot_id, kind)
+        );
         CREATE TABLE cards (
             snapshot_id TEXT NOT NULL REFERENCES snapshots(snapshot_id),
             oracle_id TEXT NOT NULL,
@@ -73,7 +84,48 @@ def create_schema(connection: sqlite3.Connection) -> None:
             PRIMARY KEY (snapshot_id, oracle_id)
         );
         CREATE INDEX cards_name ON cards(snapshot_id, name COLLATE NOCASE, oracle_id);
-        CREATE UNIQUE INDEX cards_printing ON cards(snapshot_id, printing_id);
+        CREATE INDEX cards_printing ON cards(snapshot_id, printing_id);
+        CREATE TABLE printings (
+            snapshot_id TEXT NOT NULL,
+            printing_id TEXT NOT NULL,
+            oracle_id TEXT NOT NULL,
+            face_index INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            type_line TEXT NOT NULL,
+            oracle_text TEXT NOT NULL,
+            lang TEXT NOT NULL,
+            digital INTEGER NOT NULL,
+            released_at TEXT NOT NULL,
+            set_code TEXT NOT NULL,
+            collector_number TEXT NOT NULL,
+            price_usd TEXT,
+            scryfall_uri TEXT,
+            faces_json TEXT NOT NULL,
+            PRIMARY KEY (snapshot_id, printing_id, oracle_id),
+            FOREIGN KEY(snapshot_id, oracle_id) REFERENCES cards(snapshot_id, oracle_id)
+        );
+        CREATE INDEX printings_oracle ON printings(snapshot_id, oracle_id);
+        CREATE TABLE card_faces (
+            snapshot_id TEXT NOT NULL,
+            oracle_id TEXT NOT NULL,
+            face_index INTEGER NOT NULL,
+            face_oracle_id TEXT,
+            mana_value REAL,
+            name TEXT NOT NULL,
+            type_line TEXT NOT NULL,
+            oracle_text TEXT NOT NULL,
+            PRIMARY KEY(snapshot_id, oracle_id, face_index),
+            FOREIGN KEY(snapshot_id, oracle_id) REFERENCES cards(snapshot_id, oracle_id)
+        );
+        CREATE TABLE rulings (
+            snapshot_id TEXT NOT NULL,
+            oracle_id TEXT NOT NULL,
+            source TEXT NOT NULL,
+            published_at TEXT NOT NULL,
+            comment TEXT NOT NULL,
+            PRIMARY KEY(snapshot_id, oracle_id, source, published_at, comment),
+            FOREIGN KEY(snapshot_id, oracle_id) REFERENCES cards(snapshot_id, oracle_id)
+        );
         CREATE TABLE tags (
             snapshot_id TEXT NOT NULL REFERENCES snapshots(snapshot_id),
             kind TEXT NOT NULL CHECK(kind IN ('oracle', 'art')),
@@ -174,9 +226,14 @@ class CardCatalog:
         with self._connect() as db:
             row = dict(db.execute('SELECT * FROM snapshots WHERE snapshot_id=?', (self.snapshot_id,)).fetchone())
             row['card_count'] = db.execute('SELECT count(*) FROM cards WHERE snapshot_id=?', (self.snapshot_id,)).fetchone()[0]
+            row['printing_count'] = db.execute('SELECT count(DISTINCT printing_id) FROM printings WHERE snapshot_id=?', (self.snapshot_id,)).fetchone()[0]
+            row['ruling_count'] = db.execute('SELECT count(*) FROM rulings WHERE snapshot_id=?', (self.snapshot_id,)).fetchone()[0]
             row['oracle_tag_count'] = db.execute("SELECT count(*) FROM tags WHERE snapshot_id=? AND kind='oracle'", (self.snapshot_id,)).fetchone()[0]
             row['art_tag_count'] = db.execute("SELECT count(*) FROM tags WHERE snapshot_id=? AND kind='art'", (self.snapshot_id,)).fetchone()[0]
             row['tag_note'] = 'Tags are advisory; a missing tag does not prove a card lacks a gameplay role.'
+            row['datasets'] = [dict(r) for r in db.execute(
+                'SELECT kind, url, updated_at, compressed_size, sha256, downloaded_at '
+                'FROM dataset_sources WHERE snapshot_id=? ORDER BY kind', (self.snapshot_id,))]
             return row
 
     def search_tags(self, query: str, *, kind: str = 'oracle', limit: int = 20, cursor: str | None = None) -> dict[str, Any]:
@@ -216,8 +273,9 @@ class CardCatalog:
                 raise CatalogError('color_identity must use unique WUBRG letters')
             color_identity = color_identity.upper()
         for field, value in (('mana_value_min', mana_value_min), ('mana_value_max', mana_value_max)):
-            if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value <= 1000):
-                raise CatalogError(f'{field} must be between 0 and 1000')
+            if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float))
+                                      or not math.isfinite(value) or value < 0):
+                raise CatalogError(f'{field} must be a nonnegative finite number')
         if mana_value_min is not None and mana_value_max is not None and mana_value_min > mana_value_max:
             raise CatalogError('mana value range is reversed')
         name = _term(name, 'name')
@@ -236,8 +294,12 @@ class CardCatalog:
         args: list[Any] = [self.snapshot_id]
         for column, value in (('name', name), ('oracle_text', oracle_text), ('type_line', type_line)):
             if value:
-                where.append(f"c.{column} LIKE ? ESCAPE '\\'")
-                args.append(_like(value))
+                where.append(f"(c.{column} LIKE ? ESCAPE '\\' OR EXISTS ("
+                             f"SELECT 1 FROM card_faces f WHERE f.snapshot_id=c.snapshot_id "
+                             f"AND f.oracle_id=c.oracle_id "
+                             f"AND (f.face_oracle_id IS NULL OR f.face_oracle_id=c.oracle_id) "
+                             f"AND f.{column} LIKE ? ESCAPE '\\'))")
+                args.extend([_like(value), _like(value)])
         if tag_id is not None:
             where.append('EXISTS (SELECT 1 FROM card_tags ct WHERE ct.snapshot_id=c.snapshot_id AND ct.oracle_id=c.oracle_id AND ct.kind=? AND ct.tag_id=?)')
             args.extend([tag_kind, tag_id])
@@ -272,9 +334,34 @@ class CardCatalog:
             raise CatalogError('provide exactly one of oracle_id or printing_id')
         field, value = ('oracle_id', oracle_id) if oracle_id is not None else ('printing_id', printing_id)
         with self._connect() as db:
-            row = db.execute(f'SELECT * FROM cards WHERE snapshot_id=? AND {field}=?',
-                             (self.snapshot_id, _required_term(value, field))).fetchone()
-            return self._card(db, row) if row else None
+            value = _required_term(value, field)
+            if printing_id is not None:
+                rows = db.execute('SELECT c.* FROM printings p JOIN cards c ON '
+                                  'c.snapshot_id=p.snapshot_id AND c.oracle_id=p.oracle_id '
+                                  'WHERE p.snapshot_id=? AND p.printing_id=? ORDER BY p.face_index',
+                                  (self.snapshot_id, value)).fetchall()
+                if not rows:
+                    rows = db.execute('SELECT * FROM cards WHERE snapshot_id=? AND printing_id=?',
+                                      (self.snapshot_id, value)).fetchall()
+            else:
+                rows = db.execute('SELECT * FROM cards WHERE snapshot_id=? AND oracle_id=?',
+                                  (self.snapshot_id, value)).fetchall()
+            if not rows:
+                return None
+            results = [self._card(db, row) for row in rows]
+            if printing_id is not None:
+                for result in results:
+                    printing = db.execute('SELECT * FROM printings WHERE snapshot_id=? AND printing_id=? AND oracle_id=?',
+                                          (self.snapshot_id, value, result['oracle_id'])).fetchone()
+                    if printing:
+                        result['requested_printing'] = dict(printing)
+                        result['requested_printing']['faces'] = json.loads(result['requested_printing'].pop('faces_json'))
+                    else:
+                        result['requested_printing'] = None
+                if len(results) > 1:
+                    return {'snapshot_id': self.snapshot_id, 'printing_id': value,
+                            'oracle_faces': results, 'tags_advisory': True}
+            return results[0]
 
     def _card(self, db: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:
         result = dict(row)
@@ -282,6 +369,9 @@ class CardCatalog:
             'SELECT card_source, tag_source, cards_updated_at, oracle_tags_updated_at, art_tags_updated_at '
             'FROM snapshots WHERE snapshot_id=?', (self.snapshot_id,)).fetchone()
         result['provenance'] = dict(source)
+        result['provenance']['datasets'] = [dict(r) for r in db.execute(
+            'SELECT kind, url, updated_at, compressed_size, sha256, downloaded_at '
+            'FROM dataset_sources WHERE snapshot_id=? ORDER BY kind', (self.snapshot_id,))]
         result['color_identity'] = list(result['color_identity'])
         result['commander_legal'] = None if result['commander_legal'] is None else bool(result['commander_legal'])
         result['tags'] = [dict(r) for r in db.execute(
@@ -292,4 +382,18 @@ class CardCatalog:
         result['price_usd'] = result['price_usd'] or None
         result['price_note'] = 'Missing price means unavailable, not zero.' if result['price_usd'] is None else None
         result['tags_advisory'] = True
+        result['printing_count'] = db.execute(
+            'SELECT count(*) FROM printings WHERE snapshot_id=? AND oracle_id=?',
+            (self.snapshot_id, result['oracle_id'])).fetchone()[0]
+        result['faces'] = [dict(r) for r in db.execute(
+            'SELECT face_index, face_oracle_id, mana_value, name, type_line, oracle_text FROM card_faces '
+            'WHERE snapshot_id=? AND oracle_id=? ORDER BY face_index LIMIT 10',
+            (self.snapshot_id, result['oracle_id']))]
+        result['ruling_count'] = db.execute(
+            'SELECT count(*) FROM rulings WHERE snapshot_id=? AND oracle_id=?',
+            (self.snapshot_id, result['oracle_id'])).fetchone()[0]
+        result['rulings'] = [dict(r) for r in db.execute(
+            'SELECT source, published_at, comment FROM rulings WHERE snapshot_id=? AND oracle_id=? '
+            'ORDER BY published_at DESC, source, comment LIMIT 20',
+            (self.snapshot_id, result['oracle_id']))]
         return result
