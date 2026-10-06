@@ -32,6 +32,14 @@ class Handler(BaseHTTPRequestHandler):
         self.server.paths.append(self.path)
         self.server.headers_seen.append(dict(self.headers))
         mode = self.server.mode
+        if mode == 'slow_header':
+            try:
+                for byte in b'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n':
+                    self.connection.sendall(bytes((byte,)))
+                    time.sleep(0.03)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            return
         if mode == 'redirect':
             self.send_response(302)
             self.send_header('Location', '/unexpected')
@@ -174,6 +182,26 @@ class HttpEdhrecTests(unittest.TestCase):
                          'https://json.edhrec.com/pages/commanders/test-commander/tokens.json',
                          'test-commander', 'tokens')
 
+    def test_total_deadline_cancels_header_trickle_and_dns_stall(self):
+        self.server.mode = 'slow_header'
+        source = self.source()
+        started = time.monotonic()
+        with mock.patch('commander_gym.edhrec_http.TOTAL_SECONDS', 0.25):
+            with self.assertRaisesRegex(CatalogError, 'timed out'):
+                source('test-commander', 'tokens')
+        self.assertLess(time.monotonic() - started, 1.0)
+        self.assertFalse(source._last_process.is_alive())
+
+        self.server.mode = 'normal'
+        source = HttpEdhrecSource(origin=self.origin, allow_loopback_for_tests=True,
+                                  _test_resolution_delay=2.0)
+        started = time.monotonic()
+        with mock.patch('commander_gym.edhrec_http.TOTAL_SECONDS', 0.25):
+            with self.assertRaisesRegex(CatalogError, 'timed out'):
+                source('test-commander', 'tokens')
+        self.assertLess(time.monotonic() - started, 1.0)
+        self.assertFalse(source._last_process.is_alive())
+
     def test_source_theme_must_match_requested_context(self):
         from commander_gym.edhrec_http import project_page
         raw = json.loads(page('tokens'))
@@ -182,6 +210,24 @@ class HttpEdhrecTests(unittest.TestCase):
             project_page(json.dumps(raw).encode(),
                          'https://json.edhrec.com/pages/commanders/test-commander/tokens.json',
                          'test-commander', 'tokens')
+
+    def test_projection_rejects_oversized_lists_before_expansion(self):
+        from commander_gym.edhrec_http import project_page
+        url = 'https://json.edhrec.com/pages/commanders/test-commander/tokens.json'
+        for key, value, error in (
+            ('themes', [{}] * 1_000, 'theme list exceeds limit'),
+            ('average', [{}] * 1_000, 'average deck exceeds limit'),
+            ('groups', [{'cardviews': []}] * 1_000, 'card list count exceeds limit'),
+        ):
+            raw = json.loads(page('tokens'))
+            if key == 'themes':
+                raw['panels']['taglinks'] = value
+            elif key == 'average':
+                raw['container']['json_dict']['average_deck'] = value
+            else:
+                raw['container']['json_dict']['cardlists'] = value
+            with self.subTest(key=key), self.assertRaisesRegex(CatalogError, error):
+                project_page(json.dumps(raw).encode(), url, 'test-commander', 'tokens')
 
 
 if __name__ == '__main__':

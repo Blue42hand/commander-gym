@@ -44,7 +44,8 @@ user-requested context and revise it through review if necessary.
 The HTTP reader is GET-only, with a fixed EDHREC origin, meaningful User-Agent,
 JSON Accept header, no credentials, proxies, redirects, retries, pagination,
 or continuation requests. It enforces a response byte cap, connect/read
-timeout, elapsed-time check, bounded rows, one in-flight request, and at least
+timeout, a parent-enforced whole-request deadline using a disposable and
+reaped child process, bounded rows and lists, one in-flight request, and at least
 two seconds between starts. A 403 or 429 stops that reader immediately. Raw
 payloads and projected records are held only in process memory; there is no
 disk cache, database ingestion, background fetch, bulk access, or raw payload
@@ -81,5 +82,6 @@ operate on user-supplied context data without contacting EDHREC.
 
 Tests use synthetic fixture pages and a local loopback HTTP server only. They
 exercise success, source projection, exact identity, average-deck quantities,
-byte and time limits, host and redirect restrictions, 403/429 stop, malformed
+byte, list, and whole-request time limits (including slow headers and a
+simulated resolver stall), host and redirect restrictions, 403/429 stop, malformed
 data, and the opt-in switch. No EDHREC endpoint is contacted by the tests.
