@@ -151,8 +151,8 @@ class JsonlSeatProvenanceWriter:
                 f"provenance directory does not exist: {parent}"
             )
         try:
-            with path.open("a", encoding="utf-8"):
-                pass
+            descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+            os.close(descriptor)
         except OSError as exc:
             raise OpenAIGameServerSidecarConfigurationError(
                 f"provenance path is not writable: {path}"
@@ -168,9 +168,11 @@ class JsonlSeatProvenanceWriter:
         }
         line = json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n"
         with self._lock:
-            with self.path.open("a", encoding="utf-8") as handle:
+            descriptor = os.open(self.path, os.O_WRONLY | os.O_APPEND)
+            with os.fdopen(descriptor, "a", encoding="utf-8") as handle:
                 handle.write(line)
                 handle.flush()
+                os.fsync(handle.fileno())
 
 
 SeatProvenanceSink = Callable[[str, SeatProvenance], None]

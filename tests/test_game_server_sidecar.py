@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+from tempfile import TemporaryDirectory
 import threading
 import unittest
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from commander_gym.game_server_seat import GameServerSeatAdapter
+from commander_gym.game_server_openai_sidecar import JsonlSeatProvenanceWriter
+from commander_gym.openai_responses_pilot import OpenAIResponsesPilot
+from commander_gym.openai_run_budget import OpenAIRunBudget
 from commander_gym.game_server_sidecar import (
     GameServerSidecarConfig,
     GameServerSidecarConfigurationError,
@@ -130,6 +135,58 @@ class GameServerSidecarTests(unittest.TestCase):
         )
         self.assertEqual(status, 503)
         self.assertEqual(response["error"], "pilot_failure")
+
+    def test_exhausted_provider_retry_has_durable_private_http_failure_receipt(self):
+        class Provider520(Exception):
+            status_code = 520
+            body = {"error": {"code": "server_error", "message": "private provider secret"}}
+
+            def __str__(self):
+                return "private provider secret"
+
+        class Responses:
+            calls = 0
+
+            def create(self, **_kwargs):
+                self.calls += 1
+                raise Provider520()
+
+        class Client:
+            responses = Responses()
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            writer = JsonlSeatProvenanceWriter(root / "policy.jsonl")
+            budget = OpenAIRunBudget(
+                root / "ledger.json", 5, max_requests=2, initialize_new_ledger=True
+            )
+            pilot = OpenAIResponsesPilot(
+                client=Client(), model="gpt-6-luna", budget=budget,
+                retry_transient_server_errors=True,
+            )
+            self.server.seats["ai"] = GameServerSeatAdapter(
+                pilot, "ai", provenance_sink=lambda event: writer.write("ai", event)
+            )
+            status, response = self.post("/v1/choose-action", {
+                "playerId": "ai", "state": {"viewingPlayerId": "ai"},
+                "legalActions": [{"actionType": "PassPriority",
+                                  "semanticId": "argentum-action-v1:pass",
+                                  "action": {"type": "PassPriority", "playerId": "ai"}}],
+                "pendingDecision": None, "recentGameLog": [],
+            })
+            self.assertEqual(status, 503)
+            self.assertEqual(response["error"], "pilot_failure")
+            self.assertNotIn("private provider secret", json.dumps(response))
+            rows = (root / "policy.jsonl").read_text().splitlines()
+            self.assertEqual(len(rows), 1)
+            receipt = json.loads(rows[0])
+            self.assertEqual(receipt["choice"]["channel"], "error")
+            self.assertIsNone(receipt["choice"]["metadata"]["modelIo"]["selectedAttempt"])
+            self.assertEqual(len(receipt["choice"]["metadata"]["modelIo"]["attempts"]), 2)
+            self.assertEqual(Client.responses.calls, 2)
+            self.assertEqual(budget.snapshot()["requests"], 2)
+            self.assertEqual(budget.snapshot()["unsettledRequests"], 2)
+            self.assertEqual((root / "policy.jsonl").stat().st_mode & 0o777, 0o600)
 
     def test_lazy_factory_binds_generated_player_id_once(self):
         self.server.shutdown()

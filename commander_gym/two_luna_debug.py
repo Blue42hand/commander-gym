@@ -43,7 +43,9 @@ FATAL_EXTERNAL_ACTION_RE = re.compile(
     r"(?P<reason>.+?) — refusing server-side strategic fallback"
 )
 FATAL_POLICY_CALLBACK_RE = re.compile(
-    r"AI failed to process server message: Commander Gym policy callback failed with HTTP 503"
+    r"AI failed to process server message: (?:Commander Gym policy callback failed "
+    r"with HTTP 503|[^\n]*(?:HttpTimeoutException|request timed out))",
+    re.IGNORECASE,
 )
 PAYMENT_REJECTION_RE = re.compile(
     r"External AI payment (?P<preflight>preflight )?rejected for seat \S+ "
@@ -230,8 +232,13 @@ def _finalize_provenance(
         for record in records:
             metadata = _metadata(record)
             if metadata.get("provider") == "openai":
-                retry = metadata.get("retryCount")
-                recorded += 1 + (retry if type(retry) is int and retry >= 0 else 0)
+                model_io = metadata.get("modelIo")
+                attempts = model_io.get("attempts") if isinstance(model_io, Mapping) else None
+                if isinstance(attempts, list) and attempts:
+                    recorded += len(attempts)
+                else:
+                    retry = metadata.get("retryCount")
+                    recorded += 1 + (retry if type(retry) is int and retry >= 0 else 0)
         expected = budget.snapshot()["requests"] - before_requests
         complete = recorded >= expected and not partial_tail
         if path is None or complete or time.monotonic() >= deadline:
@@ -453,6 +460,8 @@ def _summarize(
     mechanical_by_handler = Counter()
     routing_classification_errors = 0
     provider_calls = 0
+    provider_attempts = 0
+    provider_transport_errors = 0
     delegated_passes = 0
     delegated_non_mechanical = 0
     retries = 0
@@ -511,6 +520,19 @@ def _summarize(
             strategic_by_kind[kind] += 1
         if metadata.get("provider") == "openai":
             provider_calls += 1
+            model_io = metadata.get("modelIo")
+            attempts = model_io.get("attempts") if isinstance(model_io, Mapping) else None
+            if isinstance(attempts, list) and attempts:
+                provider_attempts += len(attempts)
+                provider_transport_errors += sum(
+                    isinstance(item, Mapping)
+                    and isinstance(item.get("response"), Mapping)
+                    and isinstance(item["response"].get("transportError"), str)
+                    for item in attempts
+                )
+            else:
+                retry = metadata.get("retryCount")
+                provider_attempts += 1 + (retry if type(retry) is int and retry >= 0 else 0)
             wall_time = metadata.get("providerWallTimeMs")
             if isinstance(wall_time, (int, float)) and not isinstance(wall_time, bool):
                 provider_wall_time_ms += float(wall_time)
@@ -579,6 +601,7 @@ def _summarize(
         and provenance_complete
         and provider_calls > 0
         and retries == 0
+        and provider_transport_errors == 0
         # A recovered live rejection is still an invalid native submission. A native
         # preflight rejection was caught before submission and is counted separately.
         and native_invalid_payment_attempts == 0
@@ -605,8 +628,9 @@ def _summarize(
         "strategicByKind": dict(strategic_by_kind),
         "mechanicalByHandler": dict(mechanical_by_handler),
         "providerCalls": provider_calls,
+        "providerTransportErrors": provider_transport_errors,
         "delegatedPasses": delegated_passes,
-        "providerRequests": provider_calls + retries,
+        "providerRequests": provider_attempts,
         "validationRetries": retries,
         "nativeInvalidPaymentAttempts": native_invalid_payment_attempts,
         "paymentPreflightRejections": payment_preflight_rejections,

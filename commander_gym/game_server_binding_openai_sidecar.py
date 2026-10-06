@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .binding_catalog import BindingCatalogError, load_binding_catalog
+from .bounded_provider_process import BoundedProcessClient
 from .deck_package import ArtifactRef
 from .delegated_autopass import DelegatedAutopassPilot
 from .game_server_bindings import GameServerBindingError, GameServerBindingRegistry
@@ -135,6 +136,12 @@ BUILTIN_FORGE_DECLARATIVE_CONTINUATION_COMPONENT_REF = ArtifactRef(
     artifact_id="openai-responses-forge-conditional-wait",
     version="6",
     digest="sha256:425ea6c84b91cd8a1ffae495c79214acaf2d7518f6a0f9db714c25ee634391e0",
+)
+BUILTIN_FORGE_BOUNDED_RECOVERY_COMPONENT_REF = ArtifactRef(
+    kind="provider",
+    artifact_id="openai-responses-forge-conditional-wait",
+    version="7",
+    digest="sha256:c31e254cae2e22aa347022706296d6996dd09d78b232be157b2b832296dc342f",
 )
 
 
@@ -279,6 +286,7 @@ class OpenAIBindingPilotComponentResolver:
     client: Any
     budget: OpenAIRunBudget | None = None
     cache_friendly_history: bool = False
+    bounded_recovery_client: Any | None = None
 
     def resolve(self, spec: PilotSubsystemSpec):
         key = spec.component_key()
@@ -454,6 +462,34 @@ class OpenAIBindingPilotComponentResolver:
                     allow_declarative_continuation=True,
                 )
             )
+        if (
+            spec.role == "frontier_escalation"
+            and key == _component_key(BUILTIN_FORGE_BOUNDED_RECOVERY_COMPONENT_REF)
+        ):
+            if self.budget is None:
+                raise PilotContractError("bounded provider recovery requires a durable budget")
+            return ArtificialPlayerSubsystem(
+                DelegatedAutopassPilot(
+                    OpenAIResponsesPilot(
+                        client=self.bounded_recovery_client or self.client,
+                        model=self.config.model,
+                        max_attempts=self.config.max_attempts,
+                        budget=self.budget,
+                        retry_transient_server_errors=True,
+                        cache_friendly_history=self.cache_friendly_history,
+                        allow_priority_delegation=True,
+                        allow_named_deferrals=True,
+                        require_nonempty_named_deferrals=True,
+                        compact_model_observation=True,
+                        guarded_then_cast_templates=True,
+                        allow_declarative_continuation=True,
+                    ),
+                    name="forge-conditional-wait", version="6",
+                    allow_named_deferrals=True,
+                    guarded_then_cast_templates=True,
+                    allow_declarative_continuation=True,
+                )
+            )
         raise PilotContractError(
             "missing exact Binding Pilot component for "
             f"role={spec.role} artifact={spec.ref.artifact_id!r} "
@@ -507,6 +543,10 @@ def build_binding_openai_game_server_sidecar(
             client=provider_client,
             budget=config.budget,
             cache_friendly_history=config.cache_friendly_history,
+            bounded_recovery_client=(
+                BoundedProcessClient(config.sidecar.api_key)
+                if client is None and config.budget is not None else None
+            ),
         )
 
     if provenance_sink is None and config.sidecar.provenance_path is not None:

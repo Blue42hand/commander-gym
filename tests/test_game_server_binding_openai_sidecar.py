@@ -5,9 +5,11 @@ import hashlib
 import socket
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from commander_gym.deck_package import ArtifactRef
+from commander_gym.bounded_provider_process import BoundedProcessClient
 from commander_gym.game_server_binding_openai_sidecar import (
     BUILTIN_ALL_UNAFFORDABLE_PASS_COMPONENT_REF,
     BUILTIN_ALL_UNAFFORDABLE_CYCLE_PASS_COMPONENT_REF,
@@ -17,6 +19,7 @@ from commander_gym.game_server_binding_openai_sidecar import (
     BUILTIN_FORGE_CONDITIONAL_WAIT_COMPACT_COMPONENT_REF,
     BUILTIN_FORGE_GUARDED_THEN_CAST_COMPONENT_REF,
     BUILTIN_FORGE_DECLARATIVE_CONTINUATION_COMPONENT_REF,
+    BUILTIN_FORGE_BOUNDED_RECOVERY_COMPONENT_REF,
     BUILTIN_FORCED_PARAMETERLESS_COMPONENT_REF,
     BUILTIN_NATIVE_NO_CHOICE_COMPONENT_REF,
     BUILTIN_NATIVE_UNAFFORDABLE_PASS_COMPONENT_REF,
@@ -33,7 +36,7 @@ from commander_gym.game_server_openai_sidecar import (
 )
 from commander_gym.game_server_sidecar import UnknownProfileError
 from commander_gym.identity import Binding, Deck, Pilot
-from commander_gym.pilot_composition import PilotSubsystemSpec
+from commander_gym.pilot_composition import PilotContractError, PilotSubsystemSpec
 from commander_gym.delegated_autopass import DelegatedAutopassPilot
 from commander_gym.pilot_routing import AllUnaffordablePassHandler
 from commander_gym.openai_run_budget import OpenAIRunBudget
@@ -285,7 +288,57 @@ class BindingOpenAIGameServerSidecarTests(unittest.TestCase):
         ))
         self.assertTrue(continuation.player.allow_declarative_continuation)
         self.assertTrue(continuation.player.strategic_pilot.allow_declarative_continuation)
+        self.assertFalse(continuation.player.strategic_pilot.retry_transient_server_errors)
         self.assertFalse(guarded.player.allow_declarative_continuation)
+        recovery_spec = PilotSubsystemSpec(
+            role="frontier_escalation", ordinal=0,
+            ref=BUILTIN_FORGE_BOUNDED_RECOVERY_COMPONENT_REF,
+        )
+        with self.assertRaisesRegex(PilotContractError, "durable budget"):
+            resolver.resolve(recovery_spec)
+        with tempfile.TemporaryDirectory() as directory:
+            budget = OpenAIRunBudget(
+                Path(directory) / "budget.json", 5, initialize_new_ledger=True,
+            )
+            recovery = OpenAIBindingPilotComponentResolver(
+                config=config, client=FakeClient(), budget=budget,
+            ).resolve(recovery_spec)
+            self.assertTrue(recovery.player.strategic_pilot.retry_transient_server_errors)
+            self.assertTrue(recovery.player.strategic_pilot.allow_declarative_continuation)
+        self.assertNotEqual(
+            BUILTIN_FORGE_BOUNDED_RECOVERY_COMPONENT_REF,
+            BUILTIN_FORGE_DECLARATIVE_CONTINUATION_COMPONENT_REF,
+        )
+
+    def test_default_bounded_recovery_component_uses_cancellable_process_client(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            pilot = Pilot(
+                pilot_id="synthetic-bounded-recovery", revision="r1",
+                deterministic_policy=BUILTIN_NATIVE_NO_CHOICE_COMPONENT_REF,
+                escalation_provider=BUILTIN_FORGE_BOUNDED_RECOVERY_COMPONENT_REF,
+            )
+            catalog = synthetic_catalog(root, pilot=pilot)
+            budget = OpenAIRunBudget(root / "budget.json", 5,
+                                     initialize_new_ledger=True)
+            config = BindingOpenAIGameServerConfig(
+                sidecar=OpenAIGameServerSidecarConfig(
+                    token="sidecar-secret", api_key="sk-test-offline", port=free_port(),
+                ), catalog_path=catalog, instance_root=root, budget=budget,
+            )
+            with patch("commander_gym.game_server_binding_openai_sidecar._default_openai_client",
+                       return_value=FakeClient()):
+                server = build_binding_openai_game_server_sidecar(config)
+            try:
+                seat = server.resolve_seat("ai-one", "seat-a")
+                frontier = next(item for item in seat._pilot.delegate.subsystems
+                                if item.spec.role == "frontier_escalation")
+                self.assertIsInstance(
+                    frontier.implementation.player.strategic_pilot.client,
+                    BoundedProcessClient,
+                )
+            finally:
+                server.server_close()
 
     def test_versioned_native_no_choice_component_avoids_model_for_empty_combat(self):
         with tempfile.TemporaryDirectory() as directory:

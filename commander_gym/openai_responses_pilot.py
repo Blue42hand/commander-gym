@@ -23,6 +23,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 import json
+import re
 from time import perf_counter
 from typing import Any, Mapping
 
@@ -33,6 +34,10 @@ from .cache_friendly_input import cache_friendly_observation_input
 from .delegated_autopass import _NATIVE_PHASES, _NATIVE_STEPS
 
 MODEL_IO_SCHEMA_VERSION = 1
+_RECOVERY_CALLBACK_SECONDS = 110.0  # Argentum's policy HTTP deadline is 120 s.
+_RECOVERY_REQUEST_SECONDS = 90.0
+_RECOVERY_RETURN_MARGIN_SECONDS = 5.0
+_RECOVERY_MIN_RETRY_SECONDS = 10.0
 
 class OpenAIResponsesPilotError(RuntimeError):
     """Raised when the provider cannot yield one valid native Argentum choice.
@@ -240,17 +245,24 @@ def _provider_failure_summary(exc: Exception) -> str:
     status_code = getattr(exc, "status_code", None)
     if type(status_code) is int:
         parts.append(f"status={status_code}")
+    # Preserve only a short machine-readable code. Free-form provider error
+    # messages can echo request data or credentials into the HTTP failure.
     body = getattr(exc, "body", None)
     if isinstance(body, Mapping):
         error = body.get("error", body)
         if isinstance(error, Mapping):
             code = error.get("code")
-            if isinstance(code, str) and code:
+            if isinstance(code, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", code):
                 parts.append(f"code={code}")
-            message = error.get("message")
-            if isinstance(message, str) and message:
-                parts.append(f"message={message[:500]}")
     return ", ".join(parts)
+
+
+def _retryable_provider_status(exc: Exception) -> bool:
+    """Recognize a bounded server failure without trusting exception text."""
+
+    return type(getattr(exc, "status_code", None)) is int and exc.status_code in {
+        500, 502, 503, 504, 520,
+    }
 
 
 def _failed_model_io(attempts: list[dict[str, Any]]) -> dict[str, Any]:
@@ -905,6 +917,7 @@ class OpenAIResponsesPilot:
     strategy: str | None = None
     max_attempts: int = 2
     budget: OpenAIRunBudget | None = None
+    retry_transient_server_errors: bool = False
     allow_priority_delegation: bool = False
     allow_named_deferrals: bool = False
     require_nonempty_named_deferrals: bool = False
@@ -928,6 +941,8 @@ class OpenAIResponsesPilot:
             raise OpenAIResponsesPilotError("compact_model_observation must be boolean")
         if type(self.cache_friendly_history) is not bool:
             raise OpenAIResponsesPilotError("cache_friendly_history must be boolean")
+        if type(self.retry_transient_server_errors) is not bool:
+            raise OpenAIResponsesPilotError("retry_transient_server_errors must be boolean")
         if self.strategy is not None:
             _require_string(self.strategy, "OpenAI pilot strategy")
         if type(self.max_attempts) is not int or self.max_attempts < 1:
@@ -1126,6 +1141,11 @@ class OpenAIResponsesPilot:
         validation_error: OpenAIResponsesPilotError | None = None
         attempts: list[dict[str, Any]] = []
         provider_wall_time_ms = 0.0
+        validation_retries = 0
+        recovery_deadline = (
+            perf_counter() + _RECOVERY_CALLBACK_SECONDS
+            if self.retry_transient_server_errors and self.budget is not None else None
+        )
         for attempt in range(self.max_attempts):
             if validation_error is not None:
                 correction = (
@@ -1135,6 +1155,19 @@ class OpenAIResponsesPilot:
                 request["input"] = (
                     [*base_input, {"role": "user", "content": correction}]
                     if self.cache_friendly_history else base_input + "\n" + correction
+                )
+            if recovery_deadline is not None:
+                remaining = recovery_deadline - perf_counter()
+                if remaining < _RECOVERY_MIN_RETRY_SECONDS + _RECOVERY_RETURN_MARGIN_SECONDS:
+                    raise OpenAIResponsesPilotError(
+                        "bounded provider recovery callback deadline exhausted",
+                        model_io=_failed_model_io(attempts) if attempts else None,
+                    )
+                # SDK timeout is a request option, not part of the model input.
+                # Keep each dispatch inside the JVM's 120-second HTTP callback.
+                request["timeout"] = min(
+                    _RECOVERY_REQUEST_SECONDS,
+                    remaining - _RECOVERY_RETURN_MARGIN_SECONDS,
                 )
             request_snapshot = deepcopy(request)
             request_started = perf_counter()
@@ -1167,8 +1200,9 @@ class OpenAIResponsesPilot:
                     str(exc),
                     model_io=_failed_model_io(attempts) if attempts else None,
                 ) from exc
-            except Exception as exc:  # Provider SDK owns transport-level retries.
+            except Exception as exc:
                 elapsed_ms = (perf_counter() - request_started) * 1000
+                provider_wall_time_ms += elapsed_ms
                 failure_summary = _provider_failure_summary(exc)
                 attempts.append(
                     {
@@ -1178,6 +1212,18 @@ class OpenAIResponsesPilot:
                                      "providerWallTimeMs": round(elapsed_ms, 3)},
                     }
                 )
+                # The bounded SDK has transport retries disabled. Give a transient
+                # server response one more independently reserved attempt, within
+                # the existing total max_attempts ceiling. Budget rejection and
+                # non-server errors remain fail-closed; ambiguous attempts retain
+                # their reservation and their model-I/O receipt.
+                if (self.retry_transient_server_errors and self.budget is not None
+                    and _retryable_provider_status(exc)
+                    and attempt + 1 < self.max_attempts
+                    and recovery_deadline is not None
+                    and recovery_deadline - perf_counter()
+                        >= _RECOVERY_MIN_RETRY_SECONDS + _RECOVERY_RETURN_MARGIN_SECONDS):
+                    continue
                 raise OpenAIResponsesPilotError(
                     f"OpenAI Responses request failed ({failure_summary})",
                     model_io=_failed_model_io(attempts),
@@ -1191,7 +1237,7 @@ class OpenAIResponsesPilot:
                 choice = self._choice_from_response(
                     response,
                     observation,
-                    retry_count=attempt,
+                    retry_count=validation_retries,
                 )
             except OpenAIResponsesPilotError as exc:
                 response_snapshot["validationError"] = str(exc)
@@ -1203,6 +1249,7 @@ class OpenAIResponsesPilot:
                     }
                 )
                 validation_error = exc
+                validation_retries += 1
                 continue
 
             attempts.append(

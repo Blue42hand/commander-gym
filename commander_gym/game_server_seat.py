@@ -23,6 +23,7 @@ from .pilot import (
     PilotContractError,
     choose_for_observation,
 )
+from .openai_responses_pilot import OpenAIResponsesPilotError
 
 
 class GameServerSeatError(PilotContractError):
@@ -136,7 +137,7 @@ class GameServerSeatAdapter:
             if not isinstance(pending, Mapping) or pending.get("kind") != "SelectManaSourcesDecision":
                 raise GameServerSeatError("payment correction requires the current native mana decision")
             observation["nativePaymentError"] = native_payment_error
-        choice = choose_for_observation(self._pilot, observation)
+        choice = self._choose_with_failure_receipt("chooseAction", observation)
 
         if isinstance(choice, ArgentumActionChoice):
             try:
@@ -198,7 +199,7 @@ class GameServerSeatAdapter:
         observation = self._observation(
             {"mulligan": deepcopy(dict(mulligan))}, actions, None, ()
         )
-        choice = choose_for_observation(self._pilot, observation)
+        choice = self._choose_with_failure_receipt("decideMulligan", observation)
         if not isinstance(choice, ArgentumActionChoice) or choice.params:
             raise GameServerSeatError("mulligan callback requires an unparameterized keep/take choice")
         keep = choice.action_id == 0
@@ -226,7 +227,7 @@ class GameServerSeatAdapter:
             "cards": deepcopy(bottom.get("cards", {})),
         }
         observation = self._observation({}, (), pending, ())
-        choice = choose_for_observation(self._pilot, observation)
+        choice = self._choose_with_failure_receipt("chooseBottomCards", observation)
         if not isinstance(choice, ArgentumDecisionChoice):
             raise GameServerSeatError("bottom-cards callback requires a structured response")
         selected = choice.response.get("selectedCards")
@@ -328,3 +329,29 @@ class GameServerSeatAdapter:
                     choice=deepcopy(dict(choice)),
                 )
             )
+
+    def _choose_with_failure_receipt(
+        self, callback: str, observation: Mapping[str, Any]
+    ) -> ArgentumActionChoice | ArgentumDecisionChoice:
+        try:
+            return choose_for_observation(self._pilot, observation)
+        except OpenAIResponsesPilotError as exc:
+            model_io = exc.model_io
+            attempts = model_io.get("attempts") if isinstance(model_io, Mapping) else None
+            if isinstance(attempts, list) and attempts:
+                validation_retries = sum(
+                    isinstance(attempt, Mapping)
+                    and isinstance(attempt.get("response"), Mapping)
+                    and "validationError" in attempt["response"]
+                    for attempt in attempts
+                )
+                self._record(callback, observation, {
+                    "channel": "error",
+                    "errorType": "OpenAIResponsesPilotError",
+                    "metadata": {
+                        "provider": "openai",
+                        "retryCount": validation_retries,
+                        "modelIo": model_io,
+                    },
+                })
+            raise
