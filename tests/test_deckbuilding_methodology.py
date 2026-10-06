@@ -73,11 +73,11 @@ class DeckbuildingMethodologyTests(unittest.TestCase):
                 self.assertTrue(tool.annotations.read_only_hint)
                 self.assertFalse(tool.annotations.destructive_hint)
                 self.assertEqual(set(tool.input_schema["properties"]), {"document"})
-                result = await client.call_tool("get_deckbuilding_methodology",
-                                                {"document": "SKILL.md"})
-                self.assertFalse(result.is_error)
-                self.assertEqual(result.structured_content["content"],
-                                 get_methodology()["content"])
+                for document in DOCUMENTS:
+                    result = await client.call_tool("get_deckbuilding_methodology",
+                                                    {"document": document})
+                    self.assertFalse(result.is_error)
+                    self.assertEqual(result.structured_content, get_methodology(document))
                 rejected = await client.call_tool("get_deckbuilding_methodology",
                                                   {"document": "../private"})
                 self.assertTrue(rejected.is_error)
