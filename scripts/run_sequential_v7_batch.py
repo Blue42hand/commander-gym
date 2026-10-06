@@ -282,7 +282,7 @@ def _verify_game(
 def launch_one_game(args: argparse.Namespace, index: int, log: Path, output_dir: Path,
                     expected_requests: int, expected_unsettled: int,
                     cumulative_cap: float) -> int:
-    gym_root = Path(__file__).resolve().parent.parent
+    gym_root = getattr(args, "gym_dir", Path(__file__).resolve().parent.parent)
     command = [
         str(args.python), "-m", "scripts.run_two_luna_binding_game",
         "--engine-dir", str(args.engine_dir),
@@ -308,6 +308,10 @@ def launch_one_game(args: argparse.Namespace, index: int, log: Path, output_dir:
     environment = dict(os.environ)
     # An inherited experiment flag must not silently change the canonical run.
     environment["COMMANDER_GYM_CACHE_FRIENDLY_HISTORY"] = "false"
+    if hasattr(args, "gym_dir"):
+        # The continuation controller lives in a different checkout. Resolve the
+        # game module and imports only from the original qualified Gym checkout.
+        environment["PYTHONPATH"] = str(gym_root)
     stop_requested = False
     def interrupted(_signum: int, _frame: Any) -> None:
         nonlocal stop_requested
@@ -348,7 +352,7 @@ def launch_one_game(args: argparse.Namespace, index: int, log: Path, output_dir:
 
 
 def _identity(args: argparse.Namespace) -> dict[str, Any]:
-    gym_root = Path(__file__).resolve().parent.parent
+    gym_root = getattr(args, "gym_dir", Path(__file__).resolve().parent.parent)
     if _head(gym_root) != args.expected_gym_head or _head(args.engine_dir) != args.expected_engine_head:
         raise BatchError("Gym or engine source head differs from the reviewed pin")
     if not _tracked_clean(gym_root) or not _tracked_clean(args.engine_dir):
