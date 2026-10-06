@@ -17,6 +17,7 @@ COMMANDER = 'oracle-commander'
 
 def body(theme, cards):
     return json.dumps({'commander_slug': 'test-commander', 'theme_slug': theme,
+                       'commander_name': 'Test Commander',
                        'source_url': 'https://edhrec.com/commanders/test-commander' +
                                      ('/' + theme if theme else ''),
                        'retrieved_at': '2026-10-06T02:00:00Z', 'cards': cards}).encode()
@@ -41,12 +42,15 @@ class EdhrecComparisonTests(unittest.TestCase):
                               ('oracle-two', 'Card Two'), ('oracle-three', 'Card Three')):
                 db.execute('INSERT INTO cards VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
                            (SNAPSHOT, oid, 'print-' + oid, name, 'Creature', '', 1,
-                            '', 1, None, None, None, None))
+                           '', 1, None, None, None, None))
+            db.execute('INSERT INTO card_faces VALUES (?,?,?,?,?,?,?,?)',
+                       (SNAPSHOT, 'oracle-one', 0, None, 1, 'Card One Face',
+                        'Creature', ''))
         (self.root / 'current.json').write_text(json.dumps({'snapshot_id': SNAPSHOT}))
         self.payloads = {
             'tokens': body('tokens', [row('Card One', 40, 100, oracle_id='oracle-one',
                                          lift_ratio=1.25, synergy_percent=12.5,
-                                         average_quantity=1),
+                                         average_quantity=2.5),
                                       row('Card Two', 0, 50), row('Unknown', 4, 10)]),
             'artifacts': body('artifacts', [row('Card One', 10, 50),
                                              row('Card Two', None, 40),
@@ -66,7 +70,8 @@ class EdhrecComparisonTests(unittest.TestCase):
 
     def test_two_themes_preserve_denominators_null_zero_and_units(self):
         result = compare_contexts(self.reader(), 'test-commander', 'tokens',
-                                  'artifacts', self.resolve)
+                                  'artifacts', self.resolve,
+                                  commander_oracle_id=COMMANDER)
         self.assertEqual(result['unresolved_count'], 1)
         self.assertEqual(result['coverage'], {'both_observed': 2, 'only_a_observed': 0,
                                               'only_b_observed': 1, 'comparable_rates': 1})
@@ -76,7 +81,7 @@ class EdhrecComparisonTests(unittest.TestCase):
         self.assertEqual(one['difference_percentage_points'], 20)
         self.assertEqual(one['contexts'][0]['lift_ratio'], 1.25)
         self.assertEqual(one['contexts'][0]['synergy_percent'], 12.5)
-        self.assertEqual(one['contexts'][0]['average_quantity'], 1)
+        self.assertEqual(one['contexts'][0]['average_quantity'], 2.5)
         two = next(card for card in result['cards'] if card['name'] == 'Card Two')
         self.assertEqual(two['contexts'][0]['inclusion_percent'], 0)
         self.assertIsNone(two['contexts'][1]['inclusion_percent'])
@@ -87,7 +92,7 @@ class EdhrecComparisonTests(unittest.TestCase):
 
     def test_theme_vs_overall_is_not_complement_and_is_bounded(self):
         result = compare_contexts(self.reader(), 'test-commander', 'tokens', None,
-                                  self.resolve, limit=1)
+                                  self.resolve, commander_oracle_id=COMMANDER, limit=1)
         self.assertEqual(result['cards'][0]['difference_percentage_points'], 10)
         self.assertTrue(result['truncated'])
         self.assertIsNone(result['contexts'][1]['theme_slug'])
@@ -97,6 +102,7 @@ class EdhrecComparisonTests(unittest.TestCase):
         self.assertEqual(catalog.resolve_exact_name('Card One'), 'oracle-one')
         self.assertIsNone(catalog.resolve_exact_name('card one'))
         self.assertIsNone(catalog.resolve_exact_name('Card One', 'oracle-wrong'))
+        self.assertEqual(catalog.resolve_exact_name('Card One Face'), 'oracle-one')
         with sqlite3.connect(self.database) as db:
             db.execute('UPDATE cards SET name=? WHERE oracle_id=?', ('Card One', 'oracle-two'))
         self.assertIsNone(catalog.resolve_exact_name('Card One'))
@@ -104,7 +110,9 @@ class EdhrecComparisonTests(unittest.TestCase):
     def test_parser_rejects_mismatch_unsafe_source_and_bad_counts(self):
         for payload in (body('tokens', [row('Card One', 11, 10)]),
                         body('tokens', [row('Card One', True, 10)]),
-                        body('tokens', [row('Card One', 1, 10, synergy_percent=float('inf'))])):
+                        body('tokens', [row('Card One', 1, 10, synergy_percent=float('inf'))]),
+                        body('tokens', [row('Card One', 10**307, 10**307)]),
+                        body('tokens', [row('Card One', 1, 10, lift_ratio=10**400)])):
             with self.assertRaises(CatalogError):
                 parse_context(payload, 'test-commander', 'tokens')
         with self.assertRaises(CatalogError):
@@ -115,6 +123,39 @@ class EdhrecComparisonTests(unittest.TestCase):
             parse_context(json.dumps(unsafe).encode(), 'test-commander', 'tokens')
         with self.assertRaises(CatalogError):
             parse_context(b'x' * 2_000_001, 'test-commander', 'tokens')
+        with self.assertRaisesRegex(CatalogError, 'invalid EDHREC context JSON'):
+            parse_context(b'[' * 10000 + b'0' + b']' * 10000,
+                          'test-commander', 'tokens')
+        surrogate = json.loads(self.payloads['tokens'])
+        surrogate['cards'][0]['name'] = '\ud800'
+        with self.assertRaisesRegex(CatalogError, 'invalid EDHREC card name'):
+            parse_context(json.dumps(surrogate).encode(), 'test-commander', 'tokens')
+
+    def test_missing_and_zero_denominators_do_not_yield_rates(self):
+        for denominator in (None, 0):
+            parsed = parse_context(body('tokens', [row('Card One', 0, denominator)]),
+                                   'test-commander', 'tokens')
+            self.assertEqual(parsed['cards'][0]['inclusion_count'], 0)
+            self.assertEqual(parsed['cards'][0]['potential_decks'], denominator)
+            reader = ContextReader(lambda _commander, theme: (
+                body('tokens', [row('Card One', 0, denominator)]) if theme == 'tokens'
+                else body('artifacts', [row('Card One', 1, 10)])),
+                clock=lambda: 0.0, sleep=lambda _: None)
+            compared = compare_contexts(reader, 'test-commander', 'tokens', 'artifacts',
+                                        self.resolve, commander_oracle_id=COMMANDER)
+            self.assertIsNone(compared['cards'][0]['contexts'][0]['inclusion_percent'])
+            self.assertIsNone(compared['cards'][0]['difference_percentage_points'])
+
+    def test_source_commander_must_match_exact_catalog_identity(self):
+        other = json.loads(self.payloads['artifacts'])
+        other['commander_name'] = 'Card One'
+        self.payloads['artifacts'] = json.dumps(other).encode()
+        with self.assertRaisesRegex(CatalogError, 'commander identity'):
+            compare_contexts(self.reader(), 'test-commander', 'tokens', 'artifacts',
+                             self.resolve, commander_oracle_id=COMMANDER)
+        with self.assertRaisesRegex(CatalogError, 'commander identity'):
+            compare_contexts(self.reader(), 'test-commander', 'tokens', None,
+                             self.resolve, commander_oracle_id='oracle-one')
 
     def test_reader_spaces_requests_and_stops_on_403_or_429(self):
         now = [10.0]
@@ -155,6 +196,13 @@ class EdhrecComparisonTests(unittest.TestCase):
                     'theme_b': 'artifacts', 'limit': 2})).structured_content
                 self.assertEqual(data['snapshot_id'], SNAPSHOT)
                 self.assertEqual(data['cards'][0]['difference_percentage_points'], 20)
+                mismatch = await client.call_tool('compare_commander_themes', {
+                    'snapshot_id': SNAPSHOT, 'commander_oracle_id': 'oracle-one',
+                    'commander_slug': 'test-commander', 'theme_a': 'tokens',
+                    'theme_b': 'artifacts'})
+                self.assertTrue(mismatch.is_error)
+                self.assertIn('commander identity',
+                              ' '.join(part.text for part in mismatch.content))
         asyncio.run(run())
 
 

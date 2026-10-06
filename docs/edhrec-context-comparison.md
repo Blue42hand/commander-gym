@@ -14,13 +14,20 @@ unchanged. The stdio entry point does not configure an EDHREC source.
 
 One request compares exactly two contexts for the same commander: theme A vs
 theme B, or one theme vs overall (`null`). Each context has its source URL and
-retrieval time. The bounded result shows each card's inclusion count,
+retrieval time and source-derived commander name. Both commander names must
+resolve exactly to the caller's pinned Scryfall Oracle ID; mismatches and
+unverifiable names fail closed. The bounded result shows each card's inclusion count,
 `potential_decks` denominator, inclusion percentage, optional average-deck
 quantity, lift ratio, synergy percentage, and A-minus-B difference in
 percentage points. Missing counts and denominators remain null; zero remains
 zero. A rate is unavailable if its denominator is zero. The response reports
 coverage and unresolved exact-name joins. It makes no complement inference:
 themes can overlap and overall contains themed decks.
+
+Count and metric magnitudes are bounded before arithmetic and serialization.
+Invalid UTF-8 strings, nonfinite values, and excessively nested JSON fail
+closed. Card names and face names join by exact case-sensitive identity only;
+ambiguous names remain unresolved.
 
 The injected source is serialized and spaced by at least two seconds. A 403
 or 429 stops further calls on that reader, without retry or alternate route.

@@ -119,13 +119,19 @@ def build_server(root: str | Path, edhrec_reader: ContextReader | None = None):
             identity is pinned to snapshot_id. No live source is bundled.
             """
             def query():
+                if not isinstance(commander_oracle_id, str) or not commander_oracle_id or len(commander_oracle_id) > 64:
+                    raise CatalogError('invalid commander Oracle ID')
+                try:
+                    commander_oracle_id.encode('utf-8')
+                except UnicodeError as exc:
+                    raise CatalogError('invalid commander Oracle ID') from exc
                 commander = access.get_card(snapshot_id, oracle_id=commander_oracle_id)
                 if commander is None:
                     raise CatalogError('commander Oracle ID unavailable in snapshot')
                 result = compare_contexts(
                     edhrec_reader, commander_slug, theme_a, theme_b,
                     lambda name, oid: access.resolve_exact_name(snapshot_id, name, oid),
-                    limit=limit)
+                    commander_oracle_id=commander_oracle_id, limit=limit)
                 result['snapshot_id'] = snapshot_id
                 result['commander_oracle_id'] = commander_oracle_id
                 return result

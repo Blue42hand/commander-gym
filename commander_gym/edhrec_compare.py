@@ -22,6 +22,8 @@ from .card_catalog import CatalogError
 MAX_BODY_BYTES = 2_000_000
 MAX_SOURCE_CARDS = 2_000
 MAX_RESULT_CARDS = 50
+MAX_COUNT = 1_000_000_000_000
+MAX_METRIC_ABS = 1_000_000_000
 _SLUG = re.compile(r'[a-z0-9]+(?:-[a-z0-9]+)*\Z')
 
 
@@ -34,17 +36,28 @@ def _slug(value: str, field: str) -> str:
 def _count(value: Any, field: str) -> int | None:
     if value is None:
         return None
-    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-        raise CatalogError(f'{field} must be a nonnegative integer or null')
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= MAX_COUNT:
+        raise CatalogError(f'{field} must be a bounded nonnegative integer or null')
     return value
 
 
 def _number(value: Any, field: str) -> float | None:
     if value is None:
         return None
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
-        raise CatalogError(f'{field} must be a finite number or null')
+    if (isinstance(value, bool) or not isinstance(value, (int, float)) or
+            not -MAX_METRIC_ABS <= value <= MAX_METRIC_ABS):
+        raise CatalogError(f'{field} must be a bounded finite number or null')
     return float(value)
+
+
+def _text(value: Any, field: str, max_length: int) -> str:
+    if not isinstance(value, str) or not value or len(value) > max_length:
+        raise CatalogError(f'invalid {field}')
+    try:
+        value.encode('utf-8')
+    except UnicodeError as exc:
+        raise CatalogError(f'invalid {field}') from exc
+    return value
 
 
 def parse_context(body: bytes, commander_slug: str, theme_slug: str | None) -> dict[str, Any]:
@@ -57,26 +70,27 @@ def parse_context(body: bytes, commander_slug: str, theme_slug: str | None) -> d
         raise CatalogError('EDHREC context exceeds byte limit')
     try:
         data = json.loads(body)
-    except (UnicodeError, ValueError) as exc:
+    except (UnicodeError, ValueError, RecursionError) as exc:
         raise CatalogError('invalid EDHREC context JSON') from exc
     if not isinstance(data, dict) or data.get('commander_slug') != commander_slug or data.get('theme_slug') != theme_slug:
         raise CatalogError('EDHREC context identity mismatch')
-    url = data.get('source_url')
-    if not isinstance(url, str) or len(url) > 500:
-        raise CatalogError('EDHREC source URL unavailable')
+    commander_name = _text(data.get('commander_name'), 'EDHREC commander name', 150)
+    url = _text(data.get('source_url'), 'EDHREC source URL', 500)
     try:
         parsed = urlsplit(url)
         valid_url = (parsed.scheme == 'https' and
                      parsed.hostname in ('edhrec.com', 'json.edhrec.com') and
                      not parsed.username and not parsed.password and not parsed.port and
-                     parsed.path.startswith('/'))
+                     parsed.path.startswith('/') and
+                     commander_slug in parsed.path.split('/'))
     except ValueError:
         valid_url = False
     if not valid_url:
         raise CatalogError('invalid EDHREC source URL')
     retrieved = data.get('retrieved_at')
     try:
-        if not isinstance(retrieved, str) or datetime.fromisoformat(retrieved.replace('Z', '+00:00')).tzinfo is None:
+        _text(retrieved, 'EDHREC retrieval time', 60)
+        if datetime.fromisoformat(retrieved.replace('Z', '+00:00')).tzinfo is None:
             raise ValueError
     except ValueError as exc:
         raise CatalogError('EDHREC retrieval time unavailable') from exc
@@ -87,12 +101,12 @@ def parse_context(body: bytes, commander_slug: str, theme_slug: str | None) -> d
     for row in rows:
         if not isinstance(row, dict):
             raise CatalogError('invalid EDHREC card row')
-        name = row.get('name')
-        if not isinstance(name, str) or not name.strip() or len(name) > 150:
+        name = _text(row.get('name'), 'EDHREC card name', 150)
+        if not name.strip():
             raise CatalogError('invalid EDHREC card name')
         oracle_id = row.get('oracle_id')
-        if oracle_id is not None and (not isinstance(oracle_id, str) or len(oracle_id) > 64):
-            raise CatalogError('invalid EDHREC Oracle ID')
+        if oracle_id is not None:
+            _text(oracle_id, 'EDHREC Oracle ID', 64)
         inclusion = _count(row.get('inclusion_count'), 'inclusion_count')
         potential = _count(row.get('potential_decks'), 'potential_decks')
         if inclusion is not None and potential is not None and inclusion > potential:
@@ -108,7 +122,8 @@ def parse_context(body: bytes, commander_slug: str, theme_slug: str | None) -> d
                       'average_quantity': quantity,
                       'lift_ratio': lift,
                       'synergy_percent': _number(row.get('synergy_percent'), 'synergy_percent')})
-    return {'commander_slug': commander_slug, 'theme_slug': theme_slug,
+    return {'commander_slug': commander_slug, 'commander_name': commander_name,
+            'theme_slug': theme_slug,
             'source_url': url, 'retrieved_at': retrieved, 'cards': cards}
 
 
@@ -155,6 +170,7 @@ class SourceHTTPError(Exception):
 def compare_contexts(reader: ContextReader, commander_slug: str,
                      theme_a: str | None, theme_b: str | None,
                      resolve: Callable[[str, str | None], str | None], *,
+                     commander_oracle_id: str,
                      limit: int = 20) -> dict[str, Any]:
     """Compare two observed populations; never infer theme complements."""
     _slug(commander_slug, 'commander_slug')
@@ -166,6 +182,9 @@ def compare_contexts(reader: ContextReader, commander_slug: str,
     if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= MAX_RESULT_CARDS:
         raise CatalogError('limit must be an integer from 1 to 50')
     contexts = [reader.read(commander_slug, theme) for theme in (theme_a, theme_b)]
+    if any(resolve(context['commander_name'], None) != commander_oracle_id
+           for context in contexts):
+        raise CatalogError('EDHREC commander identity does not match catalog Oracle ID')
     observed = []
     unresolved = []
     for context in contexts:
@@ -183,7 +202,9 @@ def compare_contexts(reader: ContextReader, commander_slug: str,
     for oracle_id in observed[0].keys() | observed[1].keys():
         sides = [items.get(oracle_id) for items in observed]
         rates = [None if row is None or row['inclusion_count'] is None or not row['potential_decks']
-                 else 100.0 * row['inclusion_count'] / row['potential_decks'] for row in sides]
+                 else 100 * row['inclusion_count'] / row['potential_decks'] for row in sides]
+        if any(rate is not None and not math.isfinite(rate) for rate in rates):
+            raise CatalogError('EDHREC inclusion rate is not finite')
         results.append({'oracle_id': oracle_id, 'name': next(row['name'] for row in sides if row),
                         'contexts': [{**row, 'inclusion_percent': rate} if row else None
                                      for row, rate in zip(sides, rates)],
