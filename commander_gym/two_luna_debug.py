@@ -42,6 +42,9 @@ FATAL_EXTERNAL_ACTION_RE = re.compile(
     r"External AI action failed for seat \S+ in game (?P<game>\S+): "
     r"(?P<reason>.+?) — refusing server-side strategic fallback"
 )
+FATAL_POLICY_CALLBACK_RE = re.compile(
+    r"AI failed to process server message: Commander Gym policy callback failed with HTTP 503"
+)
 PAYMENT_REJECTION_RE = re.compile(
     r"External AI payment (?P<preflight>preflight )?rejected for seat \S+ "
     r"in game (?P<game>\S+); same pilot is correcting"
@@ -397,12 +400,13 @@ class _ProgressGuard:
 
 @dataclass
 class _FatalActionWatch:
-    """Read new server-log lines and stop only for this game's unrecoverable action."""
+    """Read complete server-log lines for unrecoverable AI callback failures."""
 
     path: Path | None
     offset: int = 0
     partial: bytes = b""
     failures: list[tuple[str, str]] | None = None
+    policy_failure: bool = False
 
     def scan(self, game_ids: list[str]) -> str | None:
         if self.path is None or not self.path.exists():
@@ -415,9 +419,12 @@ class _FatalActionWatch:
             self.offset = stream.tell()
         *lines, self.partial = (self.partial + added).split(b"\n")
         for raw in lines:
-            match = FATAL_EXTERNAL_ACTION_RE.search(raw.decode("utf-8", errors="replace"))
+            line = raw.decode("utf-8", errors="replace")
+            match = FATAL_EXTERNAL_ACTION_RE.search(line)
             if match:
                 self.failures.append((match["game"], match["reason"]))
+            if FATAL_POLICY_CALLBACK_RE.search(line):
+                self.policy_failure = True
         return next((reason for game, reason in self.failures if game in game_ids), None)
 
 
@@ -741,6 +748,12 @@ def run(args: argparse.Namespace) -> int:
         fatal_action_failure = fatal_action_watch.scan(game_ids)
         if fatal_action_failure is not None:
             stop_reason = "external_ai_action_rejected"
+            break
+        if game_ids and fatal_action_watch.policy_failure:
+            # Argentum logs the failed callback and drops that state update; it
+            # does not resubmit the pending decision. Waiting for the general
+            # no-progress limit cannot recover this isolated game.
+            stop_reason = "policy_callback_failed"
             break
         # A native callback can advance inside one turn without changing the
         # tournament status. Provenance growth captures it; request reservations
