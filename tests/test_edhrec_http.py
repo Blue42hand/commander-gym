@@ -57,11 +57,17 @@ class Handler(BaseHTTPRequestHandler):
             body = json.dumps(untrusted).encode()
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
-        if mode != 'stream_oversize':
+        if mode not in ('stream_oversize', 'trickle'):
             self.send_header('Content-Length', str(len(body)))
         self.end_headers()
         try:
-            self.wfile.write(body)
+            if mode == 'trickle':
+                for _ in range(30):
+                    self.wfile.write(b'x')
+                    self.wfile.flush()
+                    time.sleep(0.03)
+            else:
+                self.wfile.write(body)
         except (BrokenPipeError, ConnectionResetError):
             pass
 
@@ -134,6 +140,12 @@ class HttpEdhrecTests(unittest.TestCase):
         with mock.patch('commander_gym.edhrec_http.TIMEOUT_SECONDS', 0.05):
             with self.assertRaisesRegex(CatalogError, 'unavailable'):
                 self.reader().read('test-commander', 'tokens')
+        self.server.mode = 'trickle'
+        started = time.monotonic()
+        with mock.patch('commander_gym.edhrec_http.TOTAL_SECONDS', 0.1):
+            with self.assertRaisesRegex(CatalogError, 'timed out'):
+                self.reader().read('test-commander', 'tokens')
+        self.assertLess(time.monotonic() - started, 0.6)
 
     def test_untrusted_commander_name_fails_exact_binding(self):
         self.server.mode = 'wrong_identity'

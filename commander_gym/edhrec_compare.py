@@ -190,6 +190,8 @@ class ContextReader:
                     self._stopped = True
                     raise CatalogError('EDHREC access stopped after restriction response') from exc
                 raise CatalogError('EDHREC context unavailable') from exc
+            except CatalogError:
+                raise
             except Exception as exc:
                 raise CatalogError('EDHREC context unavailable') from exc
             return parse_context(body, commander_slug, theme_slug,

@@ -75,10 +75,11 @@ class HttpEdhrecSource:
                     except ValueError as exc:
                         raise CatalogError('invalid EDHREC content length') from exc
                 chunks, total = [], 0
+                read_available = getattr(response, 'read1', response.read)
                 while True:
                     if self.clock() - started > TOTAL_SECONDS:
                         raise CatalogError('EDHREC request timed out')
-                    chunk = response.read(65_536)
+                    chunk = read_available(65_536)
                     if not chunk:
                         break
                     total += len(chunk)
