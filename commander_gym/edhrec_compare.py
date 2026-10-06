@@ -22,6 +22,8 @@ from .card_catalog import CatalogError
 MAX_BODY_BYTES = 2_000_000
 MAX_SOURCE_CARDS = 2_000
 MAX_RESULT_CARDS = 50
+MAX_THEMES = 50
+MAX_AVERAGE_DECK_CARDS = 100
 MAX_COUNT = 1_000_000_000_000
 MAX_METRIC_ABS = 1_000_000_000
 _SLUG = re.compile(r'[a-z0-9]+(?:-[a-z0-9]+)*\Z')
@@ -60,7 +62,8 @@ def _text(value: Any, field: str, max_length: int) -> str:
     return value
 
 
-def parse_context(body: bytes, commander_slug: str, theme_slug: str | None) -> dict[str, Any]:
+def parse_context(body: bytes, commander_slug: str, theme_slug: str | None, *,
+                  allow_loopback_for_tests: bool = False) -> dict[str, Any]:
     """Validate a narrow projection, without silently filling absent values.
 
     This is the internal adapter envelope, not a claim about EDHREC's live JSON
@@ -78,11 +81,15 @@ def parse_context(body: bytes, commander_slug: str, theme_slug: str | None) -> d
     url = _text(data.get('source_url'), 'EDHREC source URL', 500)
     try:
         parsed = urlsplit(url)
-        valid_url = (parsed.scheme == 'https' and
-                     parsed.hostname in ('edhrec.com', 'json.edhrec.com') and
-                     not parsed.username and not parsed.password and not parsed.port and
+        allowed_origin = ((parsed.scheme == 'https' and
+                           parsed.hostname in ('edhrec.com', 'json.edhrec.com') and
+                           not parsed.port) or
+                          (allow_loopback_for_tests and parsed.scheme == 'http' and
+                           parsed.hostname == '127.0.0.1' and parsed.port))
+        valid_url = (allowed_origin and not parsed.username and not parsed.password and
                      parsed.path.startswith('/') and
-                     commander_slug in parsed.path.split('/'))
+                     commander_slug in [segment.removesuffix('.json')
+                                        for segment in parsed.path.split('/')])
     except ValueError:
         valid_url = False
     if not valid_url:
@@ -122,9 +129,34 @@ def parse_context(body: bytes, commander_slug: str, theme_slug: str | None) -> d
                       'average_quantity': quantity,
                       'lift_ratio': lift,
                       'synergy_percent': _number(row.get('synergy_percent'), 'synergy_percent')})
+    themes = data.get('themes')
+    if themes is not None:
+        if not isinstance(themes, list) or len(themes) > MAX_THEMES:
+            raise CatalogError('EDHREC theme list exceeds limit')
+        themes = [{'name': _text(item.get('name'), 'EDHREC theme name', 100),
+                   'slug': _slug(item.get('slug'), 'EDHREC theme slug'),
+                   'deck_count': _count(item.get('deck_count'), 'deck_count')}
+                  for item in themes if isinstance(item, dict)]
+        if len(themes) != len(data['themes']):
+            raise CatalogError('invalid EDHREC theme row')
+    average_deck = data.get('average_deck')
+    if average_deck is not None:
+        if not isinstance(average_deck, list) or len(average_deck) > MAX_AVERAGE_DECK_CARDS:
+            raise CatalogError('EDHREC average deck exceeds limit')
+        deck = []
+        for item in average_deck:
+            if not isinstance(item, dict):
+                raise CatalogError('invalid EDHREC average deck row')
+            quantity = _number(item.get('quantity'), 'average deck quantity')
+            if quantity is None or quantity < 0:
+                raise CatalogError('average deck quantity must be nonnegative')
+            deck.append({'name': _text(item.get('name'), 'average deck card name', 150),
+                         'quantity': quantity})
+        average_deck = deck
     return {'commander_slug': commander_slug, 'commander_name': commander_name,
             'theme_slug': theme_slug,
-            'source_url': url, 'retrieved_at': retrieved, 'cards': cards}
+            'source_url': url, 'retrieved_at': retrieved, 'cards': cards,
+            'themes': themes, 'average_deck': average_deck}
 
 
 class ContextReader:
@@ -132,8 +164,10 @@ class ContextReader:
 
     def __init__(self, fetch: Callable[[str, str | None], bytes], *,
                  clock: Callable[[], float] = time.monotonic,
-                 sleep: Callable[[float], None] = time.sleep):
+                 sleep: Callable[[float], None] = time.sleep,
+                 allow_loopback_for_tests: bool = False):
         self.fetch, self.clock, self.sleep = fetch, clock, sleep
+        self.allow_loopback_for_tests = allow_loopback_for_tests
         self._lock = threading.Lock()
         self._next_at = 0.0
         self._stopped = False
@@ -158,7 +192,8 @@ class ContextReader:
                 raise CatalogError('EDHREC context unavailable') from exc
             except Exception as exc:
                 raise CatalogError('EDHREC context unavailable') from exc
-            return parse_context(body, commander_slug, theme_slug)
+            return parse_context(body, commander_slug, theme_slug,
+                                 allow_loopback_for_tests=self.allow_loopback_for_tests)
 
 
 class SourceHTTPError(Exception):
@@ -198,6 +233,17 @@ def compare_contexts(reader: ContextReader, commander_slug: str,
                 raise CatalogError('conflicting EDHREC card rows')
             indexed[oracle_id] = card
         observed.append(indexed)
+        if context['average_deck'] is not None:
+            resolved_deck = []
+            unresolved_deck = 0
+            for item in context['average_deck']:
+                oracle_id = resolve(item['name'], None)
+                if oracle_id is None:
+                    unresolved_deck += 1
+                else:
+                    resolved_deck.append({**item, 'oracle_id': oracle_id})
+            context['average_deck'] = resolved_deck
+            context['unresolved_average_deck_count'] = unresolved_deck
     results = []
     for oracle_id in observed[0].keys() | observed[1].keys():
         sides = [items.get(oracle_id) for items in observed]
@@ -223,7 +269,8 @@ def compare_contexts(reader: ContextReader, commander_slug: str,
             'contexts': [{key: value for key, value in context.items() if key != 'cards'} for context in contexts],
             'cards': results[:limit], 'total_resolved_cards': len(results),
             'coverage': coverage,
-            'unresolved_count': len(unresolved), 'unresolved_names': sorted(set(unresolved))[:20],
+            'unresolved_count': len(unresolved),
             'truncated': len(results) > limit,
             'interpretation': 'Observed contexts may overlap; overall includes themed decks. No complement is inferred.',
+            'source_data_untrusted': True,
             'rules_authority': 'Argentum'}

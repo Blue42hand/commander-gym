@@ -4,9 +4,11 @@ from pathlib import Path
 import sqlite3
 import tempfile
 import unittest
+from unittest import mock
+import sys
 
 from commander_gym.card_catalog import CardCatalog, CatalogError, create_schema
-from commander_gym.catalog_mcp import build_server
+from commander_gym.catalog_mcp import build_server, main
 from commander_gym.edhrec_compare import (ContextReader, SourceHTTPError,
                                           compare_contexts, parse_context)
 
@@ -204,6 +206,26 @@ class EdhrecComparisonTests(unittest.TestCase):
                 self.assertIn('commander identity',
                               ' '.join(part.text for part in mismatch.content))
         asyncio.run(run())
+
+    def test_cli_requires_both_opt_in_flags_without_network(self):
+        with mock.patch.object(sys, 'argv', ['catalog-mcp', '--catalog-root', str(self.root),
+                                              '--enable-edhrec']):
+            with self.assertRaises(SystemExit) as stopped:
+                main()
+            self.assertEqual(stopped.exception.code, 2)
+        built = []
+        class FakeServer:
+            def run(self, *, transport):
+                built.append(transport)
+        with (mock.patch.object(sys, 'argv', ['catalog-mcp', '--catalog-root', str(self.root),
+                                              '--enable-edhrec', '--edhrec-access-reviewed']),
+              mock.patch('commander_gym.catalog_mcp.build_server',
+                         side_effect=lambda root, reader: built.append(reader) or FakeServer()),
+              mock.patch('commander_gym.edhrec_http.HttpEdhrecSource') as source):
+            main()
+            source.assert_called_once_with()
+        self.assertIsInstance(built[0], ContextReader)
+        self.assertEqual(built[1], 'stdio')
 
 
 if __name__ == '__main__':

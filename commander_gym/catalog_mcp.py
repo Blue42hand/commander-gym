@@ -144,8 +144,18 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run the local read-only catalog MCP adapter over stdio")
     parser.add_argument("--catalog-root", type=Path, required=True,
                         help="private configured catalog root (never supplied by tool callers)")
+    parser.add_argument('--enable-edhrec', action='store_true',
+                        help='enable the proposed on-demand EDHREC reader after access review')
+    parser.add_argument('--edhrec-access-reviewed', action='store_true',
+                        help='operator assertion that EDHREC automated access was separately authorized')
     args = parser.parse_args()
-    build_server(args.catalog_root).run(transport="stdio")
+    if args.enable_edhrec != args.edhrec_access_reviewed:
+        parser.error('EDHREC requires both explicit enablement and independent access review')
+    reader = None
+    if args.enable_edhrec:
+        from .edhrec_http import HttpEdhrecSource
+        reader = ContextReader(HttpEdhrecSource())
+    build_server(args.catalog_root, reader).run(transport="stdio")
 
 
 if __name__ == "__main__":
