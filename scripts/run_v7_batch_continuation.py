@@ -202,11 +202,15 @@ def run_continuation(
             raise batch.BatchError("continuation stopped or has an ambiguous in-flight attempt")
         next_game = cursor["nextGame"]
         current, current_hash = _completed_receipts(args.continuation_dir, cursor, manifest)
+        if batch._sha(args.budget_ledger) != current_hash:
+            raise batch.BatchError("shared ledger changed outside completed continuation attempts")
         if _snapshot(args.budget_ledger) != current or batch._sha(args.budget_ledger) != current_hash:
             raise batch.BatchError("shared ledger changed outside completed continuation attempts")
         while next_game <= LAST_GAME:
             if _read_original() != original or _identity(args, original) != identity:
                 raise batch.BatchError("original evidence or reviewed source changed before dispatch")
+            if batch._sha(args.budget_ledger) != current_hash:
+                raise batch.BatchError("shared ledger changed before next attempt")
             before = _snapshot(args.budget_ledger)
             before_hash = batch._sha(args.budget_ledger)
             if before != current or before_hash != current_hash:

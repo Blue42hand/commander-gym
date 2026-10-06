@@ -191,6 +191,16 @@ class V7BatchContinuationTests(unittest.TestCase):
                 continuation.run_continuation(self.args, runner=self.runner(calls))
         self.assertEqual(calls, [])
 
+    def test_resumed_ledger_byte_drift_refuses_before_snapshot_rewrite(self):
+        calls = []
+        with patch.object(continuation, "_identity", return_value=self.identity):
+            continuation.run_continuation(self.args, runner=self.runner(calls))
+            self.ledger.write_bytes(self.ledger.read_bytes() + b" ")
+            with self.assertRaisesRegex(continuation.batch.BatchError,
+                                        "ledger changed outside"):
+                continuation.run_continuation(self.args, runner=self.runner(calls))
+        self.assertEqual(calls, [2, 3])
+
     def test_unqualified_attempt_stops_and_cannot_resume(self):
         calls = []
         with patch.object(continuation, "_identity", return_value=self.identity):
