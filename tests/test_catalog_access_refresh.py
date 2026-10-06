@@ -134,7 +134,8 @@ class CatalogAccessRefreshTests(unittest.TestCase):
             async with Client(build_server(self.root)) as client:
                 listed = await client.list_tools()
                 self.assertEqual({tool.name for tool in listed.tools},
-                                 {'catalog_status', 'search_tags', 'search_cards', 'get_card'})
+                                 {'catalog_status', 'search_tags', 'search_cards', 'get_card',
+                                  'get_deckbuilding_methodology'})
                 for tool in listed.tools:
                     self.assertTrue(tool.annotations.read_only_hint)
                     self.assertFalse(tool.annotations.destructive_hint)

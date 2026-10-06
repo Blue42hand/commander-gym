@@ -16,10 +16,19 @@ environment and start:
 python -m commander_gym.catalog_mcp --catalog-root /path/to/isolated/public-catalog
 ```
 
-Its only tools are `catalog_status`, `search_tags`, `search_cards`, and
-`get_card`. It does not expose a path argument, arbitrary SQL, shell commands,
+Its catalog tools are `catalog_status`, `search_tags`, `search_cards`, and
+`get_card`. The read-only `get_deckbuilding_methodology` tool serves one of four
+fixed documents from a pinned copy of the installed Commander Deckbuilding
+skill: `SKILL.md` and its three references. Each response carries the canonical
+skill URI, individual SHA-256 hashes, and one bundle version. Server instructions
+ask deckbuilding chats to read all four before building or revising a deck. This
+exposes methodology as MCP content; it does not install a native ChatGPT skill
+or verify that an ordinary chat retrieved the tool. Verify that behavior in an
+owner web chat after refreshing the connection.
+
+The adapter does not expose a path argument, arbitrary SQL, shell commands,
 deck files, game state, credentials, refresh, or card-implementation actions.
-`catalog_status` discovers the active snapshot ID. Every other tool requires an
+`catalog_status` discovers the active snapshot ID. Every other catalog tool requires an
 explicit ID, so a chat or coverage job can keep querying the same immutable
 snapshot after a refresh. Older snapshots must be retained while callers use
 their IDs and cursors. Responses are limited to 500,000 encoded bytes; card
