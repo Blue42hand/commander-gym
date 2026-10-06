@@ -2,8 +2,10 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from contextlib import redirect_stderr
 from io import StringIO
+import os
 import subprocess
 import sys
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 import venv
@@ -103,6 +105,31 @@ class ExistingGameBudgetTests(unittest.TestCase):
                 checked_existing_budget(path, 8, 8, 906, 0, 0, 0.01)
             with self.assertRaises(OpenAIRunBudgetError):
                 checked_existing_budget(path, 8, 8, 610, 0, 0)
+
+    def test_supervised_batch_keeps_services_in_launcher_process_group(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            argv = ["game", "--engine-dir", str(root), "--instance-root", str(root),
+                    "--catalog", str(root / "v7.json"), "--output-dir", str(root / "out"),
+                    "--profile-a", "a", "--profile-b", "b", "--dry-run",
+                    "--qualified-v7-comparison", "--supervised-batch-process-group",
+                    "--python", sys.executable]
+            with patch("sys.argv", argv), patch(
+                "scripts.run_two_luna_binding_game.os.getpgrp", return_value=os.getpid(),
+            ), patch("scripts.run_two_luna_binding_game.stage_qualified_v7_catalog",
+                     return_value=(root, root / "v7.json", {})), patch(
+                "scripts.run_two_luna_binding_game.free_port", return_value=12345,
+            ), patch("scripts.run_two_luna_binding_game.await_ready"), patch(
+                "scripts.run_two_luna_binding_game.subprocess.Popen"
+            ) as started, patch("scripts.run_two_luna_binding_game.subprocess.run",
+                                return_value=SimpleNamespace(returncode=0)):
+                started.return_value.poll.return_value = None
+                started.return_value.wait.return_value = 0
+                self.assertEqual(main(), 0)
+            self.assertEqual(started.call_count, 2)
+            self.assertTrue(all(call.kwargs["start_new_session"] is False
+                                for call in started.call_args_list))
+            self.assertEqual(started.return_value.terminate.call_count, 2)
 
 
 if __name__ == "__main__":

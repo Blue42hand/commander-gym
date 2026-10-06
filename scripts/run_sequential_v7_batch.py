@@ -18,6 +18,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 from typing import Any, Callable, Mapping
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -139,6 +140,34 @@ def _policy_attempts(path: Path) -> tuple[int, int, str]:
                     raise BatchError("provider attempt receipt count is inconsistent")
                 count += retries + 1
     return count, callbacks, digest.hexdigest()
+
+
+def _group_exists(pgid: int) -> bool:
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def _stop_and_verify_group(child: subprocess.Popen[Any]) -> None:
+    """Hold the caller's runtime lock until every game-group member is gone."""
+    pgid = child.pid
+    if _group_exists(pgid):
+        os.killpg(pgid, signal.SIGTERM)
+    try:
+        child.wait(timeout=60)
+    except subprocess.TimeoutExpired:
+        while child.poll() is None:
+            if _group_exists(pgid):
+                os.killpg(pgid, signal.SIGKILL)
+            try:
+                child.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                continue
+    while _group_exists(pgid):
+        os.killpg(pgid, signal.SIGKILL)
+        time.sleep(0.1)
 
 
 def _launcher_lines(path: Path) -> tuple[dict[str, Any] | None, dict[str, Any] | None, Path | None]:
@@ -271,6 +300,7 @@ def launch_one_game(args: argparse.Namespace, index: int, log: Path, output_dir:
         "--expected-ledger-estimated-usd", str(args.before_estimated_usd),
         "--max-attempts", "2",
         "--qualified-v7-comparison",
+        "--supervised-batch-process-group",
         "--timeout", str(args.timeout),
         "--stall-seconds", str(args.stall_seconds),
         *(item for profile in PROFILES for item in ("--profile", profile)),
@@ -292,17 +322,15 @@ def launch_one_game(args: argparse.Namespace, index: int, log: Path, output_dir:
             )
             return child.wait()
         finally:
-            signal.signal(signal.SIGTERM, previous_term)
-            if child is not None and child.poll() is None:
-                os.killpg(child.pid, signal.SIGTERM)
-                try:
-                    child.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    os.killpg(child.pid, signal.SIGKILL)
-                    child.wait()
-            stream.flush()
-            os.fsync(stream.fileno())
-            _fsync_dir(log.parent)
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
+            try:
+                if child is not None:
+                    _stop_and_verify_group(child)
+                stream.flush()
+                os.fsync(stream.fileno())
+                _fsync_dir(log.parent)
+            finally:
+                signal.signal(signal.SIGTERM, previous_term)
 
 
 def _identity(args: argparse.Namespace) -> dict[str, Any]:
@@ -435,6 +463,8 @@ def run_batch(
         if current["capUsd"] != manifest["cumulativeCapUsd"]:
             raise BatchError("batch cumulative cap is not installed")
         while next_game <= GAME_COUNT:
+            if _identity(args) != identity:
+                raise BatchError("reviewed source or catalog identity changed before next game")
             before = _snapshot(args.budget_ledger, manifest["cumulativeCapUsd"], args.max_requests)
             if before != current:
                 raise BatchError("cumulative ledger changed before next game")

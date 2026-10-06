@@ -1,9 +1,13 @@
 """Offline controls for the paid sequential wrapper. No provider or game starts."""
 
 from argparse import Namespace
+import fcntl
 import hashlib
 import json
+import os
 from pathlib import Path
+import signal
+import subprocess
 import sys
 import tempfile
 from types import SimpleNamespace
@@ -159,6 +163,16 @@ class SequentialV7BatchTests(unittest.TestCase):
                 batch.run_batch(self.args, runner=self._runner(calls))
         self.assertEqual(calls, [1, 2, 3])
 
+    def test_source_mutation_between_games_refuses_second_dispatch(self):
+        calls = []
+        changed = {**self.identity, "gymHead": "unreviewed"}
+        with patch.object(batch, "_identity", side_effect=[self.identity, self.identity, changed]):
+            with self.assertRaisesRegex(batch.BatchError, "changed before next game"):
+                batch.run_batch(self.args, runner=self._runner(calls))
+        self.assertEqual(calls, [1])
+        self.assertEqual(json.loads((self.args.batch_dir / "cursor.json").read_text()),
+                         {"status": "ready", "nextGame": 2})
+
     def test_wrong_start_or_existing_artifacts_refuse_before_cap_change(self):
         self.args.batch_dir.mkdir()
         (self.args.batch_dir / "foreign.txt").write_text("do not overwrite")
@@ -180,7 +194,7 @@ class SequentialV7BatchTests(unittest.TestCase):
         log = self.root / "launch.log"
         self.args.before_estimated_usd = self.start["estimatedUsd"]
         with patch.object(batch.subprocess, "Popen", return_value=Child()) as popen, \
-             patch.object(batch.os, "killpg") as kill, \
+             patch.object(batch, "_stop_and_verify_group") as cleanup, \
              patch.dict(batch.os.environ, {"COMMANDER_GYM_CACHE_FRIENDLY_HISTORY": "true"}):
             with self.assertRaises(InterruptedError):
                 batch.launch_one_game(self.args, 1, log, self.root / "game-01",
@@ -188,11 +202,84 @@ class SequentialV7BatchTests(unittest.TestCase):
         command = popen.call_args.args[0]
         self.assertEqual(command[1:3], ["-m", "scripts.run_two_luna_binding_game"])
         self.assertIn("--qualified-v7-comparison", command)
+        self.assertIn("--supervised-batch-process-group", command)
         self.assertEqual(command.count("--profile"), 4)
         self.assertIn("--expected-ledger-estimated-usd", command)
         self.assertEqual(popen.call_args.kwargs["env"]["COMMANDER_GYM_CACHE_FRIENDLY_HISTORY"],
                          "false")
-        kill.assert_called_once_with(12345, batch.signal.SIGTERM)
+        cleanup.assert_called_once()
+
+    def test_real_interruption_reaps_two_isolated_services_before_lock_release(self):
+        """A dummy launcher and two dummy services stand in for the FFA process tree."""
+        original_popen = subprocess.Popen
+        service_code = "import time; time.sleep(60)"
+        launcher_code = (
+            "import subprocess,sys,time; "
+            "children=[subprocess.Popen([sys.executable,'-c'," + repr(service_code)
+            + "]) for _ in range(2)]; "
+            "print('DUMMY_SERVICE_PIDS='+','.join(str(c.pid) for c in children),flush=True); "
+            "time.sleep(60)"
+        )
+        class InterruptedChild:
+            def __init__(self, actual):
+                self.actual = actual
+                self.pid = actual.pid
+                self.first_wait = True
+            def wait(self, timeout=None):
+                if self.first_wait:
+                    self.first_wait = False
+                    raise InterruptedError("simulated batch termination")
+                return self.actual.wait(timeout=timeout)
+            def poll(self):
+                return self.actual.poll()
+
+        def dummy_popen(_command, **kwargs):
+            process = original_popen([sys.executable, "-c", launcher_code], **kwargs)
+            try:
+                deadline = batch.time.monotonic() + 3
+                log_path = self.args.batch_dir / "game-01-launcher.log"
+                while "DUMMY_SERVICE_PIDS=" not in log_path.read_text():
+                    if batch.time.monotonic() > deadline:
+                        raise AssertionError("dummy services did not start")
+                    batch.time.sleep(0.01)
+            except BaseException:
+                os.killpg(process.pid, signal.SIGTERM)
+                process.wait(timeout=5)
+                raise
+            return InterruptedChild(process)
+
+        def lock_is_still_held(child):
+            second = os.open(self.args.runtime_lock, os.O_RDWR)
+            try:
+                with self.assertRaises(BlockingIOError):
+                    fcntl.flock(second, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            finally:
+                os.close(second)
+            original_cleanup(child)
+            second = os.open(self.args.runtime_lock, os.O_RDWR)
+            try:
+                with self.assertRaises(BlockingIOError):
+                    fcntl.flock(second, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            finally:
+                os.close(second)
+
+        original_cleanup = batch._stop_and_verify_group
+        def interrupted_runner(args, index, log, output_dir, expected_requests,
+                               expected_unsettled, cap):
+            return batch.launch_one_game(args, index, log, output_dir,
+                                         expected_requests, expected_unsettled, cap)
+        with patch.object(batch, "_identity", return_value=self.identity), \
+             patch.object(batch.subprocess, "Popen", side_effect=dummy_popen), \
+             patch.object(batch, "_stop_and_verify_group", side_effect=lock_is_still_held):
+            with self.assertRaises(InterruptedError):
+                batch.run_batch(self.args, runner=interrupted_runner)
+        log = (self.args.batch_dir / "game-01-launcher.log").read_text()
+        pids = [int(pid) for pid in log.split("DUMMY_SERVICE_PIDS=", 1)[1].splitlines()[0].split(",")]
+        for pid in pids:
+            with self.assertRaises(ProcessLookupError):
+                os.kill(pid, 0)
+        self.assertEqual(json.loads((self.args.batch_dir / "cursor.json").read_text())["status"],
+                         "inflight")
 
 
 if __name__ == "__main__":

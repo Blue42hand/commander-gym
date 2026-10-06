@@ -79,6 +79,10 @@ def await_ready(url, process, seconds, token=None):
     raise RuntimeError("local service did not become ready; inspect run log")
 
 
+def _interrupted(_signum, _frame):
+    raise InterruptedError("supervised game launcher received a termination signal")
+
+
 def main():
     parser = argparse.ArgumentParser()
     for name in ("engine-dir", "instance-root", "catalog", "output-dir"):
@@ -104,6 +108,8 @@ def main():
                         help="pin and stage the reviewed v7 Binding/Pilot catalog closure")
     parser.add_argument("--timeout", type=float, default=3600)
     parser.add_argument("--stall-seconds", type=float, default=600)
+    parser.add_argument("--supervised-batch-process-group", action="store_true",
+                        help="keep isolated services in the batch launcher's process group")
     args = parser.parse_args()
     if args.profiles:
         args.profile_a = args.profile_a or args.profiles[0]
@@ -124,6 +130,8 @@ def main():
         parser.error("existing cumulative budget ledger must be absolute")
     if args.budget_cap > 5 and args.budget_max_requests is None:
         parser.error("an elevated cumulative cap requires an absolute request limit")
+    if args.supervised_batch_process_group and os.getpgrp() != os.getpid():
+        parser.error("supervised batch launcher must be a new process-group leader")
     if not args.dry_run and args.api_key_file is None:
         parser.error("--api-key-file is required for a paid game")
     if not args.dry_run and not args.qualified_v7_comparison:
@@ -184,12 +192,15 @@ def main():
     else:
         env.pop("COMMANDER_GYM_OPENAI_BUDGET_MAX_REQUESTS", None)
     processes, logs = [], []
+    previous_term = (signal.signal(signal.SIGTERM, _interrupted)
+                     if args.supervised_batch_process_group else None)
     try:
         sidecar_log = (run_dir / "sidecar.log").open("x")
         logs.append(sidecar_log)
         sidecar = subprocess.Popen([str(python), "-m",
             "commander_gym.game_server_binding_openai_sidecar"], cwd=gym, env=env,
-            stdout=sidecar_log, stderr=subprocess.STDOUT, start_new_session=True)
+            stdout=sidecar_log, stderr=subprocess.STDOUT,
+            start_new_session=not args.supervised_batch_process_group)
         processes.append(sidecar)
         await_ready(
             f"http://127.0.0.1:{sidecar_port}/v1/controller-profiles",
@@ -199,7 +210,8 @@ def main():
         logs.append(server_log)
         server = subprocess.Popen([str(engine / "scripts/gradle-locked"), "-p",
             str(gym / "jvm-adapter"), "runLocalGuiServer"], cwd=engine, env=env,
-            stdout=server_log, stderr=subprocess.STDOUT, start_new_session=True)
+            stdout=server_log, stderr=subprocess.STDOUT,
+            start_new_session=not args.supervised_batch_process_group)
         processes.append(server)
         await_ready(f"http://127.0.0.1:{server_port}/", server, 240)
         runner_env = dict(env)
@@ -223,16 +235,33 @@ def main():
         print(f"CUMULATIVE_BUDGET_LEDGER={ledger}", flush=True)
         return result.returncode
     finally:
-        for process in reversed(processes):
-            if process.poll() is None:
-                os.killpg(process.pid, signal.SIGTERM)
-        for process in reversed(processes):
-            try:
-                process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                os.killpg(process.pid, signal.SIGKILL)
-        for log in logs:
-            log.close()
+        if args.supervised_batch_process_group:
+            # The parent batch wrapper owns this whole group and verifies that
+            # no member survives before it releases its runtime lock.
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        try:
+            for process in reversed(processes):
+                if process.poll() is None:
+                    if args.supervised_batch_process_group:
+                        process.terminate()
+                    else:
+                        os.killpg(process.pid, signal.SIGTERM)
+            for process in reversed(processes):
+                try:
+                    process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    if args.supervised_batch_process_group:
+                        process.kill()
+                    else:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    process.wait(timeout=10)
+            if args.supervised_batch_process_group:
+                print("TWO_LUNA_PROCESS_CLEANUP=top_level_exited", flush=True)
+        finally:
+            for log in logs:
+                log.close()
+            if args.supervised_batch_process_group:
+                signal.signal(signal.SIGTERM, previous_term)
 
 
 if __name__ == "__main__":
