@@ -1,0 +1,17 @@
+import groovy.json.JsonOutput
+import org.gradle.api.tasks.JavaExec
+
+gradle.rootProject { root ->
+    root.tasks.register("codexV7RuntimeClasspath") {
+        dependsOn(root.tasks.named("testClasses"))
+        doLast {
+            def run = root.tasks.named("runLocalGuiServer").get()
+            if (!(run instanceof JavaExec)) {
+                throw new GradleException("runLocalGuiServer is not a JavaExec task")
+            }
+            println("CODEX_V7_RUNTIME_CLASSPATH=" + JsonOutput.toJson(
+                run.classpath.files.collect { it.absolutePath }
+            ))
+        }
+    }
+}

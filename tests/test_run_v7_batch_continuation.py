@@ -13,6 +13,7 @@ import unittest
 from unittest.mock import patch
 
 from commander_gym.openai_run_budget import OpenAIRunBudget
+from scripts import probe_v7_runtime_classpath as runtime_probe
 from scripts import run_v7_batch_continuation as continuation
 
 
@@ -77,6 +78,7 @@ class V7BatchContinuationTests(unittest.TestCase):
             game_server_jar=self.server_jar, adapter_jar=self.adapter_jar,
             expected_control_head="reviewed-control", expected_gym_head=continuation.GYM_HEAD,
             expected_engine_head=continuation.ENGINE_HEAD,
+            expected_runtime_classpath_sha256="a" * 64,
             timeout=30, stall_seconds=10, max_requests=continuation.MAX_REQUESTS,
         )
         self.identity = {
@@ -228,6 +230,22 @@ class V7BatchContinuationTests(unittest.TestCase):
         self.assertEqual(json.loads((self.args.continuation_dir / "cursor.json").read_text())["status"],
                          "inflight")
 
+    def test_interrupted_zero_request_attempt_blocks_another_directory(self):
+        calls = []
+        def interrupted(*_):
+            calls.append(2)
+            raise InterruptedError("launcher failed before provider work")
+        with patch.object(continuation, "_identity", return_value=self.identity):
+            with self.assertRaisesRegex(InterruptedError, "before provider work"):
+                continuation.run_continuation(self.args, runner=interrupted)
+            self.assertEqual(json.loads(self.ledger.read_text())["requests"],
+                             continuation.START_REQUESTS)
+            self.args.continuation_dir = self.root / "alternate-continuation"
+            with self.assertRaisesRegex(continuation.batch.BatchError, "claimed by another"):
+                continuation.run_continuation(self.args, runner=self.runner(calls))
+        self.assertEqual(calls, [2])
+        self.assertFalse((self.args.continuation_dir / "manifest.json").exists())
+
     def test_completed_receipt_or_cursor_tamper_refuses_replay(self):
         calls = []
         with patch.object(continuation, "_identity", return_value=self.identity):
@@ -295,13 +313,40 @@ class V7BatchContinuationTests(unittest.TestCase):
         }[path]), patch.object(continuation.batch, "_tracked_clean", return_value=True), \
              patch.object(continuation.batch, "verify_qualified_v7_catalog", return_value=qualified), \
              patch.object(continuation, "SERVER_JAR_SHA256", sha(self.args.game_server_jar)), \
-             patch.object(continuation, "ADAPTER_JAR_SHA256", sha(self.args.adapter_jar)):
+             patch.object(continuation, "ADAPTER_JAR_SHA256", sha(self.args.adapter_jar)), \
+             patch.object(continuation.runtime_probe, "fingerprint", return_value={"sha256": "a" * 64,
+                 "entryCount": 4, "adapterEntries": 2, "engineEntries": 2}):
             identity = continuation._identity(self.args, original)
+            self.args.expected_runtime_classpath_sha256 = "b" * 64
+            with self.assertRaisesRegex(continuation.batch.BatchError,
+                                        "effective Gradle server runtime classpath"):
+                continuation._identity(self.args, original)
         self.assertEqual(identity["gameCount"], 2)
         self.assertEqual(identity["firstOriginalGame"], 2)
         self.assertEqual(identity["cumulativeCapUsd"], continuation.CAP_USD)
         self.assertNotIn("incrementalCapUsd", identity)
         self.assertEqual(identity["gymRoot"], str(self.args.gym_dir))
+        self.assertEqual(identity["runtimeClasspath"]["sha256"], "a" * 64)
+
+    def test_effective_runtime_digest_covers_executed_adapter_and_engine_outputs(self):
+        gym = self.root / "qualified-gym"
+        engine = self.root / "fixed-engine"
+        paths = [
+            gym / "jvm-adapter/build/classes/kotlin/main/Adapter.class",
+            gym / "jvm-adapter/build/classes/kotlin/test/LocalGuiGameServer.class",
+            engine / "game-server/build/classes/kotlin/main/Server.class",
+            engine / "rules-engine/build/classes/kotlin/main/Payment.class",
+        ]
+        for index, path in enumerate(paths):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(bytes([index]))
+        output = runtime_probe.MARKER + json.dumps([str(path.parent) for path in paths]) + "\n"
+        with patch.object(runtime_probe.subprocess, "run", return_value=SimpleNamespace(stdout=output)):
+            first = runtime_probe.fingerprint(engine, gym)
+            paths[-1].write_bytes(b"fixed payment output changed")
+            second = runtime_probe.fingerprint(engine, gym)
+        self.assertNotEqual(first["sha256"], second["sha256"])
+        self.assertEqual(second["entryCount"], 4)
 
     def test_game_launcher_uses_pinned_gym_checkout_not_controller(self):
         child = SimpleNamespace(pid=12345, wait=lambda timeout=None: 0)
@@ -322,7 +367,9 @@ class V7BatchContinuationTests(unittest.TestCase):
     def test_reviewed_source_drift_between_attempts_stops_before_second(self):
         calls = []
         changed = {**self.identity, "controllerHead": "unreviewed"}
-        with patch.object(continuation, "_identity", side_effect=[self.identity, self.identity, changed]):
+        with patch.object(continuation, "_identity", side_effect=[
+            self.identity, self.identity, self.identity, changed,
+        ]):
             with self.assertRaisesRegex(continuation.batch.BatchError, "reviewed source changed"):
                 continuation.run_continuation(self.args, runner=self.runner(calls))
         self.assertEqual(calls, [2])
@@ -331,7 +378,9 @@ class V7BatchContinuationTests(unittest.TestCase):
     def test_resume_after_qualified_second_game_runs_only_third(self):
         calls = []
         changed = {**self.identity, "controllerHead": "unreviewed"}
-        with patch.object(continuation, "_identity", side_effect=[self.identity, self.identity, changed]):
+        with patch.object(continuation, "_identity", side_effect=[
+            self.identity, self.identity, self.identity, changed,
+        ]):
             with self.assertRaisesRegex(continuation.batch.BatchError, "reviewed source changed"):
                 continuation.run_continuation(self.args, runner=self.runner(calls))
         with patch.object(continuation, "_identity", return_value=self.identity):

@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from commander_gym.cache_probe_session import _private_json
 from scripts import run_sequential_v7_batch as batch
+from scripts import probe_v7_runtime_classpath as runtime_probe
 
 
 ORIGINAL_BATCH_DIR = Path("/var/lib/commander-gym/runs/paid-v7-batch-00f5990-f1e9bf9-20261006")
@@ -78,7 +79,13 @@ def _identity(args: argparse.Namespace, original: Mapping[str, Any]) -> dict[str
         raise batch.BatchError("fixed engine or Gym adapter JAR changed")
     if (not args.game_server_jar.resolve().is_relative_to(args.engine_dir.resolve())
         or not args.adapter_jar.resolve().is_relative_to(args.gym_dir.resolve())):
-        raise batch.BatchError("fixed JAR is outside its reviewed source checkout")
+        raise batch.BatchError("offline readiness JAR is outside its reviewed source checkout")
+    if (len(args.expected_runtime_classpath_sha256) != 64
+        or any(char not in "0123456789abcdef" for char in args.expected_runtime_classpath_sha256)):
+        raise batch.BatchError("reviewed runtime classpath digest is invalid")
+    actual_runtime = runtime_probe.fingerprint(args.engine_dir, args.gym_dir)
+    if actual_runtime["sha256"] != args.expected_runtime_classpath_sha256:
+        raise batch.BatchError("effective Gradle server runtime classpath differs from reviewed pin")
     base = batch._identity(args)
     prior = original["manifest"]
     for key in ("profiles", "model", "cacheFriendlyHistory", "maxAttempts",
@@ -93,8 +100,13 @@ def _identity(args: argparse.Namespace, original: Mapping[str, Any]) -> dict[str
         "controllerHead": args.expected_control_head,
         "controllerScriptSha256": batch._sha(Path(__file__)),
         "batchHelperSha256": batch._sha(Path(batch.__file__)),
-        "gameServerJar": str(args.game_server_jar), "gameServerJarSha256": SERVER_JAR_SHA256,
-        "adapterJar": str(args.adapter_jar), "adapterJarSha256": ADAPTER_JAR_SHA256,
+        "runtimeProbeSha256": batch._sha(Path(runtime_probe.__file__)),
+        "runtimeInitScriptSha256": batch._sha(runtime_probe.INIT_SCRIPT),
+        "runtimeClasspath": actual_runtime,
+        "readinessGameServerJar": str(args.game_server_jar),
+        "readinessGameServerJarSha256": SERVER_JAR_SHA256,
+        "readinessAdapterJar": str(args.adapter_jar),
+        "readinessAdapterJarSha256": ADAPTER_JAR_SHA256,
         "originalBatchDir": str(ORIGINAL_BATCH_DIR), "originalHashes": ORIGINAL_HASHES,
         "gameCount": 2, "firstOriginalGame": FIRST_GAME, "lastOriginalGame": LAST_GAME,
         "cumulativeCapUsd": CAP_USD, "maxRequests": MAX_REQUESTS,
@@ -119,6 +131,37 @@ def _initial_ledger(args: argparse.Namespace, original: Mapping[str, Any]) -> di
         or start != original["receipt"].get("afterLedger")):
         raise batch.BatchError("shared ledger differs from approved game-1 closeout")
     return start
+
+
+def _claim_path() -> Path:
+    # This path depends on the stopped parent batch, not a caller-selected
+    # continuation directory. Its exclusive creation reserves the two slots.
+    return ORIGINAL_BATCH_DIR.with_name(ORIGINAL_BATCH_DIR.name + "-continuation-claim.json")
+
+
+def _claim_value(directory: Path) -> dict[str, Any]:
+    return {
+        "schemaVersion": 1,
+        "originalBatchDir": str(ORIGINAL_BATCH_DIR),
+        "originalHashes": ORIGINAL_HASHES,
+        "continuationDir": str(directory.resolve()),
+        "startLedgerSha256": START_LEDGER_SHA256,
+        "firstOriginalGame": FIRST_GAME,
+        "lastOriginalGame": LAST_GAME,
+        "cumulativeCapUsd": CAP_USD,
+        "maxRequests": MAX_REQUESTS,
+    }
+
+
+def _claim_bytes(value: Mapping[str, Any]) -> bytes:
+    return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
+
+
+def _verify_claim(path: Path, value: Mapping[str, Any]) -> None:
+    if (not path.is_file() or path.is_symlink()
+        or stat.S_IMODE(path.stat().st_mode) & 0o077
+        or path.read_bytes() != _claim_bytes(value)):
+        raise batch.BatchError("original batch continuation is claimed by another or changed directory")
 
 
 def _completed_receipts(directory: Path, cursor: Mapping[str, Any],
@@ -176,23 +219,34 @@ def run_continuation(
             raise batch.BatchError("another process owns the shared game runtime") from exc
         original = _read_original()
         identity = _identity(args, original)
+        claim_path = _claim_path()
+        claim_value = _claim_value(args.continuation_dir)
         manifest_path = args.continuation_dir / "manifest.json"
         cursor_path = args.continuation_dir / "cursor.json"
         if manifest_path.exists():
+            _verify_claim(claim_path, claim_value)
             if manifest_path.is_symlink() or not cursor_path.is_file() or cursor_path.is_symlink():
                 raise batch.BatchError("continuation manifest lacks a durable cursor")
             manifest = json.loads(manifest_path.read_text())
             if any(manifest.get(key) != value for key, value in identity.items()):
                 raise batch.BatchError("frozen continuation identity changed")
             if (manifest.get("startLedgerSha256") != START_LEDGER_SHA256
-                or manifest.get("startLedger") != original["receipt"].get("afterLedger")):
+                or manifest.get("startLedger") != original["receipt"].get("afterLedger")
+                or manifest.get("claimPath") != str(claim_path)
+                or manifest.get("claimSha256") != batch._sha(claim_path)):
                 raise batch.BatchError("frozen continuation starting ledger changed")
         else:
             if any(args.continuation_dir.iterdir()):
                 raise batch.BatchError("continuation evidence exists without a frozen manifest")
+            if claim_path.exists() or claim_path.is_symlink():
+                _verify_claim(claim_path, claim_value)
+                raise batch.BatchError("original batch continuation already claimed without a manifest")
             start = _initial_ledger(args, original)
+            _private_json(claim_path, claim_value)
+            _verify_claim(claim_path, claim_value)
             manifest = {**identity, "startLedger": start,
-                        "startLedgerSha256": START_LEDGER_SHA256}
+                        "startLedgerSha256": START_LEDGER_SHA256,
+                        "claimPath": str(claim_path), "claimSha256": batch._sha(claim_path)}
             _private_json(manifest_path, manifest)
             batch._write_cursor(cursor_path, {"status": "ready", "nextGame": FIRST_GAME,
                                                "lastReceiptSha256": None})
@@ -207,6 +261,7 @@ def run_continuation(
         if _snapshot(args.budget_ledger) != current or batch._sha(args.budget_ledger) != current_hash:
             raise batch.BatchError("shared ledger changed outside completed continuation attempts")
         while next_game <= LAST_GAME:
+            _verify_claim(claim_path, claim_value)
             if _read_original() != original or _identity(args, original) != identity:
                 raise batch.BatchError("original evidence or reviewed source changed before dispatch")
             if batch._sha(args.budget_ledger) != current_hash:
@@ -232,6 +287,9 @@ def run_continuation(
             args.before_estimated_usd = before["estimatedUsd"]
             code = runner(args, next_game, log, output_dir,
                           before["requests"], before["unsettledRequests"], CAP_USD)
+            _verify_claim(claim_path, claim_value)
+            if _identity(args, original) != identity:
+                raise batch.BatchError("effective game runtime or reviewed source changed during attempt")
             if _read_original() != original:
                 raise batch.BatchError("original batch evidence changed during attempt")
             after = _snapshot(args.budget_ledger)
@@ -266,6 +324,8 @@ def parser() -> argparse.ArgumentParser:
                  "game-server-jar", "adapter-jar"):
         p.add_argument("--" + name, required=True, type=Path)
     p.add_argument("--expected-control-head", required=True)
+    p.add_argument("--expected-runtime-classpath-sha256", required=True,
+                   help="reviewed hash from the offline runtime classpath probe")
     p.add_argument("--timeout", type=float, default=3600)
     p.add_argument("--stall-seconds", type=float, default=600)
     p.add_argument("--execute", action="store_true", help="permit the already-authorized paid continuation")
