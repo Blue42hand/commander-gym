@@ -243,6 +243,59 @@ class TwoLunaDebugReportTests(unittest.TestCase):
             )
             self.assertIsNone(watch.scan(["unrelated-game"]))
 
+    def test_policy_callback_watch_requires_complete_failed_callback_line(self):
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / "server.log"
+            watch = _FatalActionWatch(log)
+            log.write_text(
+                "ERROR AI failed to process server message: Commander Gym policy "
+                "callback failed with HTTP 503"
+            )
+            self.assertIsNone(watch.scan(["game-1"]))
+            self.assertFalse(watch.policy_failure)
+            with log.open("a") as output:
+                output.write(": OpenAIResponsesPilotError\n")
+            self.assertIsNone(watch.scan(["game-1"]))
+            self.assertTrue(watch.policy_failure)
+
+    def test_run_stops_on_failed_policy_callback_without_waiting_for_stall(self):
+        profiles = {"profiles": [
+            {"id": "a", "deck": {"commander": "Krenko", "cards": {"Mountain": 99}}},
+            {"id": "b", "deck": {"commander": "Talrand", "cards": {"Island": 99}}},
+        ]}
+        status = {"complete": False, "state": "TOURNAMENT_ACTIVE", "round": 1,
+                  "liveGames": [{"gameSessionId": "game-1", "turnNumber": 25}],
+                  "completedGames": []}
+        snapshot = {"capUsd": 18, "estimatedUsd": 7.5, "requests": 975,
+                    "inputTokens": 1680321, "outputTokens": 22672,
+                    "unsettledRequests": 3}
+        budget = type("Budget", (), {"snapshot": lambda self: snapshot})()
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / "server.log"
+            log.write_text(
+                "ERROR AI failed to process server message: Commander Gym policy "
+                "callback failed with HTTP 503: OpenAIResponsesPilotError\n"
+            )
+            args = Namespace(
+                profile_a="a", profile_b="b", sidecar_url="http://127.0.0.1:1235",
+                server_url="http://127.0.0.1:1234", timeout=3600, stall_seconds=600,
+                poll_seconds=1, provenance=None, server_log=str(log),
+                terminal_evidence_dir=directory,
+            )
+            output = io.StringIO()
+            with patch.dict(os.environ, {"COMMANDER_GYM_SIDECAR_TOKEN": "local-test"}), \
+                    patch("commander_gym.two_luna_debug._request_json",
+                          side_effect=[profiles, {"lobbyId": "lobby"}, status]) as request, \
+                    patch("commander_gym.two_luna_debug._run_budget", return_value=budget), \
+                    patch("commander_gym.two_luna_debug.time.sleep"), redirect_stdout(output):
+                exit_code = run(args)
+            result = json.loads(next(s.partition("=")[2] for s in output.getvalue().splitlines()
+                                     if s.startswith("TWO_LUNA_DEBUG_RESULT=")))
+            self.assertEqual(exit_code, 1)
+            self.assertEqual(request.call_count, 3)
+            self.assertEqual(result["stopReason"], "policy_callback_failed")
+            self.assertIsNone(result["terminalEvidence"])
+
     def test_run_stops_on_fatal_external_action_without_waiting_for_stall(self):
         profiles = {"profiles": [
             {"id": "a", "deck": {"commander": "Krenko", "cards": {"Mountain": 99}}},
