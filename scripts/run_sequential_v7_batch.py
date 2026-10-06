@@ -145,12 +145,31 @@ def _policy_attempts(path: Path) -> tuple[int, int, str]:
                     and isinstance(attempt["response"].get("transportError"), str)
                     for attempt in attempts
                 )
-                if (len(attempts) != retries + transport_errors + 1
-                    or transport_errors and (
-                        not isinstance(attempts[-1], dict)
-                        or not isinstance(attempts[-1].get("response"), dict)
-                        or "transportError" in attempts[-1]["response"]
-                    )):
+                validation_errors = sum(
+                    isinstance(attempt, dict)
+                    and isinstance(attempt.get("response"), dict)
+                    and "validationError" in attempt["response"]
+                    for attempt in attempts
+                )
+                failed = choice.get("channel") == "error"
+                final_response = attempts[-1].get("response") if isinstance(attempts[-1], dict) else None
+                if (failed and (model_io.get("selectedAttempt") is not None
+                    or validation_errors != retries
+                    or len(attempts) != retries + transport_errors + sum(
+                        isinstance(attempt, dict)
+                        and isinstance(attempt.get("response"), dict)
+                        and "budgetError" in attempt["response"]
+                        for attempt in attempts
+                    )
+                    or not isinstance(final_response, dict)
+                    or not ("transportError" in final_response
+                            or "budgetError" in final_response
+                            or "validationError" in final_response))
+                    or not failed and (len(attempts) != retries + transport_errors + 1
+                        or transport_errors and (
+                            not isinstance(final_response, dict)
+                            or "transportError" in final_response
+                        ))):
                     raise BatchError("provider attempt receipt count is inconsistent")
                 count += len(attempts)
     return count, callbacks, digest.hexdigest()

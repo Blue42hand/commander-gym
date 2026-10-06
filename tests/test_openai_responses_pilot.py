@@ -1724,6 +1724,36 @@ class OpenAIResponsesPilotTests(unittest.TestCase):
             self.assertEqual(len(caught.exception.model_io["attempts"]), 1)
             self.assertEqual(budget.snapshot()["unsettledRequests"], 1)
 
+    def test_late_520_does_not_dispatch_past_jvm_callback_deadline(self):
+        with TemporaryDirectory() as temporary:
+            budget = OpenAIRunBudget(
+                Path(temporary) / "budget.json", 5, max_requests=2,
+                initialize_new_ledger=True,
+            )
+            clock = [0.0]
+
+            class LateFailure:
+                def __init__(self):
+                    self.calls = []
+
+                def create(self, **kwargs):
+                    self.calls.append(kwargs)
+                    clock[0] = 101.0
+                    raise FakeHttpError(520)
+
+            client = FakeClient()
+            client.responses = LateFailure()
+            with patch("commander_gym.openai_responses_pilot.perf_counter", side_effect=lambda: clock[0]):
+                with self.assertRaisesRegex(OpenAIResponsesPilotError, "status=520") as caught:
+                    OpenAIResponsesPilot(
+                        client=client, model="gpt-6-luna", budget=budget,
+                        retry_transient_server_errors=True,
+                    ).choose(action_observation())
+            self.assertEqual(len(client.responses.calls), 1)
+            self.assertLessEqual(client.responses.calls[0]["timeout"], 90.0)
+            self.assertEqual(len(caught.exception.model_io["attempts"]), 1)
+            self.assertEqual(budget.snapshot()["requests"], 1)
+
     def test_bounded_nontransient_http_failure_does_not_retry(self):
         with TemporaryDirectory() as temporary:
             budget = OpenAIRunBudget(

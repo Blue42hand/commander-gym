@@ -21,6 +21,36 @@ from commander_gym.two_luna_debug import (
 
 
 class TwoLunaDebugReportTests(unittest.TestCase):
+    def test_exhausted_transport_receipt_reconciles_without_qualifying(self):
+        record = {
+            "callback": "chooseAction", "playerId": "ai-a",
+            "observation": {"agentToAct": "ai-a", "perspectivePlayerId": "ai-a",
+                            "knownDeck": {"cards": {"Mountain": 99}},
+                            "pendingDecision": None, "legalActions": [], "terminated": False},
+            "choice": {"channel": "error", "metadata": {
+                "provider": "openai", "retryCount": 0,
+                "modelIo": {"selectedAttempt": None, "attempts": [
+                    {"attempt": 0, "response": {"transportError": "status=520"}},
+                    {"attempt": 1, "response": {"transportError": "status=520"}},
+                ]},
+            }},
+        }
+        result = _summarize(
+            [record], completed=False, lobby_id="lobby", game_ids=["game-1"],
+            max_turn=8, log_path=None, wall_time_seconds=1,
+        )
+        self.assertEqual(result["providerRequests"], 2)
+        self.assertEqual(result["providerTransportErrors"], 2)
+        self.assertFalse(result["technicalQualified"])
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "policy.jsonl"
+            path.write_text(json.dumps(record) + "\n")
+            budget = type("Budget", (), {"snapshot": lambda self: {"requests": 102}})()
+            _, counted, complete, error = _finalize_provenance(
+                path, budget, before_requests=100, timeout_seconds=0,
+            )
+            self.assertEqual((counted, complete, error), (2, True, None))
+
     def test_recovered_transport_attempt_is_counted_but_cannot_qualify(self):
         records = []
         for seat in ("ai-a", "ai-b"):
@@ -293,6 +323,15 @@ class TwoLunaDebugReportTests(unittest.TestCase):
             self.assertFalse(watch.policy_failure)
             with log.open("a") as output:
                 output.write(": OpenAIResponsesPilotError\n")
+            self.assertIsNone(watch.scan(["game-1"]))
+            self.assertTrue(watch.policy_failure)
+
+    def test_policy_callback_watch_detects_abandoned_jvm_timeout(self):
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / "server.log"
+            watch = _FatalActionWatch(log)
+            log.write_text("ERROR AI failed to process server message: "
+                           "java.net.http.HttpTimeoutException: request timed out\n")
             self.assertIsNone(watch.scan(["game-1"]))
             self.assertTrue(watch.policy_failure)
 

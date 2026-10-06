@@ -33,6 +33,10 @@ from .cache_friendly_input import cache_friendly_observation_input
 from .delegated_autopass import _NATIVE_PHASES, _NATIVE_STEPS
 
 MODEL_IO_SCHEMA_VERSION = 1
+_RECOVERY_CALLBACK_SECONDS = 110.0  # Argentum's policy HTTP deadline is 120 s.
+_RECOVERY_REQUEST_SECONDS = 90.0
+_RECOVERY_RETURN_MARGIN_SECONDS = 5.0
+_RECOVERY_MIN_RETRY_SECONDS = 10.0
 
 class OpenAIResponsesPilotError(RuntimeError):
     """Raised when the provider cannot yield one valid native Argentum choice.
@@ -240,16 +244,8 @@ def _provider_failure_summary(exc: Exception) -> str:
     status_code = getattr(exc, "status_code", None)
     if type(status_code) is int:
         parts.append(f"status={status_code}")
-    body = getattr(exc, "body", None)
-    if isinstance(body, Mapping):
-        error = body.get("error", body)
-        if isinstance(error, Mapping):
-            code = error.get("code")
-            if isinstance(code, str) and code:
-                parts.append(f"code={code}")
-            message = error.get("message")
-            if isinstance(message, str) and message:
-                parts.append(f"message={message[:500]}")
+    # Provider-controlled body fields can echo request data or credentials.
+    # The exception class and numeric HTTP status are enough for the retry audit.
     return ", ".join(parts)
 
 
@@ -1138,6 +1134,10 @@ class OpenAIResponsesPilot:
         attempts: list[dict[str, Any]] = []
         provider_wall_time_ms = 0.0
         validation_retries = 0
+        recovery_deadline = (
+            perf_counter() + _RECOVERY_CALLBACK_SECONDS
+            if self.retry_transient_server_errors and self.budget is not None else None
+        )
         for attempt in range(self.max_attempts):
             if validation_error is not None:
                 correction = (
@@ -1147,6 +1147,19 @@ class OpenAIResponsesPilot:
                 request["input"] = (
                     [*base_input, {"role": "user", "content": correction}]
                     if self.cache_friendly_history else base_input + "\n" + correction
+                )
+            if recovery_deadline is not None:
+                remaining = recovery_deadline - perf_counter()
+                if remaining < _RECOVERY_MIN_RETRY_SECONDS + _RECOVERY_RETURN_MARGIN_SECONDS:
+                    raise OpenAIResponsesPilotError(
+                        "bounded provider recovery callback deadline exhausted",
+                        model_io=_failed_model_io(attempts) if attempts else None,
+                    )
+                # SDK timeout is a request option, not part of the model input.
+                # Keep each dispatch inside the JVM's 120-second HTTP callback.
+                request["timeout"] = min(
+                    _RECOVERY_REQUEST_SECONDS,
+                    remaining - _RECOVERY_RETURN_MARGIN_SECONDS,
                 )
             request_snapshot = deepcopy(request)
             request_started = perf_counter()
@@ -1198,7 +1211,10 @@ class OpenAIResponsesPilot:
                 # their reservation and their model-I/O receipt.
                 if (self.retry_transient_server_errors and self.budget is not None
                     and _retryable_provider_status(exc)
-                    and attempt + 1 < self.max_attempts):
+                    and attempt + 1 < self.max_attempts
+                    and recovery_deadline is not None
+                    and recovery_deadline - perf_counter()
+                        >= _RECOVERY_MIN_RETRY_SECONDS + _RECOVERY_RETURN_MARGIN_SECONDS):
                     continue
                 raise OpenAIResponsesPilotError(
                     f"OpenAI Responses request failed ({failure_summary})",

@@ -32,6 +32,19 @@ class SequentialV7BatchTests(unittest.TestCase):
             count, callbacks, _ = batch._policy_attempts(path)
             self.assertEqual((count, callbacks), (2, 1))
 
+    def test_policy_attempt_receipt_counts_exhausted_transport_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "policy.jsonl"
+            path.write_text(json.dumps({"choice": {"channel": "error", "metadata": {
+                "provider": "openai", "retryCount": 0,
+                "modelIo": {"selectedAttempt": None, "attempts": [
+                    {"attempt": 0, "response": {"transportError": "status=520"}},
+                    {"attempt": 1, "response": {"transportError": "status=520"}},
+                ]},
+            }}}) + "\n")
+            count, callbacks, _ = batch._policy_attempts(path)
+            self.assertEqual((count, callbacks), (2, 1))
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)

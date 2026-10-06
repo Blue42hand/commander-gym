@@ -43,7 +43,9 @@ FATAL_EXTERNAL_ACTION_RE = re.compile(
     r"(?P<reason>.+?) — refusing server-side strategic fallback"
 )
 FATAL_POLICY_CALLBACK_RE = re.compile(
-    r"AI failed to process server message: Commander Gym policy callback failed with HTTP 503"
+    r"AI failed to process server message: (?:Commander Gym policy callback failed "
+    r"with HTTP 503|[^\n]*(?:HttpTimeoutException|request timed out))",
+    re.IGNORECASE,
 )
 PAYMENT_REJECTION_RE = re.compile(
     r"External AI payment (?P<preflight>preflight )?rejected for seat \S+ "
