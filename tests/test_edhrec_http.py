@@ -16,6 +16,7 @@ def page(theme=None, commander='Test Commander'):
     return json.dumps({
         'container': {'json_dict': {
             'card': {'name': commander},
+            'selected_theme_slug': theme,
             'cardlists': [{'tag': 'topcards', 'cardviews': [
                 {'name': 'Card One', 'num_decks': count,
                  'potential_decks': denominator, 'synergy': 0.125, 'lift': 1.4},
@@ -157,6 +158,15 @@ class HttpEdhrecTests(unittest.TestCase):
         raw = json.loads(page('tokens'))
         raw['container']['json_dict']['cardlists'][0]['cardviews'][0]['synergy'] = 12.5
         with self.assertRaisesRegex(CatalogError, 'synergy unit'):
+            project_page(json.dumps(raw).encode(),
+                         'https://json.edhrec.com/pages/commanders/test-commander/tokens.json',
+                         'test-commander', 'tokens')
+
+    def test_source_theme_must_match_requested_context(self):
+        from commander_gym.edhrec_http import project_page
+        raw = json.loads(page('tokens'))
+        raw['container']['json_dict']['selected_theme_slug'] = 'artifacts'
+        with self.assertRaisesRegex(CatalogError, 'source theme'):
             project_page(json.dumps(raw).encode(),
                          'https://json.edhrec.com/pages/commanders/test-commander/tokens.json',
                          'test-commander', 'tokens')

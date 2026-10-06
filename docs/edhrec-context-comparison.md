@@ -33,7 +33,11 @@ route and live response shape are unverified.** The projector currently
 expects `container.json_dict.card.name`, `cardlists[].cardviews[]` with
 `num_decks`, `potential_decks`, optional `synergy` as a fraction and optional
 `lift` as a ratio, optional `average_deck`/`avgdeck` entries, and optional
-`panels.taglinks`. Unknown shapes fail closed; it does not probe alternate
+`panels.taglinks`. It also requires `container.json_dict.selected_theme_slug`
+to match the requested theme (explicit null for overall). That field is a
+proposed binding check, **not verified in live EDHREC data**; if the real page
+uses different evidence, revise the mapping after authorization and review.
+Unknown shapes fail closed; it does not probe alternate
 routes. Before live use, validate this mapping against one authorized,
 user-requested context and revise it through review if necessary.
 

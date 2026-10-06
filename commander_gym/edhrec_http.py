@@ -104,10 +104,13 @@ def project_page(raw: bytes, url: str, commander_slug: str,
         data = page['container']['json_dict']
         commander_name = data['card']['name']
         lists = data['cardlists']
+        source_theme = data['selected_theme_slug']
     except (TypeError, ValueError, KeyError, RecursionError) as exc:
         raise CatalogError('unrecognized EDHREC page shape') from exc
     if not isinstance(commander_name, str) or not isinstance(lists, list):
         raise CatalogError('unrecognized EDHREC page shape')
+    if source_theme != theme_slug:
+        raise CatalogError('EDHREC source theme does not match requested context')
     cards = []
     for group in lists:
         if not isinstance(group, dict) or not isinstance(group.get('cardviews'), list):
