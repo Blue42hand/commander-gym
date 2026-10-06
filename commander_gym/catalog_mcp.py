@@ -13,9 +13,18 @@ from typing import Any
 
 from .catalog_access import CatalogAccess
 from .card_catalog import CatalogError
+from .deckbuilding_methodology import Document, get_methodology
 
 
 MAX_RESULT_BYTES = 500_000
+SERVER_INSTRUCTIONS = (
+    "For Commander deckbuilding or revisions, load get_deckbuilding_methodology "
+    "for SKILL.md and each of its three references before building. This is a pinned "
+    "copy of methodology, not a native ChatGPT skill. For card discovery, call "
+    "catalog_status first and pass its snapshot_id to catalog tools. Tags are "
+    "advisory, missing price is unknown, and Argentum is authoritative for game "
+    "rules and card implementations."
+)
 
 
 def _bounded(result: Any) -> Any:
@@ -25,7 +34,7 @@ def _bounded(result: Any) -> Any:
 
 
 def build_server(root: str | Path):
-    """Register only the four bounded discovery tools on the official MCP SDK."""
+    """Register bounded public catalog and pinned methodology read tools."""
     from mcp.server import MCPServer
     from mcp.server.mcpserver.exceptions import ToolError
     from mcp.types import ToolAnnotations
@@ -40,12 +49,20 @@ def build_server(root: str | Path):
 
     server = MCPServer(
         "commander-gym-public-cards",
-        instructions=("Public Scryfall card discovery only. Call catalog_status first and pass its "
-                      "snapshot_id to subsequent tools. Tags are advisory, missing price is unknown, "
-                      "and Argentum is authoritative for game rules and card implementations."),
+        instructions=SERVER_INSTRUCTIONS,
     )
     readonly = ToolAnnotations(readOnlyHint=True, destructiveHint=False,
                                idempotentHint=True, openWorldHint=False)
+
+    @server.tool(annotations=readonly)
+    def get_deckbuilding_methodology(document: Document = "SKILL.md") -> dict[str, Any]:
+        """Read one exact, pinned Commander Deckbuilding skill document.
+
+        Read SKILL.md and all three listed references before building or
+        revising a deck. The response includes the bundle version, each
+        document hash, its canonical skill source, and the selected content.
+        """
+        return _bounded(get_methodology(document))
 
     @server.tool(annotations=readonly)
     def catalog_status(snapshot_id: str | None = None) -> dict[str, Any]:
