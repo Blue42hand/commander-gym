@@ -318,6 +318,7 @@ def launch_one_game(args: argparse.Namespace, index: int, log: Path, output_dir:
         previous_term = signal.signal(signal.SIGTERM, interrupted)
         previous_int = signal.signal(signal.SIGINT, interrupted)
         child = None
+        exit_code = None
         try:
             child = subprocess.Popen(
                 command, stdout=stream, stderr=subprocess.STDOUT,
@@ -325,12 +326,11 @@ def launch_one_game(args: argparse.Namespace, index: int, log: Path, output_dir:
             )
             while not stop_requested:
                 try:
-                    return child.wait(timeout=0.5)
+                    exit_code = child.wait(timeout=0.5)
+                    break
                 except subprocess.TimeoutExpired:
                     continue
-            raise InterruptedError("batch launcher received a termination signal")
         finally:
-            signal.signal(signal.SIGTERM, signal.SIG_IGN)
             try:
                 if child is not None:
                     _stop_and_verify_group(child)
@@ -340,6 +340,11 @@ def launch_one_game(args: argparse.Namespace, index: int, log: Path, output_dir:
             finally:
                 signal.signal(signal.SIGTERM, previous_term)
                 signal.signal(signal.SIGINT, previous_int)
+    if stop_requested:
+        raise InterruptedError("batch launcher received a termination signal")
+    if exit_code is None:
+        raise BatchError("game launcher exited without a status")
+    return exit_code
 
 
 def _identity(args: argparse.Namespace) -> dict[str, Any]:

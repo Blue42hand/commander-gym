@@ -293,6 +293,32 @@ class SequentialV7BatchTests(unittest.TestCase):
                                       self.start["estimatedUsd"] + 10)
         cleanup.assert_called_once_with(child)
 
+    def test_signal_during_success_cleanup_never_starts_next_game(self):
+        class SuccessfulChild:
+            pid = 12345
+            def wait(self, timeout=None):
+                return 0
+
+        for stop_signal in (signal.SIGTERM, signal.SIGINT):
+            with self.subTest(stop_signal=stop_signal):
+                self.ledger.write_text(json.dumps(self.start))
+                self.args.batch_dir = self.root / f"batch-{stop_signal}"
+                self.args.runtime_lock = self.root / f"lock-{stop_signal}"
+                launches = []
+                def start(*_args, **_kwargs):
+                    launches.append(1)
+                    return SuccessfulChild()
+                def cleanup(_child):
+                    signal.getsignal(stop_signal)(stop_signal, None)
+                with patch.object(batch, "_identity", return_value=self.identity), \
+                     patch.object(batch.subprocess, "Popen", side_effect=start), \
+                     patch.object(batch, "_stop_and_verify_group", side_effect=cleanup):
+                    with self.assertRaises(InterruptedError):
+                        batch.run_batch(self.args)
+                self.assertEqual(launches, [1])
+                self.assertEqual(json.loads((self.args.batch_dir / "cursor.json").read_text())["status"],
+                                 "inflight")
+
 
 if __name__ == "__main__":
     unittest.main()
