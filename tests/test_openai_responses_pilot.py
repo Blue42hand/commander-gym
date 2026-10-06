@@ -332,6 +332,46 @@ class OpenAIResponsesPilotTests(unittest.TestCase):
             OpenAIResponsesPilot(client=client, model="gpt-test").choose(obs)
         self.assertEqual(client.responses.calls, [])
 
+    def test_native_global_blocker_cap_retries_two_distinct_blockers(self):
+        obs = action_observation()
+        obs["legalActions"] = [{
+            "actionId": 0, "semanticId": "argentum-action-v1:declare-blockers",
+            "kind": "DeclareBlockers", "actionType": "DeclareBlockers",
+            "parameterSpec": {"allowedFields": {"blockers": "ENTITY_ID_ARRAY_MAP"}},
+            "validBlockTargets": {"e270": ["e0"], "e453": ["e0"]},
+            "maxTotalBlockers": 1,
+        }]
+        invalid = {"channel": "action", "choice": {
+            "semanticId": "argentum-action-v1:declare-blockers",
+            "params": {"blockers": {"e270": ["e0"], "e453": ["e0"]}},
+        }}
+        valid = {"channel": "action", "choice": {
+            "semanticId": "argentum-action-v1:declare-blockers",
+            "params": {"blockers": {"e270": ["e0"]}},
+        }}
+        client = FakeClient([FakeResponse(json.dumps(invalid)), FakeResponse(json.dumps(valid))])
+        choice = OpenAIResponsesPilot(client=client, model="gpt-test").choose(obs)
+        self.assertEqual(choice.params, valid["choice"]["params"])
+        self.assertEqual(choice.metadata["retryCount"], 1)
+        schema = client.responses.calls[0]["text"]["format"]["schema"]["properties"] \
+            ["choice"]["anyOf"][0]["properties"]["params"]["properties"]["blockers"]
+        self.assertIn("at most 1 distinct blocker", schema["description"])
+        self.assertIn("exceeds native maxTotalBlockers", client.responses.calls[1]["input"])
+
+    def test_native_global_blocker_cap_rejects_malformed_offer_before_model(self):
+        obs = action_observation()
+        obs["legalActions"] = [{
+            "actionId": 0, "semanticId": "argentum-action-v1:declare-blockers",
+            "kind": "DeclareBlockers", "actionType": "DeclareBlockers",
+            "parameterSpec": {"allowedFields": {"blockers": "ENTITY_ID_ARRAY_MAP"}},
+            "validBlockTargets": {"e270": ["e0"]},
+            "maxTotalBlockers": True,
+        }]
+        client = FakeClient(FakeResponse("{}"))
+        with self.assertRaisesRegex(OpenAIResponsesPilotError, "maxTotalBlockers is malformed"):
+            OpenAIResponsesPilot(client=client, model="gpt-test").choose(obs)
+        self.assertEqual(client.responses.calls, [])
+
     def test_compact_model_view_preserves_exact_native_observation_in_provenance(self):
         obs = action_observation()
         obs["state"] = {"cards": {

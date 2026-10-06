@@ -120,6 +120,7 @@ class GameServerSeatAdapterTests(unittest.TestCase):
             "validBlockers": ["drake"],
             "validBlockTargets": {"drake": ["bear"]},
             "blockerMaxBlockCounts": {"drake": 1},
+            "maxTotalBlockers": 1,
             "action": {"type": "DeclareBlockers", "playerId": "ai", "blockers": {}},
         }
         provider = OpenAIResponsesPilot(
@@ -133,6 +134,7 @@ class GameServerSeatAdapterTests(unittest.TestCase):
         offered = compact["observation"]["legalActions"][0]
         self.assertEqual(offered["validBlockTargets"], {"drake": ["bear"]})
         self.assertEqual(offered["blockerMaxBlockCounts"], {"drake": 1})
+        self.assertEqual(offered["maxTotalBlockers"], 1)
         self.assertNotIn("actionId", offered)
 
     def test_native_structured_decision_round_trip(self):
