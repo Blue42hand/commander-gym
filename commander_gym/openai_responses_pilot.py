@@ -413,6 +413,15 @@ def _native_block_targets(action: Mapping[str, Any]) -> dict[str, list[str]] | N
     return {blocker: list(attackers) for blocker, attackers in offered.items()}
 
 
+def _native_block_cap(action: Mapping[str, Any]) -> int | None:
+    if action.get("kind", action.get("actionType")) != "DeclareBlockers":
+        return None
+    cap = action.get("maxTotalBlockers")
+    if cap is not None and (type(cap) is not int or cap < 0):
+        raise OpenAIResponsesPilotError("native maxTotalBlockers is malformed")
+    return cap
+
+
 def _native_attack_targets(action: Mapping[str, Any]) -> tuple[list[str], list[str]] | None:
     """Read the current native attacker and defender candidates as one offer."""
     if action.get("kind", action.get("actionType")) != "DeclareAttackers":
@@ -450,10 +459,14 @@ def _native_action_field_schema(action: Mapping[str, Any], name: str, kind: str)
     if name == "blockers" and kind == "ENTITY_ID_ARRAY_MAP":
         targets = _native_block_targets(action)
         if targets is not None:
-            return {"type": "object", "properties": {
+            cap = _native_block_cap(action)
+            schema = {"type": "object", "properties": {
                 blocker: {"type": "array", "items": {"type": "string", "enum": attackers}}
                 for blocker, attackers in targets.items()
             }, "additionalProperties": False}
+            if cap is not None:
+                schema["description"] = f"Select at most {cap} distinct blocker keys."
+            return schema
     return _ACTION_PARAM_SCHEMAS[kind]
 
 
@@ -827,6 +840,9 @@ def _validate_native_action_params(
         for blocker, attackers in params["blockers"].items()
     ):
         raise OpenAIResponsesPilotError("ActionParams.blockers contains a pair outside native validBlockTargets")
+    cap = _native_block_cap(action)
+    if cap is not None and "blockers" in params and len(params["blockers"]) > cap:
+        raise OpenAIResponsesPilotError("ActionParams.blockers exceeds native maxTotalBlockers")
     attack_offer = _native_attack_targets(action)
     if attack_offer is not None and "attackers" in params:
         attackers, targets = attack_offer
