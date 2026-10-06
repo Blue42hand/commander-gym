@@ -222,6 +222,40 @@ def _image_uris(value: object) -> dict[str, str] | None:
     return value
 
 
+def _color_list(value: object, field: str) -> list[str] | None:
+    if value is None:
+        return None
+    if (not isinstance(value, list) or
+            any(not isinstance(color, str) or color not in {'W', 'U', 'B', 'R', 'G'}
+                for color in value) or
+            len(set(value)) != len(value)):
+        raise CatalogLoadError(f'{field} must be a WUBRG array or null')
+    return [color for color in 'WUBRG' if color in value]
+
+
+def _rank(value: object, field: str) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 2**63 - 1:
+        raise CatalogLoadError(f'{field} must be a positive integer or null')
+    return value
+
+
+def _strings(value: object, field: str) -> list[str] | None:
+    if value is None:
+        return None
+    if (not isinstance(value, list) or len(value) > 64 or
+            any(not isinstance(item, str) or not 1 <= len(item) <= 120 for item in value)):
+        raise CatalogLoadError(f'{field} must be a bounded string array or null')
+    return value
+
+
+def _optional_bool(value: object, field: str) -> bool | None:
+    if value is not None and not isinstance(value, bool):
+        raise CatalogLoadError(f'{field} must be boolean or null')
+    return value
+
+
 def _authoring(row: dict) -> dict:
     return {
         'mana_cost': _optional_text(row.get('mana_cost'), 'mana_cost', 256),
@@ -229,6 +263,16 @@ def _authoring(row: dict) -> dict:
         'artist': _optional_text(row.get('artist'), 'artist', 512),
         'flavor_text': _optional_text(row.get('flavor_text'), 'flavor_text', 8192),
         'image_uris': _image_uris(row.get('image_uris')),
+        'colors': _color_list(row.get('colors'), 'colors'),
+        'color_indicator': _color_list(row.get('color_indicator'), 'color_indicator'),
+        'power': _optional_text(row.get('power'), 'power', 64),
+        'toughness': _optional_text(row.get('toughness'), 'toughness', 64),
+        'loyalty': _optional_text(row.get('loyalty'), 'loyalty', 64),
+        'defense': _optional_text(row.get('defense'), 'defense', 64),
+        'layout': _optional_text(row.get('layout'), 'layout', 64),
+        'keywords': _strings(row.get('keywords'), 'keywords'),
+        'produced_mana': _strings(row.get('produced_mana'), 'produced_mana'),
+        'reserved': _optional_bool(row.get('reserved'), 'reserved'),
     }
 
 
@@ -257,12 +301,15 @@ def _card_data(row: dict) -> tuple[tuple[dict, ...], tuple[dict, ...], tuple]:
                        'oracle_text': _text(f.get('oracle_text', ''), 'face oracle_text', empty=True),
                        'oracle_id': _id(f.get('oracle_id'), 'face oracle_id') if reversible else None,
                        'mana_value': _mana(f.get('cmc')) if reversible else None,
+                       'edhrec_rank': _rank(f.get('edhrec_rank'), 'face edhrec_rank'),
+                       'penny_rank': _rank(f.get('penny_rank'), 'face penny_rank'),
                        **_authoring(f)}
                       for f in faces if isinstance(f, dict))
     if len(face_data) != len(faces):
         raise CatalogLoadError('card face must be object')
     colors = row.get('color_identity')
-    if (not isinstance(colors, list) or any(not isinstance(c, str) or c not in 'WUBRG' for c in colors)
+    if (not isinstance(colors, list) or
+            any(not isinstance(c, str) or c not in {'W', 'U', 'B', 'R', 'G'} for c in colors)
             or len(set(colors)) != len(colors)):
         raise CatalogLoadError('invalid color_identity')
     legalities = row.get('legalities')
@@ -276,6 +323,8 @@ def _card_data(row: dict) -> tuple[tuple[dict, ...], tuple[dict, ...], tuple]:
               'lang': lang, 'digital': int(digital), 'released_at': released,
               'set_code': _text(row.get('set'), 'set'),
               'collector_number': _text(row.get('collector_number'), 'collector_number'),
+              'edhrec_rank': _rank(row.get('edhrec_rank'), 'edhrec_rank'),
+              'penny_rank': _rank(row.get('penny_rank'), 'penny_rank'),
               'authoring': _authoring(row)}
     if reversible:
         # Two faces may share one Oracle identity (e.g. Propaganda // Propaganda).
@@ -285,7 +334,9 @@ def _card_data(row: dict) -> tuple[tuple[dict, ...], tuple[dict, ...], tuple]:
             by_oracle.setdefault(face['oracle_id'],
                                  {**common, 'oracle_id': face['oracle_id'], 'name': face['name'],
                                   'type_line': face['type_line'], 'oracle_text': face['oracle_text'],
-                                  'mana_value': face['mana_value'], 'face_index': index})
+                                  'mana_value': face['mana_value'], 'face_index': index,
+                                  'edhrec_rank': face['edhrec_rank'],
+                                  'penny_rank': face['penny_rank']})
         cards = tuple(by_oracle.values())
     else:
         cards = ({**common, 'oracle_id': _id(row.get('oracle_id'), 'oracle_id'), 'name': name,
@@ -321,14 +372,17 @@ def _load(db: sqlite3.Connection, snapshot: str, sources: dict[str, Source]) -> 
         for card in cards:
             oid = card['oracle_id']
             if oid not in ranks:
-                db.execute('INSERT INTO cards VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+                db.execute('INSERT INTO cards VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
                            (snapshot, oid, printing_id, card['name'], card['type_line'], card['oracle_text'],
-                            card['mana_value'], card['color_identity'], card['commander_legal'], card['price_usd'], card['scryfall_uri']))
+                            card['mana_value'], card['color_identity'], card['commander_legal'], card['price_usd'],
+                            card['scryfall_uri'], card['edhrec_rank'], card['penny_rank']))
             elif rank < ranks[oid]:
                 db.execute('UPDATE cards SET printing_id=?, name=?, type_line=?, oracle_text=?, mana_value=?, '
-                           'color_identity=?, commander_legal=?, price_usd=?, scryfall_uri=? WHERE snapshot_id=? AND oracle_id=?',
+                           'color_identity=?, commander_legal=?, price_usd=?, scryfall_uri=?, '
+                           'edhrec_rank=?, penny_rank=? WHERE snapshot_id=? AND oracle_id=?',
                            (printing_id, card['name'], card['type_line'], card['oracle_text'], card['mana_value'],
-                            card['color_identity'], card['commander_legal'], card['price_usd'], card['scryfall_uri'], snapshot, oid))
+                            card['color_identity'], card['commander_legal'], card['price_usd'], card['scryfall_uri'],
+                            card['edhrec_rank'], card['penny_rank'], snapshot, oid))
                 db.execute('DELETE FROM card_faces WHERE snapshot_id=? AND oracle_id=?', (snapshot, oid))
             if oid not in ranks or rank < ranks[oid]:
                 ranks[oid] = rank
@@ -336,12 +390,13 @@ def _load(db: sqlite3.Connection, snapshot: str, sources: dict[str, Source]) -> 
                     db.execute('INSERT INTO card_faces VALUES (?,?,?,?,?,?,?,?)',
                                (snapshot, oid, index, face['oracle_id'], face['mana_value'],
                                 face['name'], face['type_line'], face['oracle_text']))
-            db.execute('INSERT INTO printings VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            db.execute('INSERT INTO printings VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
                        (snapshot, printing_id, oid, card['face_index'], card['name'], card['type_line'], card['oracle_text'],
                         card['lang'], card['digital'], card['released_at'],
                         card['set_code'], card['collector_number'], card['price_usd'], card['scryfall_uri'],
                         json.dumps(faces, ensure_ascii=False),
-                        json.dumps(card['authoring'], ensure_ascii=False)))
+                        json.dumps(card['authoring'], ensure_ascii=False),
+                        card['edhrec_rank'], card['penny_rank']))
         counts['default_cards'] += 1
     for row in _records(sources['rulings']):
         if row.get('object') != 'ruling':

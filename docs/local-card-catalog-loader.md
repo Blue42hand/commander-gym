@@ -73,6 +73,27 @@ Oracle identity; it does not return its sibling as a separate hit.
 Oracle tag membership is advisory; absence never proves a gameplay role is
 absent. Only exact single-tag filtering is implemented.
 
+Schema 3 records optional Scryfall `edhrec_rank` and `penny_rank` for each
+Oracle search row and exact printing. Lower numbers mean higher popularity
+within that ranking; null means Scryfall supplied no rank. These values are
+snapshots of Scryfall's bulk data, not live EDHREC or Penny Dreadful queries.
+`search_cards` accepts bounded integer min/max filters for either rank and
+`sort_by=name|edhrec_rank|penny_rank`; rank sorts put nulls last and use name
+and Oracle ID to break ties. Cursors bind to the snapshot, filters, and sort.
+Older schema 1/2 snapshots remain readable with null ranks and reject rank
+filtering or sorting explicitly. A same-source upgrade to schema 3 creates a
+new immutable snapshot; it does not modify an older one.
+
+The authoring-field audit for the card and face result covers name, type,
+Oracle text, mana value, color identity, Commander legality, mana cost,
+printed colors and color indicator, power, toughness, loyalty, defense,
+layout, keywords, produced mana, reserved-list flag, rarity, artist, flavor
+text, and image URI map. `get_card(printing_id=...)` keeps exact printing and
+face evidence distinct from the representative Oracle row. Fields omitted by
+Scryfall remain null; numeric-looking combat stats stay strings because values
+such as `*` and `X` are valid. Localized printed-name/text variants and
+cosmetic print metadata are outside this bounded deck-discovery result.
+
 The full public corpus has not yet been downloaded or validated in this
 worktree. A real import should be reviewed and run in a separate private
 catalog directory on the data volume, prepared by the migration owner. It must

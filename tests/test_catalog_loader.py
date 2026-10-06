@@ -107,14 +107,18 @@ class CatalogLoaderTests(unittest.TestCase):
         old.update({'set': 'm21', 'collector_number': '117',
                     'mana_cost': '{2}', 'rarity': 'rare', 'artist': 'First Artist',
                     'flavor_text': 'First printing.',
+                    'layout': 'normal', 'colors': ['B'], 'power': '2', 'toughness': '*',
+                    'keywords': ['Deathtouch'], 'reserved': False,
                     'image_uris': {'normal': 'https://cards.scryfall.io/normal/old.jpg'}})
         new.update({'set': 'sld', 'collector_number': '123',
                     'rarity': 'mythic', 'artist': 'Second Artist'})
         new['card_faces'] = [
             {**self.faces[0], 'mana_cost': '{1}', 'artist': 'Front Artist',
+             'colors': ['U'], 'power': '1', 'toughness': '2',
              'flavor_text': 'Front flavor.',
              'image_uris': {'normal': 'https://cards.scryfall.io/normal/front.jpg'}},
             {**self.faces[1], 'mana_cost': '{1}', 'artist': 'Back Artist',
+             'colors': ['R'], 'power': '3', 'toughness': '4',
              'image_uris': {'normal': 'https://cards.scryfall.io/normal/back.jpg'}},
         ]
         metadata = publish_from_files(self.root / 'details', self.sources())
@@ -133,6 +137,10 @@ class CatalogLoaderTests(unittest.TestCase):
         self.assertEqual((requested['requested_printing']['set_code'],
                           requested['requested_printing']['collector_number']), ('m21', '117'))
         self.assertEqual(requested['requested_printing']['mana_cost'], '{2}')
+        self.assertEqual(requested['requested_printing']['colors'], ['B'])
+        self.assertEqual((requested['requested_printing']['power'],
+                          requested['requested_printing']['toughness']), ('2', '*'))
+        self.assertEqual(requested['requested_printing']['keywords'], ['Deathtouch'])
         self.assertEqual(requested['requested_printing']['rarity'], 'rare')
         self.assertEqual(requested['requested_printing']['artist'], 'First Artist')
         self.assertEqual(requested['requested_printing']['flavor_text'], 'First printing.')
@@ -146,14 +154,77 @@ class CatalogLoaderTests(unittest.TestCase):
         self.assertIsNone(multi['image_uris'])
         self.assertEqual([face['mana_cost'] for face in multi['faces']], ['{1}', '{1}'])
         self.assertEqual(multi['faces'][0]['artist'], 'Front Artist')
+        self.assertEqual(multi['faces'][0]['colors'], ['U'])
+        self.assertEqual((multi['faces'][1]['power'], multi['faces'][1]['toughness']), ('3', '4'))
         self.assertEqual(multi['faces'][1]['image_uris']['normal'],
                          'https://cards.scryfall.io/normal/back.jpg')
         self.assertIsNone(multi['faces'][1]['flavor_text'])
+
+    def test_rank_search_sort_pagination_and_printing_provenance(self):
+        old, new = self.records['default_cards']
+        old.update({'edhrec_rank': 99, 'penny_rank': None})
+        new.update({'edhrec_rank': 10, 'penny_rank': 20})
+        for oid, pid, name, rank, penny in (
+                ('11111111-1111-4111-8111-111111111111',
+                 '11111111-2222-4222-8222-222222222222', 'Alpha', 10, 5),
+                ('22222222-1111-4111-8111-111111111111',
+                 '22222222-2222-4222-8222-222222222222', 'Beta', None, None),
+                ('33333333-1111-4111-8111-111111111111',
+                 '33333333-2222-4222-8222-222222222222', 'Gamma', 30, 5),
+                ('44444444-1111-4111-8111-111111111111',
+                 '44444444-2222-4222-8222-222222222222', 'Delta', None, None)):
+            record = card(pid, '2025-01-01', None)
+            record.update({'oracle_id': oid, 'name': name,
+                           'edhrec_rank': rank, 'penny_rank': penny})
+            self.records['default_cards'].append(record)
+        metadata = publish_from_files(self.root / 'ranks', self.sources())
+        query = CardCatalog(self.root / 'ranks/snapshots' / f"{metadata['snapshot_id']}.sqlite",
+                            metadata['snapshot_id'])
+        self.assertEqual(query.catalog_status()['schema_version'], 3)
+        self.assertTrue(query.catalog_status()['rank_fields_available'])
+        self.assertEqual(query.get_card(printing_id=OLD)['requested_printing']['edhrec_rank'], 99)
+        self.assertEqual(query.get_card(printing_id=OLD)['edhrec_rank'], 10)
+        self.assertIsNone(query.get_card(printing_id=OLD)['requested_printing']['penny_rank'])
+        names = []
+        cursor = None
+        while True:
+            page = query.search_cards(sort_by='edhrec_rank', limit=2, cursor=cursor)
+            names.extend(row['name'] for row in page['cards'])
+            cursor = page['next_cursor']
+            if cursor is None:
+                break
+        self.assertEqual(names, ['Alpha', 'Split Example', 'Gamma', 'Beta', 'Delta'])
+        self.assertEqual([row['name'] for row in query.search_cards(
+            sort_by='penny_rank', penny_rank_max=5)['cards']], ['Alpha', 'Gamma'])
+        self.assertEqual([row['name'] for row in query.search_cards(
+            edhrec_rank_min=30, edhrec_rank_max=30)['cards']], ['Gamma'])
+        first = query.search_cards(sort_by='edhrec_rank', limit=1)
+        with self.assertRaisesRegex(ValueError, 'another query'):
+            query.search_cards(sort_by='penny_rank', cursor=first['next_cursor'])
+        with self.assertRaisesRegex(ValueError, 'positive integer'):
+            query.search_cards(penny_rank_min=True)
+        with self.assertRaisesRegex(ValueError, 'reversed'):
+            query.search_cards(edhrec_rank_min=11, edhrec_rank_max=10)
 
     def test_invalid_image_uri_is_rejected(self):
         self.records['default_cards'][0]['image_uris'] = {'normal': 'http://example.test/card.jpg'}
         with self.assertRaisesRegex(CatalogLoadError, 'image_uris'):
             publish_from_files(self.root / 'bad-image', self.sources())
+
+    def test_invalid_rank_and_printed_color_are_rejected(self):
+        row = self.records['default_cards'][0]
+        row['edhrec_rank'] = False
+        with self.assertRaisesRegex(CatalogLoadError, 'edhrec_rank'):
+            publish_from_files(self.root / 'bad-rank', self.sources())
+        row['edhrec_rank'] = 5
+        for index, colors in enumerate((['B', 'B'], ['WU'], [''])):
+            row['colors'] = colors
+            with self.subTest(colors=colors), self.assertRaisesRegex(CatalogLoadError, 'colors'):
+                publish_from_files(self.root / f'bad-colors-{index}', self.sources())
+        row['colors'] = ['B']
+        row['color_identity'] = ['WU']
+        with self.assertRaisesRegex(CatalogLoadError, 'color_identity'):
+            publish_from_files(self.root / 'bad-color-identity', self.sources())
 
     def test_bad_files_and_partial_download_do_not_replace_current(self):
         publish_from_files(self.root / 'catalog', self.sources())
@@ -257,9 +328,11 @@ class CatalogLoaderTests(unittest.TestCase):
         reversible['name'] = 'Front // Back'
         reversible['card_faces'] = [
             {'name': 'Front', 'type_line': 'Creature', 'oracle_text': 'Front text.',
-             'oracle_id': OID, 'cmc': 2},
+             'oracle_id': OID, 'cmc': 2, 'edhrec_rank': 15, 'penny_rank': 25,
+             'colors': ['U'], 'power': '2', 'toughness': '3'},
             {'name': 'Back', 'type_line': 'Artifact', 'oracle_text': 'Back text.',
-             'oracle_id': OTHER, 'cmc': 3},
+             'oracle_id': OTHER, 'cmc': 3, 'edhrec_rank': 30, 'penny_rank': None,
+             'colors': [], 'defense': '4'},
         ]
         self.records['default_cards'] = [reversible]
         metadata = publish_from_files(self.root / 'reversible', self.sources())
@@ -270,6 +343,10 @@ class CatalogLoaderTests(unittest.TestCase):
         self.assertEqual(result['printing_id'], OLD)
         self.assertEqual([face['oracle_id'] for face in result['oracle_faces']], [OID, OTHER])
         self.assertEqual([face['mana_value'] for face in result['oracle_faces']], [2, 3])
+        self.assertEqual([face['edhrec_rank'] for face in result['oracle_faces']], [15, 30])
+        self.assertEqual(result['oracle_faces'][0]['requested_printing']['power'], None)
+        self.assertEqual(result['oracle_faces'][0]['requested_printing']['faces'][0]['power'], '2')
+        self.assertEqual(result['oracle_faces'][1]['requested_printing']['faces'][1]['defense'], '4')
         self.assertEqual(query.get_card(oracle_id=OTHER)['name'], 'Back')
         self.assertEqual({card['oracle_id'] for card in query.search_cards(name='Back')['cards']}, {OTHER})
         self.assertEqual({card['oracle_id'] for card in query.search_cards(type_line='Artifact')['cards']}, {OTHER})

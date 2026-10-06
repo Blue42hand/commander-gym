@@ -19,8 +19,12 @@ from typing import Any
 
 MAX_PAGE_SIZE = 50
 MAX_QUERY_LENGTH = 120
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 _SORT = "c.name COLLATE NOCASE, c.oracle_id"
+AUTHORING_FIELDS = ('mana_cost', 'rarity', 'artist', 'flavor_text', 'image_uris',
+                    'colors', 'color_indicator', 'power', 'toughness', 'loyalty',
+                    'defense', 'layout', 'keywords', 'produced_mana', 'reserved')
+RANK_FIELDS = ('edhrec_rank', 'penny_rank')
 
 
 class CatalogError(ValueError):
@@ -82,6 +86,8 @@ def create_schema(connection: sqlite3.Connection) -> None:
             commander_legal INTEGER,
             price_usd TEXT,
             scryfall_uri TEXT,
+            edhrec_rank INTEGER,
+            penny_rank INTEGER,
             PRIMARY KEY (snapshot_id, oracle_id)
         );
         CREATE INDEX cards_name ON cards(snapshot_id, name COLLATE NOCASE, oracle_id);
@@ -103,6 +109,8 @@ def create_schema(connection: sqlite3.Connection) -> None:
             scryfall_uri TEXT,
             faces_json TEXT NOT NULL,
             authoring_json TEXT NOT NULL,
+            edhrec_rank INTEGER,
+            penny_rank INTEGER,
             PRIMARY KEY (snapshot_id, printing_id, oracle_id),
             FOREIGN KEY(snapshot_id, oracle_id) REFERENCES cards(snapshot_id, oracle_id)
         );
@@ -205,6 +213,36 @@ def _cursor_decode(value: str | None, snapshot: str, scope: str) -> tuple[str, s
         raise CatalogError('invalid cursor') from exc
 
 
+def _rank_cursor_encode(snapshot: str, scope: str, rank: int | None, name: str, key: str) -> str:
+    raw = json.dumps([snapshot, scope, rank, name, key], separators=(',', ':')).encode()
+    return base64.urlsafe_b64encode(raw).decode().rstrip('=')
+
+
+def _rank_cursor_decode(value: str | None, snapshot: str, scope: str) -> tuple[int | None, str, str] | None:
+    if value is None:
+        return None
+    try:
+        if not isinstance(value, str) or len(value) > 1024:
+            raise ValueError()
+        parts = json.loads(base64.urlsafe_b64decode(value + '=' * (-len(value) % 4)))
+        if (not isinstance(parts, list) or len(parts) != 5 or
+                (parts[2] is not None and (isinstance(parts[2], bool) or
+                                           not isinstance(parts[2], int) or
+                                           not 1 <= parts[2] <= 2**63 - 1)) or
+                not isinstance(parts[3], str) or len(parts[3]) > MAX_QUERY_LENGTH * 4 or
+                not isinstance(parts[4], str) or len(parts[4]) > MAX_QUERY_LENGTH):
+            raise ValueError()
+        if parts[0] != snapshot:
+            raise CatalogError('cursor belongs to another snapshot')
+        if parts[1] != scope:
+            raise CatalogError('cursor belongs to another query')
+        return parts[2], parts[3], parts[4]
+    except CatalogError:
+        raise
+    except (ValueError, UnicodeDecodeError, binascii.Error) as exc:
+        raise CatalogError('invalid cursor') from exc
+
+
 class CardCatalog:
     """Query a pinned SQLite snapshot. The database is always opened read-only."""
 
@@ -235,12 +273,22 @@ class CardCatalog:
             row['authoring_fields_available'] = any(
                 column['name'] == 'authoring_json' for column in db.execute("PRAGMA table_info('printings')")
             )
-            row['schema_version'] = SCHEMA_VERSION if row['authoring_fields_available'] else 1
+            row['rank_fields_available'] = self._has_ranks(db)
+            row['expanded_authoring_fields_available'] = row['rank_fields_available']
+            row['schema_version'] = (3 if row['rank_fields_available'] else
+                                     2 if row['authoring_fields_available'] else 1)
+            row['rank_note'] = ('Lower numeric rank means more popular within that source. '
+                                'A null rank is unranked or unavailable in this snapshot; '
+                                'rank values reflect the pinned Scryfall bulk source date.')
             row['tag_note'] = 'Tags are advisory; a missing tag does not prove a card lacks a gameplay role.'
             row['datasets'] = [dict(r) for r in db.execute(
                 'SELECT kind, url, updated_at, compressed_size, sha256, downloaded_at '
                 'FROM dataset_sources WHERE snapshot_id=? ORDER BY kind', (self.snapshot_id,))]
             return row
+
+    @staticmethod
+    def _has_ranks(db: sqlite3.Connection) -> bool:
+        return {column['name'] for column in db.execute("PRAGMA table_info('cards')")} >= set(RANK_FIELDS)
 
     def search_tags(self, query: str, *, kind: str = 'oracle', limit: int = 20, cursor: str | None = None) -> dict[str, Any]:
         query = _required_term(query, 'query')
@@ -267,7 +315,10 @@ class CardCatalog:
                      type_line: str | None = None, tag_id: str | None = None,
                      tag_kind: str = 'oracle', commander_legal: bool | None = None,
                      color_identity: str | None = None, mana_value_min: float | None = None,
-                     mana_value_max: float | None = None, limit: int = 20,
+                     mana_value_max: float | None = None,
+                     edhrec_rank_min: int | None = None, edhrec_rank_max: int | None = None,
+                     penny_rank_min: int | None = None, penny_rank_max: int | None = None,
+                     sort_by: str = 'name', limit: int = 20,
                      cursor: str | None = None) -> dict[str, Any]:
         limit = _limit(limit)
         if tag_kind not in ('oracle', 'art'):
@@ -284,18 +335,36 @@ class CardCatalog:
                 raise CatalogError(f'{field} must be a nonnegative finite number')
         if mana_value_min is not None and mana_value_max is not None and mana_value_min > mana_value_max:
             raise CatalogError('mana value range is reversed')
+        if sort_by not in ('name', *RANK_FIELDS):
+            raise CatalogError('sort_by must be name, edhrec_rank, or penny_rank')
+        rank_filters = {field: value for field, value in (
+            ('edhrec_rank_min', edhrec_rank_min), ('edhrec_rank_max', edhrec_rank_max),
+            ('penny_rank_min', penny_rank_min), ('penny_rank_max', penny_rank_max)) if value is not None}
+        for field, value in rank_filters.items():
+            if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 2**63 - 1:
+                raise CatalogError(f'{field} must be a positive integer')
+        for rank in RANK_FIELDS:
+            low, high = rank_filters.get(rank + '_min'), rank_filters.get(rank + '_max')
+            if low is not None and high is not None and low > high:
+                raise CatalogError(f'{rank} range is reversed')
         name = _term(name, 'name')
         oracle_text = _term(oracle_text, 'oracle_text')
         type_line = _term(type_line, 'type_line')
         if tag_id is not None:
             tag_id = _required_term(tag_id, 'tag_id')
-        scope = _scope('search_cards', {
+        scoped_filters = {
             'name': name, 'oracle_text': oracle_text, 'type_line': type_line,
             'tag_id': tag_id, 'tag_kind': tag_kind,
             'commander_legal': commander_legal, 'color_identity': color_identity,
             'mana_value_min': mana_value_min, 'mana_value_max': mana_value_max,
-        })
-        after = _cursor_decode(cursor, self.snapshot_id, scope)
+        }
+        # Preserve existing name-sort cursor hashes for unchanged queries.
+        if rank_filters or sort_by != 'name':
+            scoped_filters.update(rank_filters)
+            scoped_filters['sort_by'] = sort_by
+        scope = _scope('search_cards', scoped_filters)
+        after = (_cursor_decode(cursor, self.snapshot_id, scope) if sort_by == 'name' else
+                 _rank_cursor_decode(cursor, self.snapshot_id, scope))
         where = ['c.snapshot_id=?']
         args: list[Any] = [self.snapshot_id]
         for column, value in (('name', name), ('oracle_text', oracle_text), ('type_line', type_line)):
@@ -323,16 +392,37 @@ class CardCatalog:
         if mana_value_max is not None:
             where.append('c.mana_value<=?')
             args.append(mana_value_max)
+        for field, value in rank_filters.items():
+            rank, bound = field.rsplit('_', 1)
+            where.append(f'c.{rank}{">=" if bound == "min" else "<="}?')
+            args.append(value)
         if after:
-            where.append('(c.name COLLATE NOCASE, c.oracle_id) > (?, ?)')
-            args.extend(after)
-        sql = 'SELECT c.* FROM cards c WHERE ' + ' AND '.join(where) + f' ORDER BY {_SORT} LIMIT ?'
+            if sort_by == 'name':
+                where.append('(c.name COLLATE NOCASE, c.oracle_id) > (?, ?)')
+                args.extend(after)
+            elif after[0] is None:
+                where.append(f'c.{sort_by} IS NULL AND (c.name COLLATE NOCASE, c.oracle_id) > (?, ?)')
+                args.extend(after[1:])
+            else:
+                where.append(f'(c.{sort_by} IS NULL OR c.{sort_by}>? OR '
+                             f'(c.{sort_by}=? AND (c.name COLLATE NOCASE, c.oracle_id) > (?, ?)))')
+                args.extend((after[0], after[0], *after[1:]))
+        order = (_SORT if sort_by == 'name' else
+                 f'c.{sort_by} IS NULL, c.{sort_by}, {_SORT}')
+        sql = 'SELECT c.* FROM cards c WHERE ' + ' AND '.join(where) + f' ORDER BY {order} LIMIT ?'
         with self._connect() as db:
+            if (rank_filters or sort_by != 'name') and not self._has_ranks(db):
+                raise CatalogError('rank fields unavailable in this snapshot')
             rows = [self._card(db, r) for r in db.execute(sql, (*args, limit + 1)).fetchall()]
         more = len(rows) > limit
         rows = rows[:limit]
         return {'snapshot_id': self.snapshot_id, 'cards': rows,
-                'next_cursor': _cursor_encode(self.snapshot_id, scope, rows[-1]['name'], rows[-1]['oracle_id']) if more else None,
+                'next_cursor': ((
+                    _cursor_encode(self.snapshot_id, scope, rows[-1]['name'], rows[-1]['oracle_id'])
+                    if sort_by == 'name' else
+                    _rank_cursor_encode(self.snapshot_id, scope, rows[-1][sort_by],
+                                        rows[-1]['name'], rows[-1]['oracle_id'])) if more else None),
+                'sort_by': sort_by,
                 'tags_advisory': True}
 
     def get_card(self, *, oracle_id: str | None = None, printing_id: str | None = None) -> dict[str, Any] | None:
@@ -374,6 +464,9 @@ class CardCatalog:
 
     def _card(self, db: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:
         result = dict(row)
+        for field in RANK_FIELDS:
+            result.setdefault(field, None)
+        result['rank_fields_available'] = self._has_ranks(db)
         source = db.execute(
             'SELECT card_source, tag_source, cards_updated_at, oracle_tags_updated_at, art_tags_updated_at '
             'FROM snapshots WHERE snapshot_id=?', (self.snapshot_id,)).fetchone()
@@ -396,12 +489,14 @@ class CardCatalog:
         ).fetchone()
         if representative is not None:
             details = self._printing(db, representative)
-            for field in ('mana_cost', 'rarity', 'artist', 'flavor_text', 'image_uris'):
+            for field in AUTHORING_FIELDS:
                 result[field] = details[field]
             result['authoring_fields_available'] = details['authoring_fields_available']
+            result['expanded_authoring_fields_available'] = details['expanded_authoring_fields_available']
         else:
-            result.update({field: None for field in ('mana_cost', 'rarity', 'artist', 'flavor_text', 'image_uris')})
+            result.update({field: None for field in AUTHORING_FIELDS})
             result['authoring_fields_available'] = False
+            result['expanded_authoring_fields_available'] = False
         result['tags_advisory'] = True
         result['printing_count'] = db.execute(
             'SELECT count(*) FROM printings WHERE snapshot_id=? AND oracle_id=?',
@@ -414,9 +509,10 @@ class CardCatalog:
         for face in result['faces']:
             index = face['face_index']
             source_face = representative_faces[index] if index < len(representative_faces) else {}
-            for field in ('mana_cost', 'rarity', 'artist', 'flavor_text', 'image_uris'):
+            for field in AUTHORING_FIELDS:
                 face[field] = source_face.get(field)
             face['authoring_fields_available'] = result['authoring_fields_available']
+            face['expanded_authoring_fields_available'] = result['expanded_authoring_fields_available']
         result['ruling_count'] = db.execute(
             'SELECT count(*) FROM rulings WHERE snapshot_id=? AND oracle_id=?',
             (self.snapshot_id, result['oracle_id'])).fetchone()[0]
@@ -429,12 +525,22 @@ class CardCatalog:
     def _printing(self, db: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:
         result = dict(row)
         result['faces'] = json.loads(result.pop('faces_json'))
+        for face in result['faces']:
+            for field in AUTHORING_FIELDS:
+                face.setdefault(field, None)
+        for field in RANK_FIELDS:
+            result.setdefault(field, None)
+        result['rank_fields_available'] = self._has_ranks(db)
         if 'authoring_json' in result:
             result.update(json.loads(result.pop('authoring_json')))
+            for field in AUTHORING_FIELDS:
+                result.setdefault(field, None)
             result['authoring_fields_available'] = True
+            result['expanded_authoring_fields_available'] = result['rank_fields_available']
         else:
-            result.update({field: None for field in ('mana_cost', 'rarity', 'artist', 'flavor_text', 'image_uris')})
+            result.update({field: None for field in AUTHORING_FIELDS})
             result['authoring_fields_available'] = False
+            result['expanded_authoring_fields_available'] = False
         result['provenance'] = {
             'snapshot_id': self.snapshot_id,
             'dataset': 'default_cards',

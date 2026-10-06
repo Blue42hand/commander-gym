@@ -19,7 +19,7 @@ class CardCatalogTests(unittest.TestCase):
                  'Scryfall Oracle Cards fixture', 'Scryfall oracle_tags fixture'),
                 ('s2', '2026-10-06T00:00:00Z', None, None, None, 'test', 'test'),
             ])
-            db.executemany('INSERT INTO cards VALUES (?,?,?,?,?,?,?,?,?,?,?)', [
+            db.executemany('INSERT INTO cards (snapshot_id, oracle_id, printing_id, name, type_line, oracle_text, mana_value, color_identity, commander_legal, price_usd, scryfall_uri) VALUES (?,?,?,?,?,?,?,?,?,?,?)', [
                 ('s1', 'oracle-a', 'printing-a', 'Arcane Signet', 'Artifact', '{T}: Add one mana of any color in your commander’s color identity.', 2, '', 1, None, 'https://scryfall.com/card/a'),
                 ('s1', 'oracle-b', 'printing-b', 'Ashnod’s Altar', 'Artifact', 'Sacrifice a creature: Add {C}{C}.', 3, '', 1, '5.20', 'https://scryfall.com/card/b'),
                 ('s1', 'oracle-c', 'printing-c', 'Boros Charm', 'Instant', 'Permanents you control gain indestructible.', 2, 'RW', 1, None, 'https://scryfall.com/card/c'),
