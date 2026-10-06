@@ -185,9 +185,7 @@ class SequentialV7BatchTests(unittest.TestCase):
         class Child:
             pid = 12345
             def wait(self, timeout=None):
-                if timeout is None:
-                    raise InterruptedError("signal")
-                return 0
+                raise InterruptedError("signal")
             def poll(self):
                 return None
 
@@ -280,6 +278,20 @@ class SequentialV7BatchTests(unittest.TestCase):
                 os.kill(pid, 0)
         self.assertEqual(json.loads((self.args.batch_dir / "cursor.json").read_text())["status"],
                          "inflight")
+
+    def test_signal_during_spawn_still_tracks_and_cleans_child(self):
+        child = SimpleNamespace(pid=12345)
+        def start(*_args, **_kwargs):
+            signal.getsignal(signal.SIGTERM)(signal.SIGTERM, None)
+            return child
+        self.args.before_estimated_usd = self.start["estimatedUsd"]
+        with patch.object(batch.subprocess, "Popen", side_effect=start), \
+             patch.object(batch, "_stop_and_verify_group") as cleanup:
+            with self.assertRaises(InterruptedError):
+                batch.launch_one_game(self.args, 1, self.root / "signal.log",
+                                      self.root / "game-01", 1732, 3,
+                                      self.start["estimatedUsd"] + 10)
+        cleanup.assert_called_once_with(child)
 
 
 if __name__ == "__main__":

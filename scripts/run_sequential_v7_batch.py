@@ -308,19 +308,27 @@ def launch_one_game(args: argparse.Namespace, index: int, log: Path, output_dir:
     environment = dict(os.environ)
     # An inherited experiment flag must not silently change the canonical run.
     environment["COMMANDER_GYM_CACHE_FRIENDLY_HISTORY"] = "false"
+    stop_requested = False
     def interrupted(_signum: int, _frame: Any) -> None:
-        raise InterruptedError("batch launcher received a termination signal")
+        nonlocal stop_requested
+        stop_requested = True
 
     with log.open("x", encoding="utf-8") as stream:
         os.chmod(log, 0o600)
         previous_term = signal.signal(signal.SIGTERM, interrupted)
+        previous_int = signal.signal(signal.SIGINT, interrupted)
         child = None
         try:
             child = subprocess.Popen(
                 command, stdout=stream, stderr=subprocess.STDOUT,
                 env=environment, cwd=gym_root, start_new_session=True,
             )
-            return child.wait()
+            while not stop_requested:
+                try:
+                    return child.wait(timeout=0.5)
+                except subprocess.TimeoutExpired:
+                    continue
+            raise InterruptedError("batch launcher received a termination signal")
         finally:
             signal.signal(signal.SIGTERM, signal.SIG_IGN)
             try:
@@ -331,6 +339,7 @@ def launch_one_game(args: argparse.Namespace, index: int, log: Path, output_dir:
                 _fsync_dir(log.parent)
             finally:
                 signal.signal(signal.SIGTERM, previous_term)
+                signal.signal(signal.SIGINT, previous_int)
 
 
 def _identity(args: argparse.Namespace) -> dict[str, Any]:
