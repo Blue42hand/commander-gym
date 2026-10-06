@@ -226,7 +226,8 @@ def _color_list(value: object, field: str) -> list[str] | None:
     if value is None:
         return None
     if (not isinstance(value, list) or
-            any(not isinstance(color, str) or color not in 'WUBRG' for color in value) or
+            any(not isinstance(color, str) or color not in {'W', 'U', 'B', 'R', 'G'}
+                for color in value) or
             len(set(value)) != len(value)):
         raise CatalogLoadError(f'{field} must be a WUBRG array or null')
     return [color for color in 'WUBRG' if color in value]
@@ -307,7 +308,8 @@ def _card_data(row: dict) -> tuple[tuple[dict, ...], tuple[dict, ...], tuple]:
     if len(face_data) != len(faces):
         raise CatalogLoadError('card face must be object')
     colors = row.get('color_identity')
-    if (not isinstance(colors, list) or any(not isinstance(c, str) or c not in 'WUBRG' for c in colors)
+    if (not isinstance(colors, list) or
+            any(not isinstance(c, str) or c not in {'W', 'U', 'B', 'R', 'G'} for c in colors)
             or len(set(colors)) != len(colors)):
         raise CatalogLoadError('invalid color_identity')
     legalities = row.get('legalities')

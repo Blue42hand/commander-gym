@@ -217,9 +217,14 @@ class CatalogLoaderTests(unittest.TestCase):
         with self.assertRaisesRegex(CatalogLoadError, 'edhrec_rank'):
             publish_from_files(self.root / 'bad-rank', self.sources())
         row['edhrec_rank'] = 5
-        row['colors'] = ['B', 'B']
-        with self.assertRaisesRegex(CatalogLoadError, 'colors'):
-            publish_from_files(self.root / 'bad-colors', self.sources())
+        for index, colors in enumerate((['B', 'B'], ['WU'], [''])):
+            row['colors'] = colors
+            with self.subTest(colors=colors), self.assertRaisesRegex(CatalogLoadError, 'colors'):
+                publish_from_files(self.root / f'bad-colors-{index}', self.sources())
+        row['colors'] = ['B']
+        row['color_identity'] = ['WU']
+        with self.assertRaisesRegex(CatalogLoadError, 'color_identity'):
+            publish_from_files(self.root / 'bad-color-identity', self.sources())
 
     def test_bad_files_and_partial_download_do_not_replace_current(self):
         publish_from_files(self.root / 'catalog', self.sources())
