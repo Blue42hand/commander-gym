@@ -99,6 +99,8 @@ class ExistingGameBudgetTests(unittest.TestCase):
                 checked_existing_budget(path, 8, 8, 906, 606, 0)
             with self.assertRaisesRegex(RuntimeError, "unsettled reservations changed"):
                 checked_existing_budget(path, 8, 8, 906, 0, 3)
+            with self.assertRaisesRegex(RuntimeError, "estimate changed"):
+                checked_existing_budget(path, 8, 8, 906, 0, 0, 0.01)
             with self.assertRaises(OpenAIRunBudgetError):
                 checked_existing_budget(path, 8, 8, 610, 0, 0)
 

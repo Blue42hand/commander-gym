@@ -1,0 +1,199 @@
+"""Offline controls for the paid sequential wrapper. No provider or game starts."""
+
+from argparse import Namespace
+import hashlib
+import json
+from pathlib import Path
+import sys
+import tempfile
+from types import SimpleNamespace
+import unittest
+from unittest.mock import patch
+
+from commander_gym.openai_run_budget import OpenAIRunBudget
+from scripts import run_sequential_v7_batch as batch
+
+
+class SequentialV7BatchTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.ledger = self.root / "existing-ledger.json"
+        self.start = {
+            "schemaVersion": 1, "capUsd": 18.0, "maxRequests": 2212,
+            "estimatedUsd": 14.870275991999986, "requests": 1732,
+            "inputTokens": 100, "outputTokens": 20, "unsettledRequests": 3,
+        }
+        self.ledger.write_text(json.dumps(self.start))
+        self.key = self.root / "key.env"
+        self.key.write_text("unused in offline test")
+        self.catalog = self.root / "catalog.json"
+        self.catalog.write_text("{}")
+        self.args = Namespace(
+            batch_dir=self.root / "batch", engine_dir=self.root,
+            instance_root=self.root, catalog=self.catalog,
+            python=Path(sys.executable), api_key_file=self.key,
+            budget_ledger=self.ledger, runtime_lock=self.root / "runtime.lock",
+            expected_gym_head="gym", expected_engine_head="engine",
+            existing_cap_usd=18.0, max_requests=2500,
+            expected_start_requests=1732, expected_start_unsettled=3,
+            expected_start_usd=14.870275991999986,
+            timeout=30, stall_seconds=10,
+        )
+        self.identity = {
+            "schemaVersion": 1, "gymHead": "gym", "engineHead": "engine",
+            "profiles": list(batch.PROFILES), "maxRequests": 2500,
+            "qualificationPreflight": {"catalogClosureSha256": "qualified"},
+        }
+
+    def _runner(self, calls, *, fail_at=None, retry_at=None):
+        def run(args, index, log, output_dir, expected_requests, expected_unsettled, cap):
+            calls.append(index)
+            budget = OpenAIRunBudget(self.ledger, cap, authorized_max_usd=cap,
+                                     max_requests=2500)
+            before = budget.snapshot()
+            self.assertEqual(expected_requests, before["requests"])
+            self.assertEqual(expected_unsettled, before["unsettledRequests"])
+            self.assertEqual(args.before_estimated_usd, before["estimatedUsd"])
+            budget.create(lambda **_: SimpleNamespace(usage={
+                "input_tokens": 20, "output_tokens": 1,
+                "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 20},
+            }), {"model": "gpt-6-luna", "max_output_tokens": budget.MAX_OUTPUT_TOKENS})
+            after = budget.snapshot()
+            game = output_dir / "native-game"
+            game.mkdir(parents=True)
+            (game / "policy.jsonl").write_text(json.dumps({"choice": {"metadata": {
+                "provider": "openai", "retryCount": 0,
+                "modelIo": {"attempts": [{"attempt": 0}]},
+            }}}) + "\n")
+            terminal = {"nativeGameOver": True}
+            for name, key in (("terminal-replay.json", "replaySha256"),
+                              ("terminal-state.json", "terminalStateSha256")):
+                path = game / name
+                path.write_text("{}\n")
+                terminal[key] = hashlib.sha256(path.read_bytes()).hexdigest()
+            result = {
+                "providerRequests": 1, "recordedGameApiRequests": 1,
+                "provenanceFinalizationComplete": True,
+                "fourSeatProvenanceComplete": True, "expectedSeats": 4,
+                "singlePodGame": True, "completed": True,
+                "stopReason": "native_complete", "terminalEvidence": {"nativeGameOver": True},
+                "terminalArtifact": terminal, "validationRetries": int(index == retry_at),
+                "technicalQualified": index != fail_at,
+                "budget": {"gameApiRequests": 1, "gameInputTokens": 20,
+                           "gameOutputTokens": 1, "cumulativeApiRequests": after["requests"],
+                           "unsettledRequests": after["unsettledRequests"], "capUsd": cap},
+            }
+            log.write_text(
+                "TWO_LUNA_QUALIFICATION_PREFLIGHT " + json.dumps(self.identity["qualificationPreflight"]) + "\n"
+                + "RUN_ARTIFACTS=" + str(game) + "\n"
+                + "TWO_LUNA_DEBUG_RESULT=" + json.dumps(result) + "\n"
+            )
+            return int(index == fail_at)
+        return run
+
+    def test_three_games_preserve_history_and_stop_at_three(self):
+        calls = []
+        with patch.object(batch, "_identity", return_value=self.identity):
+            cursor = batch.run_batch(self.args, runner=self._runner(calls))
+            again = batch.run_batch(self.args, runner=self._runner(calls))
+        self.assertEqual(cursor, {"status": "ready", "nextGame": 4})
+        self.assertEqual(again, cursor)
+        self.assertEqual(calls, [1, 2, 3])
+        after = json.loads(self.ledger.read_text())
+        self.assertEqual(after["requests"], 1735)
+        self.assertEqual(after["unsettledRequests"], 3)
+        self.assertEqual(after["maxRequests"], 2500)
+        self.assertEqual(after["capUsd"], self.start["estimatedUsd"] + 10)
+        self.assertTrue(all((self.args.batch_dir / f"game-{i:02d}-receipt.json").is_file()
+                            for i in range(1, 4)))
+
+    def test_recovered_retry_stops_before_second_game(self):
+        calls = []
+        with patch.object(batch, "_identity", return_value=self.identity):
+            cursor = batch.run_batch(self.args, runner=self._runner(calls, retry_at=1))
+            with self.assertRaisesRegex(batch.BatchError, "stopped or ambiguous"):
+                batch.run_batch(self.args, runner=self._runner(calls))
+        self.assertEqual(calls, [1])
+        self.assertEqual(cursor["status"], "stopped")
+        self.assertIn("recovered retry", cursor["reason"][0])
+
+    def test_inflight_exception_never_replays(self):
+        calls = []
+        def interrupted(*_):
+            calls.append(1)
+            raise RuntimeError("lost launcher")
+        with patch.object(batch, "_identity", return_value=self.identity):
+            with self.assertRaisesRegex(RuntimeError, "lost launcher"):
+                batch.run_batch(self.args, runner=interrupted)
+            with self.assertRaisesRegex(batch.BatchError, "stopped or ambiguous"):
+                batch.run_batch(self.args, runner=self._runner(calls))
+        self.assertEqual(calls, [1])
+        self.assertEqual(json.loads((self.args.batch_dir / "cursor.json").read_text())["status"],
+                         "inflight")
+
+    def test_terminal_replay_tamper_stops_before_second_game(self):
+        calls = []
+        normal = self._runner(calls)
+        def corrupted(args, index, log, output_dir, expected_requests,
+                      expected_unsettled, cap):
+            code = normal(args, index, log, output_dir, expected_requests,
+                          expected_unsettled, cap)
+            (output_dir / "native-game" / "terminal-replay.json").write_text("tampered\n")
+            return code
+        with patch.object(batch, "_identity", return_value=self.identity):
+            cursor = batch.run_batch(self.args, runner=corrupted)
+        self.assertEqual(calls, [1])
+        self.assertEqual(cursor["status"], "stopped")
+        self.assertTrue(any("terminal-replay.json hash" in reason for reason in cursor["reason"]))
+
+    def test_ledger_drift_refuses_next_dispatch(self):
+        calls = []
+        with patch.object(batch, "_identity", return_value=self.identity):
+            batch.run_batch(self.args, runner=self._runner(calls))
+            changed = json.loads(self.ledger.read_text())
+            changed["estimatedUsd"] += 0.01
+            self.ledger.write_text(json.dumps(changed))
+            with self.assertRaisesRegex(batch.BatchError, "changed outside"):
+                batch.run_batch(self.args, runner=self._runner(calls))
+        self.assertEqual(calls, [1, 2, 3])
+
+    def test_wrong_start_or_existing_artifacts_refuse_before_cap_change(self):
+        self.args.batch_dir.mkdir()
+        (self.args.batch_dir / "foreign.txt").write_text("do not overwrite")
+        with patch.object(batch, "_identity", return_value=self.identity):
+            with self.assertRaisesRegex(batch.BatchError, "evidence exists"):
+                batch.run_batch(self.args, runner=self._runner([]))
+        self.assertEqual(json.loads(self.ledger.read_text()), self.start)
+
+    def test_launcher_forces_reviewed_route_and_cleans_interrupted_child(self):
+        class Child:
+            pid = 12345
+            def wait(self, timeout=None):
+                if timeout is None:
+                    raise InterruptedError("signal")
+                return 0
+            def poll(self):
+                return None
+
+        log = self.root / "launch.log"
+        self.args.before_estimated_usd = self.start["estimatedUsd"]
+        with patch.object(batch.subprocess, "Popen", return_value=Child()) as popen, \
+             patch.object(batch.os, "killpg") as kill, \
+             patch.dict(batch.os.environ, {"COMMANDER_GYM_CACHE_FRIENDLY_HISTORY": "true"}):
+            with self.assertRaises(InterruptedError):
+                batch.launch_one_game(self.args, 1, log, self.root / "game-01",
+                                      1732, 3, self.start["estimatedUsd"] + 10)
+        command = popen.call_args.args[0]
+        self.assertEqual(command[1:3], ["-m", "scripts.run_two_luna_binding_game"])
+        self.assertIn("--qualified-v7-comparison", command)
+        self.assertEqual(command.count("--profile"), 4)
+        self.assertIn("--expected-ledger-estimated-usd", command)
+        self.assertEqual(popen.call_args.kwargs["env"]["COMMANDER_GYM_CACHE_FRIENDLY_HISTORY"],
+                         "false")
+        kill.assert_called_once_with(12345, batch.signal.SIGTERM)
+
+
+if __name__ == "__main__":
+    unittest.main()

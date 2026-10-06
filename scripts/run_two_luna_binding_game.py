@@ -36,7 +36,8 @@ def read_key(path):
 
 
 def checked_existing_budget(ledger, cap, authorized_max, max_requests,
-                            expected_requests, expected_unsettled):
+                            expected_requests, expected_unsettled,
+                            expected_estimated_usd=None):
     if not ledger.is_file() or not ledger.read_bytes():
         raise RuntimeError("existing nonempty cumulative budget ledger required")
     snapshot = OpenAIRunBudget(
@@ -46,6 +47,9 @@ def checked_existing_budget(ledger, cap, authorized_max, max_requests,
         raise RuntimeError("cumulative ledger request count changed before game launch")
     if expected_unsettled is not None and snapshot["unsettledRequests"] != expected_unsettled:
         raise RuntimeError("cumulative ledger unsettled reservations changed before game launch")
+    if (expected_estimated_usd is not None
+        and snapshot["estimatedUsd"] != expected_estimated_usd):
+        raise RuntimeError("cumulative ledger estimate changed before game launch")
     return snapshot
 
 
@@ -89,6 +93,7 @@ def main():
     parser.add_argument("--budget-max-requests", type=int)
     parser.add_argument("--expected-ledger-requests", type=int)
     parser.add_argument("--expected-unsettled-requests", type=int)
+    parser.add_argument("--expected-ledger-estimated-usd", type=float)
     parser.add_argument("--max-attempts", type=int, default=2)
     parser.add_argument("--profile-a")
     parser.add_argument("--profile-b")
@@ -136,7 +141,7 @@ def main():
         checked_existing_budget(
             ledger, args.budget_cap, args.budget_authorized_max,
             args.budget_max_requests, args.expected_ledger_requests,
-            args.expected_unsettled_requests,
+            args.expected_unsettled_requests, args.expected_ledger_estimated_usd,
         )
     if args.dry_run and not ledger.exists():
         OpenAIRunBudget(
