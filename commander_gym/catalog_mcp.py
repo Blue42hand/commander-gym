@@ -13,6 +13,7 @@ from typing import Any
 
 from .catalog_access import CatalogAccess
 from .card_catalog import CatalogError
+from .edhrec_compare import ContextReader, compare_contexts
 
 
 MAX_RESULT_BYTES = 500_000
@@ -24,8 +25,8 @@ def _bounded(result: Any) -> Any:
     return result
 
 
-def build_server(root: str | Path):
-    """Register only the four bounded discovery tools on the official MCP SDK."""
+def build_server(root: str | Path, edhrec_reader: ContextReader | None = None):
+    """Register four catalog tools; add comparison only with an injected source."""
     from mcp.server import MCPServer
     from mcp.server.mcpserver.exceptions import ToolError
     from mcp.types import ToolAnnotations
@@ -104,6 +105,31 @@ def build_server(root: str | Path):
         Supply exactly one ID. Missing prices stay null, and tags are advisory.
         """
         return checked(lambda: access.get_card(snapshot_id, oracle_id=oracle_id, printing_id=printing_id))
+
+    if edhrec_reader is not None:
+        @server.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False,
+                                                  idempotentHint=False, openWorldHint=True))
+        def compare_commander_themes(snapshot_id: str, commander_oracle_id: str,
+                                     commander_slug: str, theme_a: str | None,
+                                     theme_b: str | None, limit: int = 20) -> dict[str, Any]:
+            """Compare inclusion in two explicitly chosen EDHREC contexts.
+
+            Use null for overall. Theme populations can overlap. EDHREC context
+            data is ephemeral and cannot be historically replayed; Scryfall
+            identity is pinned to snapshot_id. No live source is bundled.
+            """
+            def query():
+                commander = access.get_card(snapshot_id, oracle_id=commander_oracle_id)
+                if commander is None:
+                    raise CatalogError('commander Oracle ID unavailable in snapshot')
+                result = compare_contexts(
+                    edhrec_reader, commander_slug, theme_a, theme_b,
+                    lambda name, oid: access.resolve_exact_name(snapshot_id, name, oid),
+                    limit=limit)
+                result['snapshot_id'] = snapshot_id
+                result['commander_oracle_id'] = commander_oracle_id
+                return result
+            return checked(query)
 
     return server
 
