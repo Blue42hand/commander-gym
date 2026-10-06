@@ -136,6 +136,12 @@ BUILTIN_FORGE_DECLARATIVE_CONTINUATION_COMPONENT_REF = ArtifactRef(
     version="6",
     digest="sha256:425ea6c84b91cd8a1ffae495c79214acaf2d7518f6a0f9db714c25ee634391e0",
 )
+BUILTIN_FORGE_BOUNDED_RECOVERY_COMPONENT_REF = ArtifactRef(
+    kind="provider",
+    artifact_id="openai-responses-forge-conditional-wait",
+    version="7",
+    digest="sha256:c31e254cae2e22aa347022706296d6996dd09d78b232be157b2b832296dc342f",
+)
 
 
 def _component_key(ref: ArtifactRef) -> tuple[str, str, str, str | None]:
@@ -449,6 +455,34 @@ class OpenAIBindingPilotComponentResolver:
                         allow_declarative_continuation=True,
                     ),
                     name="forge-conditional-wait", version="5",
+                    allow_named_deferrals=True,
+                    guarded_then_cast_templates=True,
+                    allow_declarative_continuation=True,
+                )
+            )
+        if (
+            spec.role == "frontier_escalation"
+            and key == _component_key(BUILTIN_FORGE_BOUNDED_RECOVERY_COMPONENT_REF)
+        ):
+            if self.budget is None:
+                raise PilotContractError("bounded provider recovery requires a durable budget")
+            return ArtificialPlayerSubsystem(
+                DelegatedAutopassPilot(
+                    OpenAIResponsesPilot(
+                        client=self.client,
+                        model=self.config.model,
+                        max_attempts=self.config.max_attempts,
+                        budget=self.budget,
+                        retry_transient_server_errors=True,
+                        cache_friendly_history=self.cache_friendly_history,
+                        allow_priority_delegation=True,
+                        allow_named_deferrals=True,
+                        require_nonempty_named_deferrals=True,
+                        compact_model_observation=True,
+                        guarded_then_cast_templates=True,
+                        allow_declarative_continuation=True,
+                    ),
+                    name="forge-conditional-wait", version="6",
                     allow_named_deferrals=True,
                     guarded_then_cast_templates=True,
                     allow_declarative_continuation=True,

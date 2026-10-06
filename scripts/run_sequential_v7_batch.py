@@ -136,9 +136,23 @@ def _policy_attempts(path: Path) -> tuple[int, int, str]:
                 model_io = metadata.get("modelIo")
                 if (not isinstance(model_io, dict)
                     or not isinstance(model_io.get("attempts"), list)
-                    or len(model_io["attempts"]) != retries + 1):
+                    or not model_io["attempts"]):
                     raise BatchError("provider attempt receipt count is inconsistent")
-                count += retries + 1
+                attempts = model_io["attempts"]
+                transport_errors = sum(
+                    isinstance(attempt, dict)
+                    and isinstance(attempt.get("response"), dict)
+                    and isinstance(attempt["response"].get("transportError"), str)
+                    for attempt in attempts
+                )
+                if (len(attempts) != retries + transport_errors + 1
+                    or transport_errors and (
+                        not isinstance(attempts[-1], dict)
+                        or not isinstance(attempts[-1].get("response"), dict)
+                        or "transportError" in attempts[-1]["response"]
+                    )):
+                    raise BatchError("provider attempt receipt count is inconsistent")
+                count += len(attempts)
     return count, callbacks, digest.hexdigest()
 
 
@@ -258,6 +272,8 @@ def _verify_game(
             policy_sha = None
         if result.get("validationRetries") != 0:
             reasons.append("recovered retry: natural completion is not strict zero-retry qualification")
+        if result.get("providerTransportErrors", 0) != 0:
+            reasons.append("provider transport error occurred during game")
         if result.get("technicalQualified") is not True or launcher_code != 0:
             reasons.append("launcher did not pass strict qualification")
     else:

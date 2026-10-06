@@ -253,6 +253,14 @@ def _provider_failure_summary(exc: Exception) -> str:
     return ", ".join(parts)
 
 
+def _retryable_provider_status(exc: Exception) -> bool:
+    """Recognize a bounded server failure without trusting exception text."""
+
+    return type(getattr(exc, "status_code", None)) is int and exc.status_code in {
+        500, 502, 503, 504, 520,
+    }
+
+
 def _failed_model_io(attempts: list[dict[str, Any]]) -> dict[str, Any]:
     """Return a failure trace with no fabricated selected/successful model attempt."""
 
@@ -905,6 +913,7 @@ class OpenAIResponsesPilot:
     strategy: str | None = None
     max_attempts: int = 2
     budget: OpenAIRunBudget | None = None
+    retry_transient_server_errors: bool = False
     allow_priority_delegation: bool = False
     allow_named_deferrals: bool = False
     require_nonempty_named_deferrals: bool = False
@@ -928,6 +937,8 @@ class OpenAIResponsesPilot:
             raise OpenAIResponsesPilotError("compact_model_observation must be boolean")
         if type(self.cache_friendly_history) is not bool:
             raise OpenAIResponsesPilotError("cache_friendly_history must be boolean")
+        if type(self.retry_transient_server_errors) is not bool:
+            raise OpenAIResponsesPilotError("retry_transient_server_errors must be boolean")
         if self.strategy is not None:
             _require_string(self.strategy, "OpenAI pilot strategy")
         if type(self.max_attempts) is not int or self.max_attempts < 1:
@@ -1126,6 +1137,7 @@ class OpenAIResponsesPilot:
         validation_error: OpenAIResponsesPilotError | None = None
         attempts: list[dict[str, Any]] = []
         provider_wall_time_ms = 0.0
+        validation_retries = 0
         for attempt in range(self.max_attempts):
             if validation_error is not None:
                 correction = (
@@ -1167,8 +1179,9 @@ class OpenAIResponsesPilot:
                     str(exc),
                     model_io=_failed_model_io(attempts) if attempts else None,
                 ) from exc
-            except Exception as exc:  # Provider SDK owns transport-level retries.
+            except Exception as exc:
                 elapsed_ms = (perf_counter() - request_started) * 1000
+                provider_wall_time_ms += elapsed_ms
                 failure_summary = _provider_failure_summary(exc)
                 attempts.append(
                     {
@@ -1178,6 +1191,15 @@ class OpenAIResponsesPilot:
                                      "providerWallTimeMs": round(elapsed_ms, 3)},
                     }
                 )
+                # The bounded SDK has transport retries disabled. Give a transient
+                # server response one more independently reserved attempt, within
+                # the existing total max_attempts ceiling. Budget rejection and
+                # non-server errors remain fail-closed; ambiguous attempts retain
+                # their reservation and their model-I/O receipt.
+                if (self.retry_transient_server_errors and self.budget is not None
+                    and _retryable_provider_status(exc)
+                    and attempt + 1 < self.max_attempts):
+                    continue
                 raise OpenAIResponsesPilotError(
                     f"OpenAI Responses request failed ({failure_summary})",
                     model_io=_failed_model_io(attempts),
@@ -1191,7 +1213,7 @@ class OpenAIResponsesPilot:
                 choice = self._choice_from_response(
                     response,
                     observation,
-                    retry_count=attempt,
+                    retry_count=validation_retries,
                 )
             except OpenAIResponsesPilotError as exc:
                 response_snapshot["validationError"] = str(exc)
@@ -1203,6 +1225,7 @@ class OpenAIResponsesPilot:
                     }
                 )
                 validation_error = exc
+                validation_retries += 1
                 continue
 
             attempts.append(

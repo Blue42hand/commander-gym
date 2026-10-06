@@ -62,6 +62,25 @@ class FakeClient:
         self.responses = FakeResponses(response=response, error=error)
 
 
+class FakeHttpError(Exception):
+    def __init__(self, status_code):
+        super().__init__("private provider detail must not escape")
+        self.status_code = status_code
+
+
+class SequenceResponses:
+    def __init__(self, *results):
+        self.results = list(results)
+        self.calls = []
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        result = self.results.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+
 def action_observation():
     return {
         "type": "Game",
@@ -1661,6 +1680,102 @@ class OpenAIResponsesPilotTests(unittest.TestCase):
 
         with self.assertRaisesRegex(OpenAIResponsesPilotError, "request failed"):
             pilot.choose(action_observation())
+
+    def test_bounded_520_retries_once_with_separate_reservation_and_receipt(self):
+        with TemporaryDirectory() as temporary:
+            budget = OpenAIRunBudget(
+                Path(temporary) / "budget.json", 5, max_requests=2,
+                initialize_new_ledger=True,
+            )
+            client = FakeClient()
+            client.responses = SequenceResponses(
+                FakeHttpError(520),
+                FakeResponse('{"channel":"action","semanticId":"argentum-action-v1:pass","params":{}}'),
+            )
+            choice = OpenAIResponsesPilot(
+                client=client, model="gpt-6-luna", budget=budget, max_attempts=2,
+                retry_transient_server_errors=True,
+            ).choose(action_observation())
+            evidence = choice.metadata["modelIo"]
+            self.assertEqual(len(client.responses.calls), 2)
+            self.assertEqual(client.responses.calls[0], client.responses.calls[1])
+            self.assertEqual(evidence["selectedAttempt"], 1)
+            self.assertEqual(len(evidence["attempts"]), 2)
+            self.assertIn("status=520", evidence["attempts"][0]["response"]["transportError"])
+            self.assertNotIn("private provider detail", str(evidence))
+            self.assertEqual(choice.metadata["retryCount"], 0)
+            self.assertEqual(budget.snapshot()["requests"], 2)
+            self.assertEqual(budget.snapshot()["unsettledRequests"], 1)
+
+    def test_bounded_520_refuses_retry_when_request_ceiling_is_reached(self):
+        with TemporaryDirectory() as temporary:
+            budget = OpenAIRunBudget(
+                Path(temporary) / "budget.json", 5, max_requests=1,
+                initialize_new_ledger=True,
+            )
+            client = FakeClient()
+            client.responses = SequenceResponses(FakeHttpError(520))
+            with self.assertRaisesRegex(OpenAIResponsesPilotError, "request limit") as caught:
+                OpenAIResponsesPilot(
+                    client=client, model="gpt-6-luna", budget=budget,
+                    retry_transient_server_errors=True,
+                ).choose(action_observation())
+            self.assertEqual(len(client.responses.calls), 1)
+            self.assertEqual(len(caught.exception.model_io["attempts"]), 1)
+            self.assertEqual(budget.snapshot()["unsettledRequests"], 1)
+
+    def test_bounded_nontransient_http_failure_does_not_retry(self):
+        with TemporaryDirectory() as temporary:
+            budget = OpenAIRunBudget(
+                Path(temporary) / "budget.json", 5, initialize_new_ledger=True,
+            )
+            client = FakeClient()
+            client.responses = SequenceResponses(FakeHttpError(400))
+            with self.assertRaisesRegex(OpenAIResponsesPilotError, "status=400"):
+                OpenAIResponsesPilot(
+                    client=client, model="gpt-6-luna", budget=budget,
+                    retry_transient_server_errors=True,
+                ).choose(action_observation())
+            self.assertEqual(len(client.responses.calls), 1)
+
+    def test_repeated_520_stops_at_existing_attempt_ceiling(self):
+        with TemporaryDirectory() as temporary:
+            budget = OpenAIRunBudget(
+                Path(temporary) / "budget.json", 5, initialize_new_ledger=True,
+            )
+            client = FakeClient()
+            client.responses = SequenceResponses(FakeHttpError(520), FakeHttpError(520))
+            with self.assertRaisesRegex(OpenAIResponsesPilotError, "status=520") as caught:
+                OpenAIResponsesPilot(
+                    client=client, model="gpt-6-luna", budget=budget,
+                    retry_transient_server_errors=True,
+                ).choose(action_observation())
+            self.assertEqual(len(client.responses.calls), 2)
+            self.assertEqual(len(caught.exception.model_io["attempts"]), 2)
+            self.assertIsNone(caught.exception.model_io["selectedAttempt"])
+            self.assertEqual(budget.snapshot()["unsettledRequests"], 2)
+
+    def test_unbudgeted_client_does_not_add_a_retry_over_sdk_policy(self):
+        client = FakeClient()
+        client.responses = SequenceResponses(FakeHttpError(520))
+        with self.assertRaisesRegex(OpenAIResponsesPilotError, "status=520"):
+            OpenAIResponsesPilot(
+                client=client, model="gpt-test", retry_transient_server_errors=True,
+            ).choose(action_observation())
+        self.assertEqual(len(client.responses.calls), 1)
+
+    def test_existing_bounded_pilot_keeps_fail_closed_transport_contract(self):
+        with TemporaryDirectory() as temporary:
+            budget = OpenAIRunBudget(
+                Path(temporary) / "budget.json", 5, initialize_new_ledger=True,
+            )
+            client = FakeClient()
+            client.responses = SequenceResponses(FakeHttpError(520))
+            with self.assertRaisesRegex(OpenAIResponsesPilotError, "status=520"):
+                OpenAIResponsesPilot(
+                    client=client, model="gpt-6-luna", budget=budget,
+                ).choose(action_observation())
+            self.assertEqual(len(client.responses.calls), 1)
 
     def test_incomplete_provider_response_fails_closed(self):
         client = FakeClient(

@@ -21,6 +21,44 @@ from commander_gym.two_luna_debug import (
 
 
 class TwoLunaDebugReportTests(unittest.TestCase):
+    def test_recovered_transport_attempt_is_counted_but_cannot_qualify(self):
+        records = []
+        for seat in ("ai-a", "ai-b"):
+            attempts = [{"attempt": 0, "response": {"transportError": "status=520"}},
+                        {"attempt": 1, "response": {"outputText": "{}"}}] if seat == "ai-a" else [
+                            {"attempt": 0, "response": {"outputText": "{}"}}]
+            records.append({
+                "callback": "chooseAction", "playerId": seat,
+                "observation": {"agentToAct": seat, "perspectivePlayerId": seat,
+                                "knownDeck": {"cards": {"Mountain": 99}},
+                                "pendingDecision": None, "legalActions": [], "terminated": False},
+                "choice": {"channel": "action", "metadata": {
+                    "provider": "openai", "retryCount": 0,
+                    "modelIo": {"attempts": attempts},
+                    "routing": {"path": "strategic"},
+                }},
+            })
+        result = _summarize(
+            records, completed=True, lobby_id="lobby", game_ids=["game-1"],
+            max_turn=8, log_path=None, wall_time_seconds=1,
+        )
+        self.assertEqual(result["providerCalls"], 2)
+        self.assertEqual(result["providerRequests"], 3)
+        self.assertEqual(result["providerTransportErrors"], 1)
+        self.assertEqual(result["validationRetries"], 0)
+        self.assertFalse(result["technicalQualified"])
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "policy.jsonl"
+            path.write_text("".join(json.dumps(record) + "\n" for record in records))
+            budget = type("Budget", (), {"snapshot": lambda self: {"requests": 103}})()
+            _, counted, complete, error = _finalize_provenance(
+                path, budget, before_requests=100, timeout_seconds=0,
+            )
+            self.assertEqual(counted, 3)
+            self.assertTrue(complete)
+            self.assertIsNone(error)
+
     def test_finalization_includes_late_callback_without_waiting_for_old_unsettled_requests(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "policy.jsonl"
