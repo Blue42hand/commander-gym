@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .binding_catalog import BindingCatalogError, load_binding_catalog
+from .bounded_provider_process import BoundedProcessClient
 from .deck_package import ArtifactRef
 from .delegated_autopass import DelegatedAutopassPilot
 from .game_server_bindings import GameServerBindingError, GameServerBindingRegistry
@@ -285,6 +286,7 @@ class OpenAIBindingPilotComponentResolver:
     client: Any
     budget: OpenAIRunBudget | None = None
     cache_friendly_history: bool = False
+    bounded_recovery_client: Any | None = None
 
     def resolve(self, spec: PilotSubsystemSpec):
         key = spec.component_key()
@@ -469,7 +471,7 @@ class OpenAIBindingPilotComponentResolver:
             return ArtificialPlayerSubsystem(
                 DelegatedAutopassPilot(
                     OpenAIResponsesPilot(
-                        client=self.client,
+                        client=self.bounded_recovery_client or self.client,
                         model=self.config.model,
                         max_attempts=self.config.max_attempts,
                         budget=self.budget,
@@ -541,6 +543,10 @@ def build_binding_openai_game_server_sidecar(
             client=provider_client,
             budget=config.budget,
             cache_friendly_history=config.cache_friendly_history,
+            bounded_recovery_client=(
+                BoundedProcessClient(config.sidecar.api_key)
+                if client is None and config.budget is not None else None
+            ),
         )
 
     if provenance_sink is None and config.sidecar.provenance_path is not None:
