@@ -64,3 +64,7 @@ class CatalogAccess:
     def get_card(self, snapshot_id: str, *, oracle_id: str | None = None,
                  printing_id: str | None = None) -> dict[str, Any] | None:
         return self._catalog(snapshot_id).get_card(oracle_id=oracle_id, printing_id=printing_id)
+
+    def resolve_exact_name(self, snapshot_id: str, name: str,
+                           oracle_id: str | None = None) -> str | None:
+        return self._catalog(snapshot_id).resolve_exact_name(name, oracle_id)

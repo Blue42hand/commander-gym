@@ -290,6 +290,31 @@ class CardCatalog:
     def _has_ranks(db: sqlite3.Connection) -> bool:
         return {column['name'] for column in db.execute("PRAGMA table_info('cards')")} >= set(RANK_FIELDS)
 
+    def resolve_exact_name(self, name: str, oracle_id: str | None = None) -> str | None:
+        """Resolve one exact printed/face name; never guess across ambiguities."""
+        if not isinstance(name, str) or not name or len(name) > 150:
+            raise CatalogError('invalid card name')
+        try:
+            name.encode('utf-8')
+        except UnicodeError as exc:
+            raise CatalogError('invalid card name') from exc
+        if oracle_id is not None:
+            oracle_id = _required_term(oracle_id, 'oracle_id')
+            try:
+                oracle_id.encode('utf-8')
+            except UnicodeError as exc:
+                raise CatalogError('invalid oracle_id') from exc
+        with self._connect() as db:
+            rows = db.execute(
+                'SELECT oracle_id FROM cards WHERE snapshot_id=? AND name=? COLLATE BINARY '
+                'UNION SELECT oracle_id FROM card_faces WHERE snapshot_id=? AND name=? COLLATE BINARY '
+                'LIMIT 2', (self.snapshot_id, name, self.snapshot_id, name)).fetchall()
+        ids = {row[0] for row in rows}
+        if len(ids) != 1:
+            return None
+        found = next(iter(ids))
+        return found if oracle_id is None or oracle_id == found else None
+
     def search_tags(self, query: str, *, kind: str = 'oracle', limit: int = 20, cursor: str | None = None) -> dict[str, Any]:
         query = _required_term(query, 'query')
         if kind not in ('oracle', 'art'):
