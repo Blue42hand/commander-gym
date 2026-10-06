@@ -40,9 +40,9 @@ class CatalogAccessRefreshTests(unittest.TestCase):
             db.execute('INSERT INTO snapshots VALUES (?,?,?,?,?,?,?)',
                        (snapshot_id, '2026-10-05T00:00:00Z', '2026-10-04T21:00:00Z',
                         '2026-10-04T21:00:00Z', None, 'Scryfall fixture', 'Scryfall tag fixture'))
-            db.execute('INSERT INTO cards VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+            db.execute('INSERT INTO cards VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
                        (snapshot_id, f'oracle-{snapshot_id}', f'printing-{snapshot_id}',
-                        name, 'Artifact', 'Add mana.', 2, '', 1, None, None))
+                        name, 'Artifact', 'Add mana.', 2, '', 1, None, None, None, None))
             db.execute('INSERT INTO tags VALUES (?,?,?,?)',
                        (snapshot_id, 'oracle', 'ramp', 'ramp'))
             db.execute('INSERT INTO card_tags VALUES (?,?,?,?)',
@@ -98,7 +98,7 @@ class CatalogAccessRefreshTests(unittest.TestCase):
     def test_older_schema_needs_rebuild_even_when_sources_are_unchanged(self):
         metadata = self.root / 'snapshots' / f'{ONE}.json'
         old = json.loads(metadata.read_text())
-        old.pop('schema_version')
+        old['schema_version'] = 2
         metadata.write_text(json.dumps(old))
         with mock.patch('commander_gym.catalog_refresh.fetch_manifest', return_value=self._manifest()):
             result = check_refresh(self.root)
@@ -144,6 +144,11 @@ class CatalogAccessRefreshTests(unittest.TestCase):
                 search = (await client.call_tool('search_cards',
                                                  {'snapshot_id': ONE, 'name': 'Signet'})).structured_content
                 self.assertEqual(search['cards'][0]['name'], 'Arcane Signet')
+                ranked = (await client.call_tool('search_cards',
+                                                 {'snapshot_id': ONE, 'sort_by': 'edhrec_rank'})).structured_content
+                self.assertEqual(ranked['cards'][0]['name'], 'Arcane Signet')
+                self.assertIsNone(ranked['cards'][0]['edhrec_rank'])
+                self.assertEqual(ranked['sort_by'], 'edhrec_rank')
                 card = (await client.call_tool('get_card',
                                                {'snapshot_id': ONE, 'oracle_id': f'oracle-{ONE}'})).structured_content['result']
                 self.assertIsNone(card['price_usd'])

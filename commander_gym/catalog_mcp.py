@@ -74,17 +74,27 @@ def build_server(root: str | Path):
                      color_identity: str | None = None,
                      mana_value_min: float | None = None,
                      mana_value_max: float | None = None,
+                     edhrec_rank_min: int | None = None,
+                     edhrec_rank_max: int | None = None,
+                     penny_rank_min: int | None = None,
+                     penny_rank_max: int | None = None,
+                     sort_by: str = 'name',
                      limit: int = 20, cursor: str | None = None) -> dict[str, Any]:
         """Search cards using bounded structured filters, not Scryfall syntax.
 
         Returns Oracle and printing IDs with source evidence. Commander legality
         is catalog data for discovery; Argentum remains the rules authority.
+        Optional Scryfall EDHREC and Penny ranks are snapshot-dated, lower is
+        more popular, and null means unranked. Sort by name or either rank;
+        rank sorts put nulls last and pagination stays snapshot-pinned.
         """
         return checked(lambda: access.search_cards(
             snapshot_id, name=name, oracle_text=oracle_text, type_line=type_line,
             tag_id=tag_id, tag_kind=tag_kind, commander_legal=commander_legal,
             color_identity=color_identity, mana_value_min=mana_value_min,
-            mana_value_max=mana_value_max, limit=limit, cursor=cursor))
+            mana_value_max=mana_value_max, edhrec_rank_min=edhrec_rank_min,
+            edhrec_rank_max=edhrec_rank_max, penny_rank_min=penny_rank_min,
+            penny_rank_max=penny_rank_max, sort_by=sort_by, limit=limit, cursor=cursor))
 
     @server.tool(annotations=readonly)
     def get_card(snapshot_id: str, oracle_id: str | None = None,
