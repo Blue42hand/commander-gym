@@ -58,6 +58,17 @@ by default. The proposed fifth read-only tool appears only if an operator
 launches it with **both** `--enable-edhrec` and
 `--edhrec-access-reviewed`. Neither flag is present in the deployed service.
 These flags assert a separate access decision; they do not grant permission.
+The proposed adapter invocation, **only after** that decision and source
+validation, is:
+
+```sh
+python -m commander_gym.catalog_mcp \
+  --catalog-root /path/to/isolated/public-catalog \
+  --enable-edhrec --edhrec-access-reviewed
+```
+
+The currently deployed command omits both EDHREC flags. Do not change its
+service unit as part of this draft.
 Deployment would require a reviewed service-command change, source-shape
 validation, and a refreshed ChatGPT tool definition. Reverting the command to
 its existing form returns to the four-tool catalog without touching snapshots.
