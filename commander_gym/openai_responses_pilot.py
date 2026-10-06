@@ -23,6 +23,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 import json
+import re
 from time import perf_counter
 from typing import Any, Mapping
 
@@ -244,8 +245,15 @@ def _provider_failure_summary(exc: Exception) -> str:
     status_code = getattr(exc, "status_code", None)
     if type(status_code) is int:
         parts.append(f"status={status_code}")
-    # Provider-controlled body fields can echo request data or credentials.
-    # The exception class and numeric HTTP status are enough for the retry audit.
+    # Preserve only a short machine-readable code. Free-form provider error
+    # messages can echo request data or credentials into the HTTP failure.
+    body = getattr(exc, "body", None)
+    if isinstance(body, Mapping):
+        error = body.get("error", body)
+        if isinstance(error, Mapping):
+            code = error.get("code")
+            if isinstance(code, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", code):
+                parts.append(f"code={code}")
     return ", ".join(parts)
 
 
