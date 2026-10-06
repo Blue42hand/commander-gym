@@ -141,7 +141,6 @@ class CommanderGymPlayerControllerParameterTest {
             validBlockers = listOf(drake),
             validBlockTargets = mapOf(drake to listOf(bear)),
             blockerMaxBlockCounts = mapOf(drake to 1),
-            maxTotalBlockers = 1,
             parameterSpec = ActionParameterSpec(
                 mapOf("blockers" to ActionParameterFieldKind.ENTITY_ID_ARRAY_MAP),
             ),
@@ -180,7 +179,6 @@ class CommanderGymPlayerControllerParameterTest {
             assertTrue(piledriver.value !in pairs.getValue("drake").toString())
             assertEquals("1", offer.getValue("blockerMaxBlockCounts").jsonObject
                 .getValue("drake").jsonPrimitive.content)
-            assertEquals(1, offer.getValue("maxTotalBlockers").jsonPrimitive.content.toInt())
         } finally {
             server.stop(0)
         }
