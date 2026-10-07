@@ -2,6 +2,7 @@ package org.commandergym.argentum
 
 import com.wingedsheep.gameserver.GameServerApplication
 import org.springframework.boot.builder.SpringApplicationBuilder
+import java.nio.file.Path
 
 /**
  * Local manual-play launcher.
@@ -51,5 +52,11 @@ fun main() {
     val context = SpringApplicationBuilder(GameServerApplication::class.java)
         .run(*localGuiServerArgs(serverPort, sidecarUrl, token, sidecarTimeoutMs))
 
-    Runtime.getRuntime().addShutdownHook(Thread { context.close() })
+    val terminal = System.getenv("COMMANDER_GYM_GUI_TERMINAL_RECEIPT")?.let {
+        NativeGuiTerminalReceipt(Path.of(it))
+    }
+    Runtime.getRuntime().addShutdownHook(Thread {
+        terminal?.close()
+        context.close()
+    })
 }

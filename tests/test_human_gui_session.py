@@ -173,9 +173,10 @@ class HumanGuiTests(unittest.TestCase):
             launcher.supervise(plan,root,run,root/'dummy-key',Path('/fake/python'))
             self.assertEqual(start.call_count,3)
             java = start.call_args_list[1].args[0]
-            self.assertEqual(java[:4], ['java',
+            self.assertEqual(java[:5], ['java',
                 '-Dlogging.level.com.wingedsheep.gameserver.handler.ConnectionHandler=WARN',
-                '-Dlogging.level.com.wingedsheep.gameserver.websocket.GameWebSocketHandler=INFO', '-cp'])
+                '-Dlogging.level.com.wingedsheep.gameserver.websocket.GameWebSocketHandler=INFO',
+                '-Dlogging.level.com.wingedsheep.gameserver.ai.AiWebSocketSession=INFO', '-cp'])
             self.assertEqual([a for a in java if a.startswith('-Dlogging.level.')], list(launcher.JAVA_LOGGING_ARGUMENTS))
             preview = start.call_args_list[2].args[0]
             self.assertEqual(preview[1:4], ['preview','--configLoader','native'])

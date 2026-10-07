@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from commander_gym.experimental_prefix import exclusive_runtime_lock
 from commander_gym.human_gui_preflight import PROFILES, SESSION_CATALOG, verify_session_catalog
 from commander_gym.cache_probe_session import _durable_mkdir
-from commander_gym.human_gui_session import GuiProvenanceWatch
+from commander_gym.human_gui_session import GuiProvenanceWatch, GuiNativeTerminalWatch
 from commander_gym.two_luna_debug import _FatalActionWatch, _write_private_json, _finalize_provenance
 from commander_gym.openai_run_budget import OpenAIRunBudget
 from scripts.probe_v7_runtime_classpath import _hash_entry
@@ -35,6 +35,7 @@ GATES = ("paidSessionApproved", "fourthChoiceRiskDispositionApproved", "humanDec
 JAVA_LOGGING_ARGUMENTS = (
     "-Dlogging.level.com.wingedsheep.gameserver.handler.ConnectionHandler=WARN",
     "-Dlogging.level.com.wingedsheep.gameserver.websocket.GameWebSocketHandler=INFO",
+    "-Dlogging.level.com.wingedsheep.gameserver.ai.AiWebSocketSession=INFO",
 )
 
 
@@ -99,6 +100,7 @@ def service_environments(plan: dict, receipt: dict, run: Path, key: str, deadlin
     backend = {**base, "COMMANDER_GYM_GUI_SERVER_PORT": str(plan["serverPort"]),
                "COMMANDER_GYM_SIDECAR_URL": f'http://127.0.0.1:{plan["sidecarPort"]}',
                "COMMANDER_GYM_SIDECAR_TOKEN": token, "COMMANDER_GYM_JVM_SIDECAR_TIMEOUT_MS": "120000"}
+    backend["COMMANDER_GYM_GUI_TERMINAL_RECEIPT"] = str(run / "native-terminal.json")
     sidecar = {**base, "OPENAI_API_KEY": key, "COMMANDER_GYM_SIDECAR_HOST": "127.0.0.1",
                "COMMANDER_GYM_SIDECAR_PORT": str(plan["sidecarPort"]), "COMMANDER_GYM_SIDECAR_TOKEN": token,
                "COMMANDER_GYM_OPENAI_MODEL": "gpt-6-luna", "COMMANDER_GYM_OPENAI_MAX_ATTEMPTS": "2",
@@ -125,7 +127,8 @@ def verify_advertised_profiles(url: str, token: str):
         raise ValueError("runtime must advertise exactly the three approved AI profiles")
 
 
-def final_receipt(plan: dict, receipt: dict, run: Path, reason: str, error_type: str | None):
+def final_receipt(plan: dict, receipt: dict, run: Path, reason: str, error_type: str | None,
+                  terminal: dict | None = None):
     budget = OpenAIRunBudget(Path(plan["budgetLedger"]), plan["cumulativeCapUsd"],
                              authorized_max_usd=plan["cumulativeCapUsd"], max_requests=plan["cumulativeMaxRequests"])
     after = budget.snapshot()
@@ -134,7 +137,9 @@ def final_receipt(plan: dict, receipt: dict, run: Path, reason: str, error_type:
                                                         before["requests"], timeout_seconds=0)
     new_unsettled = after["unsettledRequests"] - before["unsettledRequests"]
     result = {"reason": reason, "errorType": error_type, "qualification": False,
-              "naturalTerminalVerified": False, "automaticReplacement": False, "cleanupVerified": True,
+              "naturalTerminalVerified": reason == "native_game_over" and terminal is not None,
+              "nativeTerminalNotification": terminal,
+              "automaticReplacement": False, "cleanupVerified": True,
               "startLedger": before, "afterLedger": after,
               "requestsUsed": after["requests"] - before["requests"],
               "estimatedUsdUsed": after["estimatedUsd"] - before["estimatedUsd"],
@@ -142,7 +147,7 @@ def final_receipt(plan: dict, receipt: dict, run: Path, reason: str, error_type:
               "provenanceReconciled": reconciled, "provenanceError": error,
               "sessionCapUsd": receipt["sessionCapUsd"], "sessionMaxRequests": receipt["sessionMaxRequests"]}
     _write_private_json(run / "result.json", result)
-    return 0 if reason == "operator_stop" and reconciled and new_unsettled <= 0 else 1
+    return 0 if reason in ("operator_stop", "native_game_over") and reconciled and new_unsettled <= 0 else 1
 
 
 def supervise(plan: dict, gym: Path, run: Path, key_file: Path, python: Path):
@@ -151,6 +156,7 @@ def supervise(plan: dict, gym: Path, run: Path, key_file: Path, python: Path):
         raise ValueError("paid launch holds: missing explicit approval/readiness gates")
     processes, logs = [], []
     reason, error_type, status = "startup_failure", None, 1
+    terminal = None
     with exclusive_runtime_lock(Path(plan["runtimeLock"])):
         receipt = preflight(plan, gym)
         if run.exists():
@@ -183,22 +189,30 @@ def supervise(plan: dict, gym: Path, run: Path, key_file: Path, python: Path):
                 await_ready(urls[index], process, min(30, max(.001, deadline - time.time())), sidecar["COMMANDER_GYM_SIDECAR_TOKEN"] if index == 0 else None)
             verify_advertised_profiles(urls[0], sidecar["COMMANDER_GYM_SIDECAR_TOKEN"])
             provenance = GuiProvenanceWatch(run / "policy.jsonl")
+            native = GuiNativeTerminalWatch(run / "native-terminal.json")
             fatal = _FatalActionWatch(run / "server.log")
             print(f"GUI ready on loopback port {plan['frontendPort']}; select one human and the three exact profiles before starting one game.", flush=True)
             reason = "wall_limit"
             while time.time() < deadline:
                 provenance.scan()
                 fatal.scan([])
+                native.scan()
                 if fatal.failures or fatal.policy_failure or provenance.failed:
                     reason = "callback_or_native_failure"
                     break
-                if provenance.native_game_over or (run / "stop.json").exists():
+                if native.receipt is None and (provenance.native_game_over or (run / "stop.json").exists()):
                     reason = "native_or_session_stop_receipt"
+                    break
+                snapshot = checked_existing_budget(Path(plan["budgetLedger"]), plan["cumulativeCapUsd"], plan["cumulativeCapUsd"], plan["cumulativeMaxRequests"], None, None)
+                # Native cancellation can race an already dispatched sidecar request.
+                # Keep services alive until it settles, bounded by the original deadline.
+                if native.receipt is not None and snapshot["unsettledRequests"] <= receipt["snapshot"]["unsettledRequests"]:
+                    terminal = native.receipt
+                    reason = "native_game_over"
                     break
                 if any(p.poll() is not None for p in processes):
                     reason = "service_exited"
                     break
-                snapshot = checked_existing_budget(Path(plan["budgetLedger"]), plan["cumulativeCapUsd"], plan["cumulativeCapUsd"], plan["cumulativeMaxRequests"], None, None)
                 if (snapshot["requests"] >= receipt["sessionMaxRequests"] or snapshot["estimatedUsd"] >= receipt["sessionCapUsd"]):
                     # Let the last already-reserved call settle; no further reserve
                     # can pass the atomic sidecar ceiling. Wall bound still applies.
@@ -218,7 +232,7 @@ def supervise(plan: dict, gym: Path, run: Path, key_file: Path, python: Path):
                     _stop_and_verify_group(process)
                 for log in logs:
                     log.close()
-                status = final_receipt(plan, receipt, run, reason, error_type)
+                status = final_receipt(plan, receipt, run, reason, error_type, terminal)
             finally:
                 for s, handler in old.items():
                     signal.signal(s, handler)
