@@ -143,6 +143,12 @@ BUILTIN_FORGE_BOUNDED_RECOVERY_COMPONENT_REF = ArtifactRef(
     version="7",
     digest="sha256:c31e254cae2e22aa347022706296d6996dd09d78b232be157b2b832296dc342f",
 )
+BUILTIN_FORGE_EXPLICIT_WAIT_COMPONENT_REF = ArtifactRef(
+    kind="provider",
+    artifact_id="openai-responses-forge-conditional-wait",
+    version="8",
+    digest="sha256:74f539a68399f9a41c9891b9d3df19e28d31b9bf11b3ee82b031b6170102e7b1",
+)
 
 
 def _component_key(ref: ArtifactRef) -> tuple[str, str, str, str | None]:
@@ -464,7 +470,10 @@ class OpenAIBindingPilotComponentResolver:
             )
         if (
             spec.role == "frontier_escalation"
-            and key == _component_key(BUILTIN_FORGE_BOUNDED_RECOVERY_COMPONENT_REF)
+            and key in {
+                _component_key(BUILTIN_FORGE_BOUNDED_RECOVERY_COMPONENT_REF),
+                _component_key(BUILTIN_FORGE_EXPLICIT_WAIT_COMPONENT_REF),
+            }
         ):
             if self.budget is None:
                 raise PilotContractError("bounded provider recovery requires a durable budget")
@@ -476,6 +485,9 @@ class OpenAIBindingPilotComponentResolver:
                         max_attempts=self.config.max_attempts,
                         budget=self.budget,
                         retry_transient_server_errors=True,
+                        explicit_wait_guidance=(
+                            key == _component_key(BUILTIN_FORGE_EXPLICIT_WAIT_COMPONENT_REF)
+                        ),
                         cache_friendly_history=self.cache_friendly_history,
                         allow_priority_delegation=True,
                         allow_named_deferrals=True,

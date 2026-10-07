@@ -1,4 +1,5 @@
 import hashlib
+from copy import deepcopy
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -7,6 +8,7 @@ from unittest.mock import patch
 
 from commander_gym.openai_responses_pilot import (
     MODEL_IO_SCHEMA_VERSION,
+    EXPLICIT_NAMED_WAIT_INSTRUCTIONS,
     OpenAIResponsesPilot,
     OpenAIResponsesPilotError,
 )
@@ -973,6 +975,68 @@ class OpenAIResponsesPilotTests(unittest.TestCase):
                 ["priorityDelegation"]["properties"]["deferAbilities"]["minItems"],
             1,
         )
+
+    def test_explicit_wait_guidance_changes_only_action_instructions(self):
+        observation = action_observation()
+        for action in observation["legalActions"]:
+            action["parameterSpec"] = {"allowedFields": {}}
+        calls = []
+        for enabled in (False, True):
+            client = FakeClient(FakeResponse(json.dumps({
+                "channel": "action", "choice": {
+                    "semanticId": "argentum-action-v1:pass", "params": {},
+                },
+            })))
+            OpenAIResponsesPilot(
+                client=client, model="gpt-test", allow_priority_delegation=True,
+                allow_named_deferrals=True, require_nonempty_named_deferrals=True,
+                explicit_wait_guidance=enabled,
+            ).choose(deepcopy(observation))
+            calls.append(client.responses.calls[0])
+        baseline, revised = calls
+        self.assertEqual(revised.pop("instructions"),
+                         baseline.pop("instructions") + "\n\n" + EXPLICIT_NAMED_WAIT_INSTRUCTIONS)
+        self.assertEqual(baseline, revised)
+
+    def test_explicit_wait_guidance_preserves_offered_ability_choice(self):
+        observation = action_observation()
+        observation["legalActions"][1] = {
+            "actionId": 1, "semanticId": "native-ability", "kind": "ActivateAbility",
+            "action": {"sourceId": "own-source", "abilityId": "native-ability-id"},
+            "isManaAbility": False, "affordable": True,
+            "parameterSpec": {"allowedFields": {}},
+        }
+        observation["legalActions"][0]["parameterSpec"] = {"allowedFields": {}}
+        client = FakeClient(FakeResponse(json.dumps({
+            "channel": "action", "choice": {"semanticId": "native-ability", "params": {}},
+        })))
+        choice = OpenAIResponsesPilot(
+            client=client, model="gpt-test", max_attempts=1,
+            allow_priority_delegation=True, allow_named_deferrals=True,
+            require_nonempty_named_deferrals=True, explicit_wait_guidance=True,
+        ).choose(observation)
+        self.assertEqual(choice.action_id, 1)
+        self.assertNotIn("priorityDelegation", choice.metadata)
+
+    def test_explicit_wait_guidance_requires_named_wait_protocol(self):
+        with self.assertRaisesRegex(OpenAIResponsesPilotError, "nonempty named-deferral"):
+            OpenAIResponsesPilot(client=FakeClient(), model="gpt-test",
+                                 explicit_wait_guidance=True)
+
+    def test_explicit_wait_guidance_does_not_instruct_a_structured_decision_to_wait(self):
+        observation = structured_observation()
+        client = FakeClient(FakeResponse(json.dumps({
+            "channel": "decision", "response": {
+                "type": "TargetsResponse", "selectedTargets": {"0": ["target-1"]},
+            },
+        })))
+        OpenAIResponsesPilot(
+            client=client, model="gpt-test", allow_priority_delegation=True,
+            allow_named_deferrals=True, require_nonempty_named_deferrals=True,
+            explicit_wait_guidance=True,
+        ).choose(observation)
+        self.assertNotIn(EXPLICIT_NAMED_WAIT_INSTRUCTIONS,
+                         client.responses.calls[0]["instructions"])
 
     def test_engine_spec_rejects_wrong_action_param_wire_type(self):
         observation = action_observation()

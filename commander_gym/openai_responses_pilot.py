@@ -34,6 +34,15 @@ from .cache_friendly_input import cache_friendly_observation_input
 from .delegated_autopass import _NATIVE_PHASES, _NATIVE_STEPS
 
 MODEL_IO_SCHEMA_VERSION = 1
+EXPLICIT_NAMED_WAIT_INSTRUCTIONS = (
+    "Before returning PassPriority, check whether every currently affordable "
+    "nonmana ActivateAbility can safely be deferred through the rest of this "
+    "turn. If so, include priorityDelegation with until turn_end, a concrete "
+    "reason, and deferAbilities containing every exact sourceId/abilityId pair "
+    "from legalActions. If any ability might need activation before your next "
+    "turn, omit delegation. Do not use phase_end or next_own_main to delegate "
+    "a menu that still contains a nonmana ability."
+)
 _RECOVERY_CALLBACK_SECONDS = 110.0  # Argentum's policy HTTP deadline is 120 s.
 _RECOVERY_REQUEST_SECONDS = 90.0
 _RECOVERY_RETURN_MARGIN_SECONDS = 5.0
@@ -921,6 +930,7 @@ class OpenAIResponsesPilot:
     allow_priority_delegation: bool = False
     allow_named_deferrals: bool = False
     require_nonempty_named_deferrals: bool = False
+    explicit_wait_guidance: bool = False
     compact_model_observation: bool = False
     cache_friendly_history: bool = False
     guarded_then_cast_templates: bool = False
@@ -931,6 +941,15 @@ class OpenAIResponsesPilot:
     def __post_init__(self) -> None:
         _require_string(self.model, "OpenAI model")
         _require_string(self.instructions, "OpenAI pilot instructions")
+        if type(self.explicit_wait_guidance) is not bool:
+            raise OpenAIResponsesPilotError("explicit_wait_guidance must be boolean")
+        if self.explicit_wait_guidance and not (
+            self.allow_priority_delegation and self.allow_named_deferrals
+            and self.require_nonempty_named_deferrals
+        ):
+            raise OpenAIResponsesPilotError(
+                "explicit wait guidance requires the nonempty named-deferral Pilot"
+            )
         if self.require_nonempty_named_deferrals and not (
             self.allow_priority_delegation and self.allow_named_deferrals
         ):
@@ -1137,6 +1156,9 @@ class OpenAIResponsesPilot:
                         " Native canAutoPayNow is false, so do not submit autoPay true; "
                         "activate an offered mana ability first or choose a valid manual/decline response."
                     )
+
+        if self.explicit_wait_guidance and action_format is not None:
+            request["instructions"] += "\n\n" + EXPLICIT_NAMED_WAIT_INSTRUCTIONS
 
         validation_error: OpenAIResponsesPilotError | None = None
         attempts: list[dict[str, Any]] = []
