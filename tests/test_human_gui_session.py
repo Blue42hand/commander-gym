@@ -1,6 +1,7 @@
 from contextlib import ExitStack
 from dataclasses import replace
 import json
+import hashlib
 from pathlib import Path
 import signal
 import tempfile
@@ -11,7 +12,7 @@ from unittest.mock import patch, Mock
 from commander_gym import human_gui_preflight as preflight
 from commander_gym import experimental_wait_preflight as wait
 from commander_gym.human_gui_session import HumanGuiSessionGuard, HumanGuiSessionStopped, GuiProvenanceWatch
-from commander_gym.pilot import ArgentumActionChoice
+from commander_gym.pilot import ArgentumActionChoice, ArgentumDecisionChoice
 from commander_gym.identity import Binding
 from commander_gym.openai_run_budget import OpenAIRunBudget
 from commander_gym.game_server_binding_openai_sidecar import (
@@ -143,12 +144,14 @@ class HumanGuiTests(unittest.TestCase):
                         sidecarPort=18083,frontendPort=15175,engineDir=str(root/'engine'),
                         catalogRoot=str(root/'catalog'),budgetLedger=str(root/'budget'),
                         cumulativeCapUsd=5,cumulativeMaxRequests=100)
-            proof={'classpath':['/tmp/offline.class'], 'snapshot':{'unsettledRequests':0},
+            proof={'classpath':['/tmp/offline.class'], 'snapshot':{'unsettledRequests':0,'requests':0,'estimatedUsd':0},
                    'sessionCapUsd':1,'sessionMaxRequests':5}
             stack.enter_context(patch.object(launcher,'preflight',return_value=proof))
             stack.enter_context(patch.object(launcher,'read_key',return_value='dummy'))
             stack.enter_context(patch.object(launcher,'await_ready'))
             stack.enter_context(patch.object(launcher,'verify_advertised_profiles'))
+            budget = OpenAIRunBudget(root/'budget',5,max_requests=100,initialize_new_ledger=True)
+            budget.snapshot()
             process=Mock(); process.poll.return_value=None
             start=stack.enter_context(patch.object(launcher.subprocess,'Popen',return_value=process))
             stack.enter_context(patch.object(launcher.GuiProvenanceWatch,'scan',side_effect=InterruptedError))
@@ -180,3 +183,79 @@ class HumanGuiTests(unittest.TestCase):
             watch.scan(); self.assertEqual(watch.callbacks,0)
             with path.open('a') as f: f.write('\n')
             watch.scan(); self.assertTrue(watch.failed)
+
+    def test_final_receipt_keeps_unsettled_and_partial_provenance_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            budget=OpenAIRunBudget(root/'ledger',5,max_requests=100,initialize_new_ledger=True)
+            before=budget.snapshot()
+            try:
+                budget.create(lambda **_request: (_ for _ in ()).throw(RuntimeError('offline transport failure')),
+                              {'model':'gpt-6-luna','input':'offline','max_output_tokens':OpenAIRunBudget.MAX_OUTPUT_TOKENS})
+            except RuntimeError:
+                pass
+            (root/'policy.jsonl').write_text('{"choice":')
+            status=launcher.final_receipt({'budgetLedger':str(root/'ledger'),'cumulativeCapUsd':5,'cumulativeMaxRequests':100},
+                {'snapshot':before,'sessionCapUsd':1,'sessionMaxRequests':5},root,'operator_stop',None)
+            receipt=json.loads((root/'result.json').read_bytes())
+            self.assertEqual(status,1)
+            self.assertEqual(receipt['newUnsettledRequests'],1)
+            self.assertFalse(receipt['provenanceReconciled'])
+            self.assertIn('incomplete trailing',receipt['provenanceError'])
+            self.assertEqual(receipt['requestsUsed'],1)
+
+    def test_runtime_failure_returns_nonzero_even_with_complete_zero_spend(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            budget=OpenAIRunBudget(root/'ledger',5,max_requests=100,initialize_new_ledger=True)
+            before=budget.snapshot()
+            self.assertEqual(launcher.final_receipt(
+                {'budgetLedger':str(root/'ledger'),'cumulativeCapUsd':5,'cumulativeMaxRequests':100},
+                {'snapshot':before,'sessionCapUsd':1,'sessionMaxRequests':5},root,'callback_or_native_failure',None),1)
+            self.assertTrue(json.loads((root/'result.json').read_bytes())['provenanceReconciled'])
+
+    def test_three_profiles_opening_and_typed_decision_use_only_own_masked_hand(self):
+        with tempfile.TemporaryDirectory() as tmp, ExitStack() as stack:
+            root=Path(tmp); self.fixture(root,stack)
+            config=BindingOpenAIGameServerConfig(
+                sidecar=OpenAIGameServerSidecarConfig(token='offline',api_key='sk-test-offline',port=free_port()),
+                instance_root=root,catalog_path=root/preflight.ROSTER_PATH,
+                budget=OpenAIRunBudget(root/'budget',5,initialize_new_ledger=True),
+                human_gui_guard=HumanGuiSessionGuard(time.time()+100,root/'stop.json'))
+            server=build_binding_openai_game_server_sidecar(config,client=FakeClient())
+            try:
+                for index, profile in enumerate(preflight.PROFILES):
+                    seat=server.resolve_seat(f'ai-{index}',profile)
+                    frontier=next(s for s in seat._pilot.delegate.subsystems if s.spec.role=='frontier_escalation')
+                    strategic=frontier.implementation.player.strategic_pilot
+                    def scripted(obs):
+                        self.assertEqual(obs['perspectivePlayerId'],f'ai-{index}')
+                        self.assertNotIn('snapshot',obs)
+                        if 'mulligan' in obs['state']:
+                            return ArgentumActionChoice(0)
+                        return ArgentumDecisionChoice({'type':'CardsSelectedResponse',
+                            'decisionId':obs['pendingDecision']['decisionId'], 'selectedCards':[f'own-{index}']})
+                    with patch.object(type(strategic),'choose',side_effect=scripted):
+                        self.assertTrue(seat.decide_mulligan({'hand':[f'own-{index}']}))
+                        self.assertEqual(seat.choose_bottom_cards({'hand':[f'own-{index}'],
+                                        'cardsToPutOnBottom':1}),[f'own-{index}'])
+            finally:
+                server.server_close()
+
+    def test_runtime_classpath_verifies_order_content_and_required_compiled_outputs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); gym=root/'gym'; engine=root/'engine'
+            paths=[gym/'jvm-adapter/build/classes/kotlin/main',gym/'jvm-adapter/build/classes/kotlin/test',
+                   engine/'game-server/build/classes/kotlin/main',engine/'rules-engine/build/classes/kotlin/main']
+            for p in paths:
+                p.mkdir(parents=True); (p/'Mock.class').write_bytes(b'offline fixture')
+            names=[str(p) for p in paths]; path=root/'classpath.json'; path.write_text(json.dumps(names))
+            sha=hashlib.sha256(json.dumps([[str(p),launcher._hash_entry(p)] for p in paths],
+                              sort_keys=True,separators=(',',':')).encode()).hexdigest()
+            self.assertEqual(launcher.runtime_classpath(path,sha,gym,engine),names)
+            path.write_text(json.dumps(names[::-1]))
+            with self.assertRaisesRegex(ValueError,'changed'):
+                launcher.runtime_classpath(path,sha,gym,engine)
+            path.write_text(json.dumps(names)); (paths[0]/'Mock.class').unlink()
+            with self.assertRaisesRegex(ValueError,'compiled'):
+                launcher.runtime_classpath(path,sha,gym,engine)

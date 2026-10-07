@@ -21,7 +21,8 @@ from commander_gym.experimental_prefix import exclusive_runtime_lock
 from commander_gym.human_gui_preflight import PROFILES, SESSION_CATALOG, verify_session_catalog
 from commander_gym.cache_probe_session import _durable_mkdir
 from commander_gym.human_gui_session import GuiProvenanceWatch
-from commander_gym.two_luna_debug import _FatalActionWatch, _write_private_json
+from commander_gym.two_luna_debug import _FatalActionWatch, _write_private_json, _finalize_provenance
+from commander_gym.openai_run_budget import OpenAIRunBudget
 from scripts.probe_v7_runtime_classpath import _hash_entry
 from scripts.run_sequential_v7_batch import _head, _tracked_clean, _stop_and_verify_group
 from scripts.run_two_luna_binding_game import await_ready, checked_existing_budget, read_key, selected_python
@@ -116,12 +117,32 @@ def verify_advertised_profiles(url: str, token: str):
         raise ValueError("runtime must advertise exactly the three approved AI profiles")
 
 
+def final_receipt(plan: dict, receipt: dict, run: Path, reason: str, error_type: str | None):
+    budget = OpenAIRunBudget(Path(plan["budgetLedger"]), plan["cumulativeCapUsd"],
+                             authorized_max_usd=plan["cumulativeCapUsd"], max_requests=plan["cumulativeMaxRequests"])
+    after = budget.snapshot()
+    before = receipt["snapshot"]
+    _, recorded, reconciled, error = _finalize_provenance(run / "policy.jsonl", budget,
+                                                        before["requests"], timeout_seconds=0)
+    new_unsettled = after["unsettledRequests"] - before["unsettledRequests"]
+    result = {"reason": reason, "errorType": error_type, "qualification": False,
+              "naturalTerminalVerified": False, "automaticReplacement": False, "cleanupVerified": True,
+              "startLedger": before, "afterLedger": after,
+              "requestsUsed": after["requests"] - before["requests"],
+              "estimatedUsdUsed": after["estimatedUsd"] - before["estimatedUsd"],
+              "newUnsettledRequests": new_unsettled, "providerAttemptsRecorded": recorded,
+              "provenanceReconciled": reconciled, "provenanceError": error,
+              "sessionCapUsd": receipt["sessionCapUsd"], "sessionMaxRequests": receipt["sessionMaxRequests"]}
+    _write_private_json(run / "result.json", result)
+    return 0 if reason == "operator_stop" and reconciled and new_unsettled <= 0 else 1
+
+
 def supervise(plan: dict, gym: Path, run: Path, key_file: Path, python: Path):
     """Caller supplies explicit authorization; lock covers preflight through cleanup."""
     if any(plan.get(gate) is not True for gate in GATES):
         raise ValueError("paid launch holds: missing explicit approval/readiness gates")
     processes, logs = [], []
-    reason = "startup_failure"
+    reason, error_type, status = "startup_failure", None, 1
     with exclusive_runtime_lock(Path(plan["runtimeLock"])):
         receipt = preflight(plan, gym)
         if run.exists():
@@ -179,6 +200,8 @@ def supervise(plan: dict, gym: Path, run: Path, key_file: Path, python: Path):
                 time.sleep(.5)
         except InterruptedError:
             reason = "operator_stop"
+        except Exception as error:
+            reason, error_type = "supervisor_error", type(error).__name__
         finally:
             for s in old:
                 signal.signal(s, signal.SIG_IGN)
@@ -187,12 +210,11 @@ def supervise(plan: dict, gym: Path, run: Path, key_file: Path, python: Path):
                     _stop_and_verify_group(process)
                 for log in logs:
                     log.close()
-                _write_private_json(run / "result.json", {"reason": reason, "qualification": False,
-                                    "naturalTerminalVerified": False, "automaticReplacement": False})
+                status = final_receipt(plan, receipt, run, reason, error_type)
             finally:
                 for s, handler in old.items():
                     signal.signal(s, handler)
-    return 0
+    return status
 
 
 def main():
