@@ -13,6 +13,7 @@ import math
 import os
 from pathlib import Path
 import tempfile
+import time
 from typing import Any, Callable, Mapping
 
 
@@ -39,6 +40,7 @@ class OpenAIRunBudget:
         session_cap_usd: float | None = None,
         session_max_requests: int | None = None,
         require_cache_usage_details: bool = False,
+        dispatch_deadline_unix: float | None = None,
     ) -> None:
         if not isinstance(path, Path) or not path.is_absolute():
             raise ValueError("budget ledger path must be absolute")
@@ -67,6 +69,11 @@ class OpenAIRunBudget:
             raise ValueError("session request limit must be within the shared limit")
         if type(require_cache_usage_details) is not bool:
             raise ValueError("require_cache_usage_details must be boolean")
+        if dispatch_deadline_unix is not None and (
+            type(dispatch_deadline_unix) not in (int, float)
+            or not math.isfinite(dispatch_deadline_unix) or dispatch_deadline_unix <= 0
+        ):
+            raise ValueError("dispatch deadline must be a positive finite timestamp")
         if cap_usd > 5 and max_requests is None:
             raise ValueError("a budget above $5 requires an absolute request limit")
         if not path.parent.is_dir():
@@ -79,6 +86,7 @@ class OpenAIRunBudget:
         self.session_cap_usd = session_cap_usd
         self.session_max_requests = session_max_requests
         self.require_cache_usage_details = require_cache_usage_details
+        self.dispatch_deadline_unix = dispatch_deadline_unix
 
     def _write_data(self, data: Mapping[str, Any]) -> None:
         encoded = json.dumps(data, sort_keys=True)
@@ -239,6 +247,8 @@ class OpenAIRunBudget:
         )
 
         def reserve(data: dict[str, Any]) -> None:
+            if self.dispatch_deadline_unix is not None and time.time() >= self.dispatch_deadline_unix:
+                raise OpenAIRunBudgetError("dispatch deadline reached before reservation")
             if self.max_requests is not None and data["requests"] >= self.max_requests:
                 raise OpenAIRunBudgetError("absolute request limit reached before dispatch")
             if (self.session_max_requests is not None
@@ -254,6 +264,10 @@ class OpenAIRunBudget:
             data["unsettledRequests"] += 1
 
         self._transact(reserve)
+        if self.dispatch_deadline_unix is not None and time.time() >= self.dispatch_deadline_unix:
+            # Preserve the reservation conservatively if the deadline crossed
+            # after its durable write; never dispatch or clear ambiguous history.
+            raise OpenAIRunBudgetError("dispatch deadline reached after reservation")
         response = create(**request)
         usage = getattr(response, "usage", None)
         input_tokens = (
