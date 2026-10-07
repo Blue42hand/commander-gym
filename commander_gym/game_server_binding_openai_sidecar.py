@@ -36,6 +36,7 @@ from .identity import Binding, Pilot
 from .openai_responses_pilot import OpenAIResponsesPilot
 from .openai_run_budget import OpenAIRunBudget
 from .experimental_prefix import PrefixGuard
+from .human_gui_session import HumanGuiSessionGuard
 from .pilot import (
     ArgentumActionChoice,
     ArgentumDecisionChoice,
@@ -167,6 +168,7 @@ class BindingOpenAIGameServerConfig:
     budget: OpenAIRunBudget | None = None
     cache_friendly_history: bool = False
     prefix_guard: PrefixGuard | None = None
+    human_gui_guard: HumanGuiSessionGuard | None = None
 
 
 def binding_openai_game_server_config_from_environment(
@@ -203,6 +205,11 @@ def binding_openai_game_server_config_from_environment(
     prefix_turn = environment.get("COMMANDER_GYM_PREFIX_TURN_LIMIT")
     prefix_deadline = environment.get("COMMANDER_GYM_PREFIX_DEADLINE_UNIX")
     prefix_receipt = environment.get("COMMANDER_GYM_PREFIX_STOP_RECEIPT")
+    gui_deadline = environment.get("COMMANDER_GYM_HUMAN_GUI_DEADLINE_UNIX")
+    gui_receipt = environment.get("COMMANDER_GYM_HUMAN_GUI_STOP_RECEIPT")
+    if (bool(gui_deadline) != bool(gui_receipt)
+        or gui_deadline and (not session_cap_value or prefix_turn)):
+        raise OpenAIGameServerSidecarConfigurationError("human GUI requires session bounds and excludes prefix mode")
     if (bool(session_cap_value) != bool(session_requests_value)
         or (bool(session_cap_value) and not ledger_value)
         or any((prefix_turn, prefix_deadline, prefix_receipt))
@@ -223,6 +230,7 @@ def binding_openai_game_server_config_from_environment(
         session_cap = float(session_cap_value) if session_cap_value else None
         session_requests = int(session_requests_value) if session_requests_value else None
         guard = PrefixGuard(int(prefix_turn), float(prefix_deadline), Path(prefix_receipt)) if prefix_turn else None
+        gui_guard = HumanGuiSessionGuard(float(gui_deadline), Path(gui_receipt)) if gui_deadline else None
     except ValueError as exc:
         raise OpenAIGameServerSidecarConfigurationError(
             "OpenAI budget cap, ceiling, and request limit must be numeric"
@@ -246,13 +254,14 @@ def binding_openai_game_server_config_from_environment(
                 cap_usd, authorized_max_usd=authorized_max_usd,
                 max_requests=max_requests,
                 session_cap_usd=session_cap, session_max_requests=session_requests,
-                dispatch_deadline_unix=guard.deadline_unix if guard else None,
+                dispatch_deadline_unix=(guard.deadline_unix if guard else gui_guard.deadline_unix if gui_guard else None),
             )
             if ledger_value and cap_value
             else None
         ),
         cache_friendly_history=cache_value == "true",
         prefix_guard=guard,
+        human_gui_guard=gui_guard,
     )
 
 
@@ -264,6 +273,7 @@ class _CanonicalBindingPilot:
     pilot: Pilot
     binding: Binding
     prefix_guard: PrefixGuard | None = None
+    human_gui_guard: HumanGuiSessionGuard | None = None
 
     @property
     def name(self) -> str:
@@ -276,6 +286,8 @@ class _CanonicalBindingPilot:
     def choose(self, observation: Mapping[str, Any]) -> PilotChoice:
         if self.prefix_guard is not None:
             self.prefix_guard.check(observation)
+        if self.human_gui_guard is not None:
+            self.human_gui_guard.check(observation)
         choice = self.delegate.choose(observation)
         identity = {
             "binding": self.binding.ref().to_dict(),
@@ -593,6 +605,7 @@ def build_binding_openai_game_server_sidecar(
             pilot=pilot,
             binding=binding,
             prefix_guard=config.prefix_guard,
+            human_gui_guard=config.human_gui_guard,
         )
 
     try:
