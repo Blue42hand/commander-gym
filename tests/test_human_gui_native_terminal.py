@@ -1,6 +1,7 @@
 from contextlib import ExitStack
 import json
 from pathlib import Path
+from types import SimpleNamespace
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
@@ -49,10 +50,11 @@ class NativeTerminalTests(unittest.TestCase):
         if provenance_delay:
             # Exercise real reserve/settle using an in-memory response, with no
             # provider transport; deliberately delay its callback evidence.
-            ledger.create(lambda **_request: {'usage': {'input_tokens': 10, 'output_tokens': 1}},
+            ledger.create(lambda **_request: SimpleNamespace(usage={'input_tokens': 10, 'output_tokens': 1}),
                           {'model': 'gpt-6-luna', 'input': 'offline',
                            'max_output_tokens': ledger.MAX_OUTPUT_TOKENS})
         current = ledger.snapshot()
+        self.assertEqual(current['unsettledRequests'], 0)
         proof = dict(classpath=['/tmp/offline.class'], snapshot=before, sessionCapUsd=1, sessionMaxRequests=5)
         processes = [Mock() for _ in range(3)]
         for process in processes:
