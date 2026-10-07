@@ -77,6 +77,11 @@ def _identities(catalog: CardCatalog) -> dict[str, list[str]]:
 def _receipt(receipt: Any, engine_sha: str, *, deployed: bool = False) -> dict:
     if not isinstance(receipt, dict) or receipt.get('engine_sha') != engine_sha:
         raise CatalogError('receipt must pin the same engine SHA')
+    fields = {'engine_sha', 'source_url', 'verified_at', 'conclusion'}
+    fields.update({'deployed_artifact_sha256'} if deployed else
+                  {'registry_export_sha256', 'coverage_report_sha256'})
+    if set(receipt) != fields:
+        raise CatalogError('receipt contains missing or unsupported fields')
     url = receipt.get('source_url')
     if not isinstance(url, str) or not re.fullmatch(
             r'https://github\.com/Blue42hand/(?:argentum-engine|commander-gym)/'
@@ -231,6 +236,17 @@ def load_evidence(root: Path, coverage_id: str, catalog: CardCatalog) -> dict:
 
 def _validate_payload(payload: dict) -> None:
     """Validate semantic pins at both the publication and read boundaries."""
+    fields = {'schema_version', 'snapshot_id', 'catalog_identity_sha256', 'catalog_sources',
+              'engine_repository', 'engine_sha', 'revision_kind', 'qualification',
+              'deployment_verification', 'registry_export_sha256', 'registry_name_count',
+              'coverage_report_sha256', 'mapping', 'unmapped_registry_name_count', 'cards'}
+    if set(payload) != fields:
+        raise CatalogError('coverage contains missing or unsupported fields')
+    if (type(payload['registry_name_count']) is not int or
+            not 1 <= payload['registry_name_count'] <= MAX_REGISTRY_NAMES or
+            type(payload['unmapped_registry_name_count']) is not int or
+            not 0 <= payload['unmapped_registry_name_count'] <= payload['registry_name_count']):
+        raise CatalogError('invalid coverage registry counts')
     if payload.get('schema_version') != 1 or payload.get('mapping') != 'exact_catalog_card_or_own_face_name_v1':
         raise CatalogError('invalid coverage schema or identity mapping')
     sha = payload.get('engine_sha')

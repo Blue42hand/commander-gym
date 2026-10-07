@@ -175,11 +175,16 @@ class EngineCoverageTests(unittest.TestCase):
             self.lookup('a')
 
     def test_self_hashed_invalid_semantics_cannot_override_identity_or_correctness(self):
-        for change in ['extra_field', 'wrong_receipt_hash', 'wrong_role']:
+        for change in ['extra_field', 'extra_manifest_field', 'extra_receipt_field',
+                       'wrong_receipt_hash', 'wrong_role']:
             artifact = json.loads(json.dumps(self.artifact))
             payload = artifact['evidence']
             if change == 'extra_field':
                 payload['cards']['a']['gameplay_correctness'] = 'verified'
+            elif change == 'extra_manifest_field':
+                payload['unexpected_content'] = 'must not be exposed'
+            elif change == 'extra_receipt_field':
+                payload['qualification']['unexpected_content'] = 'must not be exposed'
             elif change == 'wrong_receipt_hash':
                 payload['qualification']['registry_export_sha256'] = 'f' * 64
             else:
