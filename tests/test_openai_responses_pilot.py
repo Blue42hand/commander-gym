@@ -978,6 +978,12 @@ class OpenAIResponsesPilotTests(unittest.TestCase):
 
     def test_explicit_wait_guidance_changes_only_action_instructions(self):
         observation = action_observation()
+        observation["legalActions"][1] = {
+            "actionId": 1, "semanticId": "native-ability", "kind": "ActivateAbility",
+            "action": {"sourceId": "own-source", "abilityId": "native-ability-id"},
+            "isManaAbility": False, "affordable": True,
+            "parameterSpec": {"allowedFields": {}},
+        }
         for action in observation["legalActions"]:
             action["parameterSpec"] = {"allowedFields": {}}
         calls = []
@@ -997,6 +1003,36 @@ class OpenAIResponsesPilotTests(unittest.TestCase):
         self.assertEqual(revised.pop("instructions"),
                          baseline.pop("instructions") + "\n\n" + EXPLICIT_NAMED_WAIT_INSTRUCTIONS)
         self.assertEqual(baseline, revised)
+
+    def test_explicit_wait_guidance_uses_existing_nonempty_native_menu_gate(self):
+        for mode in ("mana-only", "unaffordable", "other-action"):
+            with self.subTest(menu=mode):
+                observation = action_observation()
+                observation["legalActions"][1] = {
+                    "actionId": 1, "semanticId": "native-ability", "kind": "ActivateAbility",
+                    "action": {"sourceId": "own-source", "abilityId": "native-ability-id"},
+                    "isManaAbility": mode == "mana-only", "affordable": mode != "unaffordable",
+                    "isAffordable": mode != "unaffordable",
+                    "parameterSpec": {"allowedFields": {}},
+                }
+                observation["legalActions"][0]["parameterSpec"] = {"allowedFields": {}}
+                if mode == "other-action":
+                    observation["legalActions"].append({
+                        "actionId": 3, "semanticId": "native-cast", "kind": "CastSpell",
+                        "affordable": True, "parameterSpec": {"allowedFields": {}},
+                    })
+                client = FakeClient(FakeResponse(json.dumps({
+                    "channel": "action", "choice": {
+                        "semanticId": "argentum-action-v1:pass", "params": {},
+                    },
+                })))
+                OpenAIResponsesPilot(
+                    client=client, model="gpt-test", allow_priority_delegation=True,
+                    allow_named_deferrals=True, require_nonempty_named_deferrals=True,
+                    explicit_wait_guidance=True,
+                ).choose(observation)
+                self.assertNotIn(EXPLICIT_NAMED_WAIT_INSTRUCTIONS,
+                                 client.responses.calls[0]["instructions"])
 
     def test_explicit_wait_guidance_preserves_offered_ability_choice(self):
         observation = action_observation()

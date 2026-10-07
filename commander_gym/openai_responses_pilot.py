@@ -31,7 +31,7 @@ from .pilot import ArgentumActionChoice, ArgentumDecisionChoice, PilotChoice
 from .openai_run_budget import OpenAIRunBudget, OpenAIRunBudgetError
 from .observation_projection import compact_seat_observation
 from .cache_friendly_input import cache_friendly_observation_input
-from .delegated_autopass import _NATIVE_PHASES, _NATIVE_STEPS
+from .delegated_autopass import _NATIVE_PHASES, _NATIVE_STEPS, _nonmana_ability_keys
 
 MODEL_IO_SCHEMA_VERSION = 1
 EXPLICIT_NAMED_WAIT_INSTRUCTIONS = (
@@ -1157,7 +1157,8 @@ class OpenAIResponsesPilot:
                         "activate an offered mana ability first or choose a valid manual/decline response."
                     )
 
-        if self.explicit_wait_guidance and action_format is not None:
+        if (self.explicit_wait_guidance and action_format is not None
+            and _nonmana_ability_keys(observation)):
             request["instructions"] += "\n\n" + EXPLICIT_NAMED_WAIT_INSTRUCTIONS
 
         validation_error: OpenAIResponsesPilotError | None = None
