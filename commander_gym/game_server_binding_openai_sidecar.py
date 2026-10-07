@@ -35,6 +35,7 @@ from .game_server_sidecar import GameServerSidecarServer
 from .identity import Binding, Pilot
 from .openai_responses_pilot import OpenAIResponsesPilot
 from .openai_run_budget import OpenAIRunBudget
+from .experimental_prefix import PrefixGuard
 from .pilot import (
     ArgentumActionChoice,
     ArgentumDecisionChoice,
@@ -165,6 +166,7 @@ class BindingOpenAIGameServerConfig:
     instance_root: Path
     budget: OpenAIRunBudget | None = None
     cache_friendly_history: bool = False
+    prefix_guard: PrefixGuard | None = None
 
 
 def binding_openai_game_server_config_from_environment(
@@ -196,6 +198,16 @@ def binding_openai_game_server_config_from_environment(
     cap_value = environment.get("COMMANDER_GYM_OPENAI_BUDGET_CAP_USD")
     authorized_max_value = environment.get("COMMANDER_GYM_OPENAI_BUDGET_AUTHORIZED_MAX_USD")
     request_limit_value = environment.get("COMMANDER_GYM_OPENAI_BUDGET_MAX_REQUESTS")
+    session_cap_value = environment.get("COMMANDER_GYM_OPENAI_SESSION_CAP_USD")
+    session_requests_value = environment.get("COMMANDER_GYM_OPENAI_SESSION_MAX_REQUESTS")
+    prefix_turn = environment.get("COMMANDER_GYM_PREFIX_TURN_LIMIT")
+    prefix_deadline = environment.get("COMMANDER_GYM_PREFIX_DEADLINE_UNIX")
+    prefix_receipt = environment.get("COMMANDER_GYM_PREFIX_STOP_RECEIPT")
+    if (bool(session_cap_value) != bool(session_requests_value)
+        or (bool(session_cap_value) and not ledger_value)
+        or any((prefix_turn, prefix_deadline, prefix_receipt))
+        and not all((prefix_turn, prefix_deadline, prefix_receipt, session_cap_value))):
+        raise OpenAIGameServerSidecarConfigurationError("incomplete session/prefix bounds")
     if bool(ledger_value) != bool(cap_value):
         raise OpenAIGameServerSidecarConfigurationError(
             "OpenAI budget ledger and cap must be configured together"
@@ -208,6 +220,9 @@ def binding_openai_game_server_config_from_environment(
         cap_usd = float(cap_value) if cap_value else None
         authorized_max_usd = float(authorized_max_value) if authorized_max_value else 5.0
         max_requests = int(request_limit_value) if request_limit_value else None
+        session_cap = float(session_cap_value) if session_cap_value else None
+        session_requests = int(session_requests_value) if session_requests_value else None
+        guard = PrefixGuard(int(prefix_turn), float(prefix_deadline), Path(prefix_receipt)) if prefix_turn else None
     except ValueError as exc:
         raise OpenAIGameServerSidecarConfigurationError(
             "OpenAI budget cap, ceiling, and request limit must be numeric"
@@ -230,11 +245,14 @@ def binding_openai_game_server_config_from_environment(
                 Path(environment["COMMANDER_GYM_OPENAI_BUDGET_LEDGER"]).expanduser().resolve(),
                 cap_usd, authorized_max_usd=authorized_max_usd,
                 max_requests=max_requests,
+                session_cap_usd=session_cap, session_max_requests=session_requests,
+                dispatch_deadline_unix=guard.deadline_unix if guard else None,
             )
             if ledger_value and cap_value
             else None
         ),
         cache_friendly_history=cache_value == "true",
+        prefix_guard=guard,
     )
 
 
@@ -245,6 +263,7 @@ class _CanonicalBindingPilot:
     delegate: ArtificialPlayer
     pilot: Pilot
     binding: Binding
+    prefix_guard: PrefixGuard | None = None
 
     @property
     def name(self) -> str:
@@ -255,6 +274,8 @@ class _CanonicalBindingPilot:
         return self.pilot.revision
 
     def choose(self, observation: Mapping[str, Any]) -> PilotChoice:
+        if self.prefix_guard is not None:
+            self.prefix_guard.check(observation)
         choice = self.delegate.choose(observation)
         identity = {
             "binding": self.binding.ref().to_dict(),
@@ -571,6 +592,7 @@ def build_binding_openai_game_server_sidecar(
             delegate=runtime,
             pilot=pilot,
             binding=binding,
+            prefix_guard=config.prefix_guard,
         )
 
     try:

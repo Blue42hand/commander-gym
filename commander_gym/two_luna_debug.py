@@ -656,6 +656,8 @@ def _run_budget(args: argparse.Namespace) -> OpenAIRunBudget:
         Path(args.budget_ledger).resolve(), args.budget_cap,
         authorized_max_usd=args.budget_authorized_max,
         max_requests=args.budget_max_requests,
+        session_cap_usd=getattr(args, "session_cap_usd", None),
+        session_max_requests=getattr(args, "session_max_requests", None),
     )
 
 
@@ -769,6 +771,27 @@ def run(args: argparse.Namespace) -> int:
             completed = terminal_evidence is not None
             stop_reason = "native_complete" if completed else "native_complete_without_terminal"
             break
+        prefix_limit = getattr(args, "prefix_turn_limit", None)
+        if prefix_limit is not None:
+            receipt = Path(args.prefix_stop_receipt)
+            if receipt.is_file():
+                marker = json.loads(receipt.read_text())
+                if marker.get("reason") not in ("prefix_turn_limit", "prefix_wall_limit"):
+                    raise RuntimeError("unknown experimental prefix stop receipt")
+                stop_reason = marker["reason"]
+                break
+            if max_turn > prefix_limit:
+                stop_reason = "prefix_turn_limit"
+                break
+            snapshot = budget.snapshot()
+            if (snapshot["requests"] >= args.session_max_requests
+                and snapshot["unsettledRequests"] <= before["unsettledRequests"]):
+                stop_reason = "prefix_request_limit"
+                break
+            if (snapshot["estimatedUsd"] >= args.session_cap_usd
+                and snapshot["unsettledRequests"] <= before["unsettledRequests"]):
+                stop_reason = "prefix_spend_limit"
+                break
         fatal_action_failure = fatal_action_watch.scan(game_ids)
         if fatal_action_failure is not None:
             stop_reason = "external_ai_action_rejected"
@@ -830,6 +853,12 @@ def run(args: argparse.Namespace) -> int:
         result["technicalQualified"] = False
         result["result"] = "needs-debug"
     result["stopReason"] = stop_reason
+    if getattr(args, "prefix_turn_limit", None) is not None:
+        # A prefix is deliberately incomplete, even if it ends early by a native
+        # win. Keep existing full-game acceptance criteria untouched.
+        result["experimentalPrefix"] = True
+        result["technicalQualified"] = False
+        result["result"] = "experimental-prefix"
     if fatal_action_failure is not None:
         result["fatalActionFailure"] = fatal_action_failure
     if final_status.get("complete") is True and args.terminal_evidence_dir:
@@ -870,6 +899,10 @@ def main() -> int:
     parser.add_argument("--budget-cap", type=float, default=5.0)
     parser.add_argument("--budget-authorized-max", type=float, default=5.0)
     parser.add_argument("--budget-max-requests", type=int)
+    parser.add_argument("--session-cap-usd", type=float)
+    parser.add_argument("--session-max-requests", type=int)
+    parser.add_argument("--prefix-turn-limit", type=int)
+    parser.add_argument("--prefix-stop-receipt")
     parser.add_argument("--timeout", type=float, default=3600,
                         help="emergency wall-time ceiling; natural completion remains the goal")
     parser.add_argument("--stall-seconds", type=float, default=600,
@@ -886,6 +919,11 @@ def main() -> int:
         parser.error("timeout, stall-seconds, and poll-seconds must be positive")
     if args.profiles and len(args.profiles) != 4:
         parser.error("--profile requires exactly four Binding IDs")
+    if args.prefix_turn_limit is not None and (
+        not 1 <= args.prefix_turn_limit <= 8 or not args.prefix_stop_receipt
+        or args.session_cap_usd is None or args.session_max_requests is None
+    ):
+        parser.error("experimental prefix requires turn, receipt and session bounds")
     return run(args)
 
 
