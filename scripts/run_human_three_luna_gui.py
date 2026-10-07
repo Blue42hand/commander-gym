@@ -32,6 +32,12 @@ GATES = ("paidSessionApproved", "fourthChoiceRiskDispositionApproved", "humanDec
          "nativeGuiMockPassed", "protectedRuntimeVerified")
 
 
+JAVA_LOGGING_ARGUMENTS = (
+    "-Dlogging.level.com.wingedsheep.gameserver.handler.ConnectionHandler=WARN",
+    "-Dlogging.level.com.wingedsheep.gameserver.websocket.GameWebSocketHandler=INFO",
+)
+
+
 def runtime_classpath(path: Path, expected_sha: str, gym: Path, engine: Path) -> list[str]:
     names = json.loads(path.read_bytes())
     if not isinstance(names, list) or not names or any(not isinstance(n, str) for n in names):
@@ -60,6 +66,8 @@ def preflight(plan: dict, gym: Path) -> dict:
     for directory, expected in ((gym, plan["gymHead"]), (engine, plan["engineHead"])):
         if _head(directory) != expected or not _tracked_clean(directory):
             raise ValueError("source head or tracked cleanliness changed")
+    if not (gym / "scripts/human_gui_preview.config.mjs").is_file():
+        raise ValueError("reviewed native preview config missing")
     verify_session_catalog(catalog, plan["catalogManifestSha256"])
     classpath = runtime_classpath(Path(plan["classpathFile"]), plan["runtimeClasspathSha256"], gym, engine)
     frontend = engine / "web-client"
@@ -163,8 +171,8 @@ def supervise(plan: dict, gym: Path, run: Path, key_file: Path, python: Path):
                 with socket.socket() as sock:
                     sock.bind(("127.0.0.1", port))
             commands = [([str(python), "-m", "commander_gym.game_server_binding_openai_sidecar"], gym, sidecar),
-                        (["java", "-cp", os.pathsep.join(receipt["classpath"]), "org.commandergym.argentum.LocalGuiGameServerKt"], gym, backend),
-                        ([str(Path(plan["engineDir"]) / "web-client/node_modules/.bin/vite"), "preview", "--host", "127.0.0.1", "--port", str(plan["frontendPort"]), "--strictPort"], Path(plan["engineDir"]) / "web-client", frontend)]
+                        (["java", *JAVA_LOGGING_ARGUMENTS, "-cp", os.pathsep.join(receipt["classpath"]), "org.commandergym.argentum.LocalGuiGameServerKt"], gym, backend),
+                        ([str(Path(plan["engineDir"]) / "web-client/node_modules/.bin/vite"), "preview", "--configLoader", "native", "--config", str(gym / "scripts/human_gui_preview.config.mjs"), "--host", "127.0.0.1", "--port", str(plan["frontendPort"]), "--strictPort"], Path(plan["engineDir"]) / "web-client", frontend)]
             urls = [f'http://127.0.0.1:{plan["sidecarPort"]}/v1/controller-profiles', f'http://127.0.0.1:{plan["serverPort"]}/', f'http://127.0.0.1:{plan["frontendPort"]}/']
             for index, (command, cwd, env) in enumerate(commands):
                 path = run / ("sidecar.log", "server.log", "frontend.log")[index]

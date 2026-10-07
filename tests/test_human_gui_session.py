@@ -4,6 +4,9 @@ import json
 import hashlib
 from pathlib import Path
 import signal
+import shutil
+import subprocess
+import os
 import tempfile
 import time
 import unittest
@@ -124,12 +127,17 @@ class HumanGuiTests(unittest.TestCase):
         plan = dict(serverPort=18080,sidecarPort=18083,catalogRoot='/tmp/catalog',budgetLedger='/tmp/ledger',
                     cumulativeCapUsd=5,cumulativeMaxRequests=100)
         receipt = dict(sessionCapUsd=2,sessionMaxRequests=20)
-        with patch.dict('os.environ', {'OPENAI_API_KEY':'ambient-secret','COMMANDER_GYM_PREFIX_TURN_LIMIT':'8'}):
+        with patch.dict('os.environ', {'OPENAI_API_KEY':'ambient-secret','COMMANDER_GYM_PREFIX_TURN_LIMIT':'8',
+                                     'COMMANDER_GYM_SIDECAR_TOKEN':'offline-sidecar-token-marker',
+                                     'OFFLINE_RAW_MESSAGE':'offline-raw-message-marker'}):
             sidecar, server, frontend = launcher.service_environments(plan,receipt,Path('/tmp/run'),'dummy-key',time.time()+100)
         self.assertEqual(sidecar['OPENAI_API_KEY'],'dummy-key')
         self.assertNotIn('OPENAI_API_KEY',server)
         self.assertNotIn('OPENAI_API_KEY',frontend)
         self.assertNotIn('COMMANDER_GYM_SIDECAR_TOKEN',frontend)
+        self.assertNotIn('OFFLINE_RAW_MESSAGE',frontend)
+        self.assertNotIn('OFFLINE_RAW_MESSAGE',server)
+        self.assertNotEqual(server['COMMANDER_GYM_SIDECAR_TOKEN'],'offline-sidecar-token-marker')
         self.assertNotIn('COMMANDER_GYM_PREFIX_TURN_LIMIT',sidecar)
         config = binding_openai_game_server_config_from_environment(sidecar)
         self.assertEqual(config.budget.session_max_requests,20)
@@ -147,7 +155,7 @@ class HumanGuiTests(unittest.TestCase):
             proof={'classpath':['/tmp/offline.class'], 'snapshot':{'unsettledRequests':0,'requests':0,'estimatedUsd':0},
                    'sessionCapUsd':1,'sessionMaxRequests':5}
             stack.enter_context(patch.object(launcher,'preflight',return_value=proof))
-            stack.enter_context(patch.object(launcher,'read_key',return_value='dummy'))
+            stack.enter_context(patch.object(launcher,'read_key',return_value='sk-test-offline-secret-marker'))
             stack.enter_context(patch.object(launcher,'await_ready'))
             stack.enter_context(patch.object(launcher,'verify_advertised_profiles'))
             budget = OpenAIRunBudget(root/'budget',5,max_requests=100,initialize_new_ledger=True)
@@ -164,6 +172,20 @@ class HumanGuiTests(unittest.TestCase):
             run=root/'run'
             launcher.supervise(plan,root,run,root/'dummy-key',Path('/fake/python'))
             self.assertEqual(start.call_count,3)
+            java = start.call_args_list[1].args[0]
+            self.assertEqual(java[:4], ['java',
+                '-Dlogging.level.com.wingedsheep.gameserver.handler.ConnectionHandler=WARN',
+                '-Dlogging.level.com.wingedsheep.gameserver.websocket.GameWebSocketHandler=INFO', '-cp'])
+            self.assertEqual([a for a in java if a.startswith('-Dlogging.level.')], list(launcher.JAVA_LOGGING_ARGUMENTS))
+            preview = start.call_args_list[2].args[0]
+            self.assertEqual(preview[1:4], ['preview','--configLoader','native'])
+            self.assertEqual(preview[4:6], ['--config',str(root/'scripts/human_gui_preview.config.mjs')])
+            for call in start.call_args_list:
+                self.assertNotIn('sk-test-offline-secret-marker', ' '.join(call.args[0]))
+                self.assertNotIn('offline-sidecar-token-marker', ' '.join(call.args[0]))
+                self.assertNotIn('offline-raw-message-marker', ' '.join(call.args[0]))
+            for call in start.call_args_list[1:]:
+                self.assertNotIn('OPENAI_API_KEY', call.kwargs['env'])
             self.assertEqual(stop.call_count,3)
             self.assertFalse(any('two_luna_debug' in str(c) or 'ai-tournament' in str(c) for c in start.call_args_list))
             self.assertEqual(json.loads((run/'result.json').read_bytes())['reason'],'operator_stop')
@@ -259,3 +281,28 @@ class HumanGuiTests(unittest.TestCase):
             path.write_text(json.dumps(names)); (paths[0]/'Mock.class').unlink()
             with self.assertRaisesRegex(ValueError,'compiled'):
                 launcher.runtime_classpath(path,sha,gym,engine)
+
+    @unittest.skipUnless(shutil.which('node'), 'Node is required for the native preview config check')
+    def test_native_preview_config_keeps_http_websocket_proxy_and_rejects_remote_backend(self):
+        config=(Path(launcher.__file__).parent/'human_gui_preview.config.mjs').as_uri()
+        script='import('+json.dumps(config)+').then(m=>console.log(JSON.stringify(m.default)))'
+        with tempfile.TemporaryDirectory() as tmp:
+            env={'PATH':os.environ['PATH'], 'GAME_SERVER_URL':'http://127.0.0.1:18080'}
+            result=subprocess.run(['node','--input-type=module','-e',script],cwd=tmp,env=env,
+                                  capture_output=True,text=True,check=True)
+            parsed=json.loads(result.stdout)
+            self.assertEqual(Path(parsed['root']).resolve(),Path(tmp).resolve())
+            self.assertEqual(parsed['preview']['proxy']['/game'],
+                             {'target':'http://127.0.0.1:18080','ws':True,'changeOrigin':True})
+            self.assertEqual(parsed['preview']['proxy']['/api'],
+                             {'target':'http://127.0.0.1:18080','changeOrigin':True})
+            for backend in ('', 'http://example.invalid:18080', 'https://127.0.0.1:18080',
+                            'http://127.0.0.1:18080/private', 'http://user:secret@127.0.0.1:18080',
+                            'http://127.0.0.1:18080?raw=offline-marker', 'http://127.0.0.1:65536'):
+                env['GAME_SERVER_URL']=backend
+                rejected=subprocess.run(['node','--input-type=module','-e',script],cwd=tmp,env=env,
+                                        capture_output=True,text=True)
+                self.assertNotEqual(rejected.returncode,0)
+                self.assertIn('plain HTTP loopback',rejected.stderr)
+                self.assertNotIn('user:secret',rejected.stderr)
+                self.assertNotIn('raw=offline-marker',rejected.stderr)
