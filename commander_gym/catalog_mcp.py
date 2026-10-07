@@ -96,6 +96,7 @@ def build_server(root: str | Path):
                      penny_rank_min: int | None = None,
                      penny_rank_max: int | None = None,
                      sort_by: str = 'name',
+                     registered_in: str | None = None,
                      limit: int = 20, cursor: str | None = None) -> dict[str, Any]:
         """Search cards using bounded structured filters, not Scryfall syntax.
 
@@ -104,6 +105,9 @@ def build_server(root: str | Path):
         Optional Scryfall EDHREC and Penny ranks are snapshot-dated, lower is
         more popular, and null means unranked. Sort by name or either rank;
         rank sorts put nulls last and pagination stays snapshot-pinned.
+        Optional registered_in selects an exact coverage_id from list_engine_coverage.
+        It filters registry presence only, never gameplay correctness. Leave it
+        unset for ordinary paper decks; qualified revisions are not deployed claims.
         """
         return checked(lambda: access.search_cards(
             snapshot_id, name=name, oracle_text=oracle_text, type_line=type_line,
@@ -111,7 +115,29 @@ def build_server(root: str | Path):
             color_identity=color_identity, mana_value_min=mana_value_min,
             mana_value_max=mana_value_max, edhrec_rank_min=edhrec_rank_min,
             edhrec_rank_max=edhrec_rank_max, penny_rank_min=penny_rank_min,
-            penny_rank_max=penny_rank_max, sort_by=sort_by, limit=limit, cursor=cursor))
+            penny_rank_max=penny_rank_max, sort_by=sort_by, registered_in=registered_in,
+            limit=limit, cursor=cursor))
+
+    @server.tool(annotations=readonly)
+    def list_engine_coverage(snapshot_id: str) -> dict[str, Any]:
+        """List hashed registry evidence pinned to this catalog and engine SHA.
+
+        Select an explicit coverage_id. Verified deployed-engine receipts and
+        qualified newer revisions remain separate; no revision is auto-selected.
+        Registry presence does not certify gameplay correctness.
+        """
+        return checked(lambda: access.list_engine_coverage(snapshot_id))
+
+    @server.tool(annotations=readonly)
+    def get_engine_coverage(snapshot_id: str, oracle_id: str,
+                            coverage_id: str | None = None) -> dict[str, Any]:
+        """Look up registry presence for one exact Oracle ID in pinned evidence.
+
+        Missing or ambiguous evidence is unknown. Omit coverage_id to return
+        unknown without guessing an engine revision. Gameplay correctness is
+        separate and remains unknown; this tool does not restrict paper decks.
+        """
+        return checked(lambda: access.get_engine_coverage(snapshot_id, oracle_id, coverage_id))
 
     @server.tool(annotations=readonly)
     def get_card(snapshot_id: str, oracle_id: str | None = None,
