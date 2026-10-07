@@ -1,0 +1,533 @@
+"""Preparation-only reporting for the #114 1v1-to-Commander transfer benchmark.
+
+This module composes the existing model-independent held-out benchmark runner rather
+than defining another policy interface. It adds the transfer experiment's cohort
+roles, capability slices, leakage-group sidecar identity, and cross-cohort
+disagreement reporting.
+
+External model/dataset provenance remains owned by #113. This module stores only
+opaque provenance artifact IDs and an exact case->(deduplication identity, leakage group) mapping so it can
+consume that contract without redefining it.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+import hashlib
+import json
+from typing import Any, Dict, Mapping, Sequence, Tuple
+
+from .benchmark import (\n    BenchmarkEntry,\n    BenchmarkScenario,\n    benchmark_entry_input_identity,\n    benchmark_suite_identity,\n)
+from .benchmark_runner import BENCHMARK_REPORT_VERSION
+from .storage import StorageError, parse_artifact_id
+
+TRANSFER_BENCHMARK_SCHEMA_VERSION = 1
+TRANSFER_CAPABILITY_SIDECAR_SCHEMA = "commander-gym-transfer-capabilities@v1"
+TRANSFER_CAPABILITY_TAG_PREFIX = "capability:"
+TRANSFER_CAPABILITIES = (
+    "mulligan",
+    "sequencing",
+    "combat_attack",
+    "combat_block",
+    "resource_use",
+    "interaction_timing",
+    "threat_assessment",
+    "deck_plan",
+    "recovery",
+    "multiplayer_interaction_allocation",
+    "commander_engine",
+    "long_game",
+)
+TRANSFER_COHORT_ROLES = (
+    "baseline",
+    "one_v_one_enriched",
+    "commander_adapted",
+    "frontier_reference",
+)
+
+
+class TransferBenchmarkError(ValueError):
+    """Raised when transfer-benchmark evidence cannot be compared safely."""
+
+
+@dataclass(frozen=True)
+class TransferCohort:
+    """One evaluated transfer cohort and its exact external/model provenance refs."""
+
+    role: str
+    report: Mapping[str, Any]
+    provenance_artifact_ids: Tuple[str, ...]
+
+    def validate(self) -> None:
+        if self.role not in TRANSFER_COHORT_ROLES:
+            raise TransferBenchmarkError(
+                f"cohort role must be one of {list(TRANSFER_COHORT_ROLES)!r}"
+            )
+        if not isinstance(self.report, Mapping):
+            raise TransferBenchmarkError("cohort report must be an object")
+        if (
+            not isinstance(self.provenance_artifact_ids, tuple)
+            or not self.provenance_artifact_ids
+            or any(
+                not isinstance(item, str) or not item
+                for item in self.provenance_artifact_ids
+            )
+        ):
+            raise TransferBenchmarkError(
+                "cohort provenance_artifact_ids must be a non-empty tuple of strings"
+            )
+        if len(self.provenance_artifact_ids) != len(set(self.provenance_artifact_ids)):
+            raise TransferBenchmarkError("cohort provenance_artifact_ids must be unique")
+        for artifact_id in self.provenance_artifact_ids:
+            try:
+                parse_artifact_id(artifact_id)
+            except StorageError as exc:
+                raise TransferBenchmarkError(
+                    "cohort provenance_artifact_ids must use canonical sha256 artifact IDs"
+                ) from exc
+
+
+def capability_tag(capability: str) -> str:
+    if capability not in TRANSFER_CAPABILITIES:
+        raise TransferBenchmarkError(f"unknown transfer capability {capability!r}")
+    return f"{TRANSFER_CAPABILITY_TAG_PREFIX}{capability}"
+
+
+def transfer_capability_identity(
+    capability_by_case: Mapping[str, Sequence[str]],
+) -> Dict[str, Any]:
+    """Validate and fingerprint the #114 capability-classification sidecar."""
+
+    if not isinstance(capability_by_case, Mapping):
+        raise TransferBenchmarkError("capability_by_case must be an object")
+    membership = []
+    represented = set()
+    for case_id in sorted(capability_by_case):
+        capabilities = capability_by_case[case_id]
+        if not isinstance(case_id, str) or not case_id:
+            raise TransferBenchmarkError("capability sidecar case_id must be non-empty")
+        if not isinstance(capabilities, (list, tuple)) or not capabilities:
+            raise TransferBenchmarkError(
+                f"capabilities for {case_id!r} must be a non-empty array"
+            )
+        normalized = []
+        for capability in capabilities:
+            if capability not in TRANSFER_CAPABILITIES:
+                raise TransferBenchmarkError(
+                    f"case {case_id!r} uses unknown transfer capability {capability!r}"
+                )
+            normalized.append(capability)
+            represented.add(capability)
+        normalized = sorted(set(normalized))
+        membership.append({"case_id": case_id, "capabilities": normalized})
+
+    payload = {
+        "schema": TRANSFER_CAPABILITY_SIDECAR_SCHEMA,
+        "membership": membership,
+    }
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    ).encode("utf-8")
+    missing = sorted(set(TRANSFER_CAPABILITIES) - represented)
+    return {
+        "schema": TRANSFER_CAPABILITY_SIDECAR_SCHEMA,
+        "case_count": len(membership),
+        "represented_capabilities": sorted(represented),
+        "missing_capabilities": missing,
+        "qualification_ready": not missing,
+        "fingerprint": f"sha256:{hashlib.sha256(encoded).hexdigest()}",
+    }
+
+
+def _validate_capabilities(
+    cases: Sequence[BenchmarkEntry],
+    capability_by_case: Mapping[str, Sequence[str]],
+) -> Tuple[Dict[str, Tuple[str, ...]], Dict[str, Any]]:
+    expected = {case.case_id for case in cases}
+    actual = set(capability_by_case)
+    if actual != expected:
+        missing = sorted(expected - actual)
+        extra = sorted(actual - expected)
+        raise TransferBenchmarkError(
+            f"capability-sidecar membership must exactly match benchmark cases; "
+            f"missing={missing!r} extra={extra!r}"
+        )
+    identity = transfer_capability_identity(capability_by_case)
+    normalized = {
+        case_id: tuple(sorted(set(capability_by_case[case_id])))
+        for case_id in expected
+    }
+    return normalized, identity
+
+def _is_project_synthetic_case(case: BenchmarkEntry) -> bool:
+    return isinstance(case, BenchmarkScenario) and case.tags == ["project_synthetic"]
+
+
+def _validate_leakage_groups(
+    cases: Sequence[BenchmarkEntry],
+    leakage_group_by_case: Mapping[str, Tuple[str, str]],
+) -> Dict[str, Dict[str, str]]:
+    """Combine #113 external grouping with local project-synthetic input identity."""
+
+    if not isinstance(leakage_group_by_case, Mapping):
+        raise TransferBenchmarkError("leakage_group_by_case must be an object")
+
+    case_by_id = {case.case_id: case for case in cases}
+    expected = set(case_by_id)
+    actual = set(leakage_group_by_case)
+    project_synthetic = {
+        case.case_id for case in cases if _is_project_synthetic_case(case)
+    }
+
+    overlap = sorted(project_synthetic & actual)
+    if overlap:
+        raise TransferBenchmarkError(
+            "project-synthetic cases must not carry external leakage provenance; "
+            f"overlap={overlap!r}"
+        )
+
+    extra = sorted(actual - expected)
+    if extra:
+        raise TransferBenchmarkError(
+            f"leakage-group mapping contains unknown benchmark cases; extra={extra!r}"
+        )
+
+    external_expected = expected - project_synthetic
+    missing = sorted(external_expected - actual)
+    if missing:
+        raise TransferBenchmarkError(
+            "external leakage-group membership must cover every non-project-synthetic "
+            f"benchmark case; missing={missing!r}"
+        )
+
+    normalized: Dict[str, Dict[str, str]] = {}
+    for case_id in sorted(external_expected):
+        group_key = leakage_group_by_case[case_id]
+        if (
+            not isinstance(group_key, tuple)
+            or len(group_key) != 2
+            or any(not isinstance(item, str) or not item for item in group_key)
+        ):
+            raise TransferBenchmarkError(
+                f"leakage group for {case_id!r} must be "
+                "(deduplication_identity, leakage_group_id)"
+            )
+        normalized[case_id] = {
+            "source": "external",
+            "deduplication_identity": group_key[0],
+            "leakage_group_id": group_key[1],
+        }
+
+    for case_id in sorted(project_synthetic):
+        fingerprint = benchmark_entry_input_identity(case_by_id[case_id])["fingerprint"]
+        normalized[case_id] = {
+            "source": "project_synthetic",
+            "input_fingerprint": fingerprint,
+        }
+
+    return normalized
+
+
+def _leakage_group_identity(
+    leakage_group_by_case: Mapping[str, Mapping[str, str]],
+) -> Dict[str, Any]:
+    membership: list[Dict[str, str]] = []
+    groups: set[Tuple[str, ...]] = set()
+    external_case_count = 0
+    project_synthetic_case_count = 0
+
+    for case_id in sorted(leakage_group_by_case):
+        value = leakage_group_by_case[case_id]
+        source = value["source"]
+        if source == "external":
+            external_case_count += 1
+            deduplication_identity = value["deduplication_identity"]
+            leakage_group_id = value["leakage_group_id"]
+            membership.append(
+                {
+                    "case_id": case_id,
+                    "source": source,
+                    "deduplication_identity": deduplication_identity,
+                    "leakage_group_id": leakage_group_id,
+                }
+            )
+            groups.add(("external", deduplication_identity, leakage_group_id))
+        elif source == "project_synthetic":
+            project_synthetic_case_count += 1
+            input_fingerprint = value["input_fingerprint"]
+            membership.append(
+                {
+                    "case_id": case_id,
+                    "source": source,
+                    "input_fingerprint": input_fingerprint,
+                }
+            )
+            groups.add(("project_synthetic", input_fingerprint))
+        else:
+            raise TransferBenchmarkError(
+                f"unsupported leakage source {source!r} for case {case_id!r}"
+            )
+
+    payload = {
+        "schema": "commander-gym-transfer-leakage-coverage@v2",
+        "membership": membership,
+    }
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    ).encode("utf-8")
+    return {
+        "schema": payload["schema"],
+        "case_count": len(membership),
+        "group_count": len(groups),
+        "external_case_count": external_case_count,
+        "project_synthetic_case_count": project_synthetic_case_count,
+        "fingerprint": f"sha256:{hashlib.sha256(encoded).hexdigest()}",
+    }
+
+
+def _validate_report(
+    report: Mapping[str, Any],
+    benchmark_identity: Mapping[str, Any],
+    expected_case_ids: set[str],
+    label: str,
+) -> Dict[str, Dict[str, Any]]:
+    if report.get("schema_version") != BENCHMARK_REPORT_VERSION:
+        raise TransferBenchmarkError(
+            f"{label} report schema_version must be {BENCHMARK_REPORT_VERSION}"
+        )
+    if report.get("benchmark") != benchmark_identity:
+        raise TransferBenchmarkError(
+            f"{label} report benchmark identity differs from the transfer suite"
+        )
+    pilot = report.get("pilot")
+    if not isinstance(pilot, Mapping):
+        raise TransferBenchmarkError(f"{label} report is missing pilot identity")
+    for field_name in ("name", "version"):
+        value = pilot.get(field_name)
+        if not isinstance(value, str) or not value:
+            raise TransferBenchmarkError(
+                f"{label} pilot.{field_name} must be a non-empty string"
+            )
+    raw_rows = report.get("cases")
+    if not isinstance(raw_rows, list):
+        raise TransferBenchmarkError(f"{label} report cases must be an array")
+    rows: Dict[str, Dict[str, Any]] = {}
+    for raw in raw_rows:
+        if not isinstance(raw, Mapping):
+            raise TransferBenchmarkError(f"{label} report case rows must be objects")
+        case_id = raw.get("case_id")
+        if not isinstance(case_id, str) or not case_id:
+            raise TransferBenchmarkError(f"{label} report case_id must be non-empty")
+        if case_id in rows:
+            raise TransferBenchmarkError(f"{label} report repeats case_id {case_id!r}")
+        if not isinstance(raw.get("selected_action_id"), str):
+            raise TransferBenchmarkError(
+                f"{label} selected_action_id for {case_id!r} must be a string"
+            )
+        for field_name in ("legal", "preferred", "invalid_output", "escalated"):
+            if not isinstance(raw.get(field_name), bool):
+                raise TransferBenchmarkError(
+                    f"{label} {field_name} for {case_id!r} must be boolean"
+                )
+        error = raw.get("error")
+        if error is not None and not isinstance(error, str):
+            raise TransferBenchmarkError(
+                f"{label} error for {case_id!r} must be a string or null"
+            )
+        rows[case_id] = dict(raw)
+    if set(rows) != expected_case_ids:
+        raise TransferBenchmarkError(
+            f"{label} report case membership differs from the transfer suite"
+        )
+    return rows
+
+
+def _rate(rows: Sequence[Mapping[str, Any]], field_name: str) -> float | None:
+    if not rows:
+        return None
+    if field_name == "error":
+        return sum(row.get("error") is not None for row in rows) / len(rows)
+    return sum(bool(row[field_name]) for row in rows) / len(rows)
+
+
+def _numeric_values(rows: Sequence[Mapping[str, Any]], field_name: str) -> list[float]:
+    values = []
+    for row in rows:
+        value = row.get(field_name)
+        if value is None:
+            continue
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise TransferBenchmarkError(
+                f"benchmark row {field_name} must be numeric or null"
+            )
+        values.append(float(value))
+    return values
+
+
+def _cohort_metrics(rows: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+    latency = _numeric_values(rows, "latency_ms")
+    input_tokens = _numeric_values(rows, "input_tokens")
+    output_tokens = _numeric_values(rows, "output_tokens")
+    cost = _numeric_values(rows, "cost_usd")
+    return {
+        "cases": len(rows),
+        "preferred_rate": _rate(rows, "preferred"),
+        "legal_rate": _rate(rows, "legal"),
+        "invalid_output_rate": _rate(rows, "invalid_output"),
+        "error_rate": _rate(rows, "error"),
+        "escalation_rate": _rate(rows, "escalated"),
+        "mean_latency_ms": (sum(latency) / len(latency)) if latency else None,
+        "input_tokens": int(sum(input_tokens)) if input_tokens else None,
+        "output_tokens": int(sum(output_tokens)) if output_tokens else None,
+        "cost_usd": sum(cost) if cost else None,
+    }
+
+
+def _disagreement(
+    case_ids: Sequence[str],
+    rows_by_role: Mapping[str, Mapping[str, Mapping[str, Any]]],
+) -> Dict[str, Any]:
+    if not case_ids:
+        return {
+            "cases": 0,
+            "any_disagreement_rate": None,
+            "all_agree_rate": None,
+            "case_ids_with_disagreement": [],
+        }
+    disagreed = []
+    for case_id in case_ids:
+        selections = {
+            rows_by_role[role][case_id]["selected_action_id"]
+            for role in TRANSFER_COHORT_ROLES
+        }
+        if len(selections) > 1:
+            disagreed.append(case_id)
+    rate = len(disagreed) / len(case_ids)
+    return {
+        "cases": len(case_ids),
+        "any_disagreement_rate": rate,
+        "all_agree_rate": 1.0 - rate,
+        "case_ids_with_disagreement": sorted(disagreed),
+    }
+
+
+def build_transfer_benchmark_summary(
+    cases: Sequence[BenchmarkEntry],
+    cohorts: Sequence[TransferCohort],
+    *,
+    leakage_group_by_case: Mapping[str, Tuple[str, str]],
+    capability_by_case: Mapping[str, Sequence[str]],
+) -> Dict[str, Any]:
+    """Build one exact four-cohort #114 comparison over already-frozen cases.
+
+    This is preparation/reporting only: it does not start Argentum, train a model,
+    or turn the frontier reference into ground truth.
+    """
+
+    case_list = list(cases)
+    if not case_list:
+        raise TransferBenchmarkError("transfer benchmark requires at least one case")
+    benchmark_identity = benchmark_suite_identity(case_list)
+    capabilities_by_case, capability_identity = _validate_capabilities(
+        case_list, capability_by_case
+    )
+    leakage_groups = _validate_leakage_groups(case_list, leakage_group_by_case)
+
+    cohort_by_role: Dict[str, TransferCohort] = {}
+    for cohort in cohorts:
+        if not isinstance(cohort, TransferCohort):
+            raise TransferBenchmarkError("cohorts must contain TransferCohort values")
+        cohort.validate()
+        if cohort.role in cohort_by_role:
+            raise TransferBenchmarkError(f"duplicate transfer cohort role {cohort.role!r}")
+        cohort_by_role[cohort.role] = cohort
+    if set(cohort_by_role) != set(TRANSFER_COHORT_ROLES):
+        missing = sorted(set(TRANSFER_COHORT_ROLES) - set(cohort_by_role))
+        extra = sorted(set(cohort_by_role) - set(TRANSFER_COHORT_ROLES))
+        raise TransferBenchmarkError(
+            f"transfer benchmark requires exactly the canonical cohorts; "
+            f"missing={missing!r} extra={extra!r}"
+        )
+
+    case_ids = {case.case_id for case in case_list}
+    rows_by_role = {
+        role: _validate_report(
+            cohort_by_role[role].report,
+            benchmark_identity,
+            case_ids,
+            role,
+        )
+        for role in TRANSFER_COHORT_ROLES
+    }
+
+    overall_metrics = {
+        role: _cohort_metrics([rows_by_role[role][case_id] for case_id in sorted(case_ids)])
+        for role in TRANSFER_COHORT_ROLES
+    }
+    baseline_preferred = overall_metrics["baseline"]["preferred_rate"]
+    for role in TRANSFER_COHORT_ROLES:
+        preferred = overall_metrics[role]["preferred_rate"]
+        overall_metrics[role]["preferred_delta_vs_baseline"] = (
+            None
+            if baseline_preferred is None or preferred is None
+            else preferred - baseline_preferred
+        )
+
+    capability_summaries: Dict[str, Any] = {}
+    for capability in TRANSFER_CAPABILITIES:
+        capability_case_ids = sorted(
+            case_id
+            for case_id, capabilities in capabilities_by_case.items()
+            if capability in capabilities
+        )
+        if not capability_case_ids:
+            continue
+        cohort_metrics = {
+            role: _cohort_metrics(
+                [rows_by_role[role][case_id] for case_id in capability_case_ids]
+            )
+            for role in TRANSFER_COHORT_ROLES
+        }
+        baseline = cohort_metrics["baseline"]["preferred_rate"]
+        for role in TRANSFER_COHORT_ROLES:
+            preferred = cohort_metrics[role]["preferred_rate"]
+            cohort_metrics[role]["preferred_delta_vs_baseline"] = (
+                None if baseline is None or preferred is None else preferred - baseline
+            )
+        capability_summaries[capability] = {
+            "cases": len(capability_case_ids),
+            "case_ids": capability_case_ids,
+            "cohorts": cohort_metrics,
+            "disagreement": _disagreement(capability_case_ids, rows_by_role),
+        }
+
+    return {
+        "schema_version": TRANSFER_BENCHMARK_SCHEMA_VERSION,
+        "benchmark": benchmark_identity,
+        "leakage_groups": _leakage_group_identity(leakage_groups),
+        "capability_sidecar": capability_identity,
+        "cohorts": {
+            role: {
+                "pilot": dict(cohort_by_role[role].report["pilot"]),
+                "provenance_artifact_ids": list(
+                    cohort_by_role[role].provenance_artifact_ids
+                ),
+                "metrics": overall_metrics[role],
+            }
+            for role in TRANSFER_COHORT_ROLES
+        },
+        "capabilities": capability_summaries,
+        "disagreement": _disagreement(sorted(case_ids), rows_by_role),
+        "notes": {
+            "frontier_reference_is_ground_truth": False,
+            "leakage_group_semantics_owned_by": "commander-gym#113",
+        },
+    }
