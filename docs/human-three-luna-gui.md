@@ -32,7 +32,10 @@ Prepare an owner-only JSON plan with these required fields:
   session bounds; both provider attempts/retries count. No turn-8 cutoff, default
   spend allowance or human-idle stall timeout is inherited.
 - `runtimeLock`: shared sole-writer lock; `serverPort`, `sidecarPort`, `frontendPort`:
-  distinct loopback ports. Preview proxies `/api` and `/game` WebSocket to GUI backend.
+  distinct loopback ports. Preview uses `--configLoader native --config scripts/human_gui_preview.config.mjs`
+  from the reviewed Gym release, avoiding temporary executable config writes and
+  the engine build config's bundler-dependent `__dirname`. This plain-ESM preview
+  config serves the existing dist and permits only a numeric HTTP loopback backend. Preview proxies `/api` and `/game` WebSocket to GUI backend.
 
 Default invocation `python3 scripts/run_human_three_luna_gui.py --plan PLAN` only
 verifies prepared sources/builds/catalog/budget. It loads no key or provider and
@@ -53,6 +56,12 @@ frontend `/game` proxy and native parameter checks. A rejecting provider is mand
 fixture completion is not evidence of Luna play, strategy or paid qualification.
 Python mock tests cover the registry/lifecycle seam; they do not claim this browser
 fixture has run. Keep fourth-choice strategic uncertainty explicit.
+
+The Java command fixes only `ConnectionHandler=WARN` and `GameWebSocketHandler=INFO`
+to suppress token/raw-message debug logs while keeping native failure reporting.
+An actual protected no-cost rehearsal must verify dummy-token/raw-marker absence,
+frontend HTTP/WebSocket operation, read-only executable trees, and cleanup; command
+regressions alone do not certify that runtime. Never make executable directories writable.
 
 The launcher passes a shared deadline and absolute session ceilings into the atomic
 budget and guard. Native callbacks remain native; source state is never modified.
