@@ -289,6 +289,8 @@ def launch(args, parser):
     processes, logs = [], []
     previous_term = (signal.signal(signal.SIGTERM, _interrupted)
                      if args.supervised_batch_process_group or args.experimental_wait_prefix else None)
+    previous_int = (signal.signal(signal.SIGINT, _interrupted)
+                    if args.experimental_wait_prefix else None)
     try:
         sidecar_log = (run_dir / "sidecar.log").open("x")
         logs.append(sidecar_log)
@@ -336,10 +338,12 @@ def launch(args, parser):
         _write_private_json(run_dir / "prefix-launcher-stop.json", {"reason": "prefix_wall_limit"})
         return 1
     finally:
-        if args.supervised_batch_process_group:
+        if args.supervised_batch_process_group or args.experimental_wait_prefix:
             # The parent batch wrapper owns this whole group and verifies that
             # no member survives before it releases its runtime lock.
             signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        if args.experimental_wait_prefix:
+            signal.signal(signal.SIGINT, signal.SIG_IGN)
         try:
             for process in reversed(processes):
                 if args.experimental_wait_prefix:
@@ -383,6 +387,8 @@ def launch(args, parser):
                 log.close()
             if args.supervised_batch_process_group or args.experimental_wait_prefix:
                 signal.signal(signal.SIGTERM, previous_term)
+            if args.experimental_wait_prefix:
+                signal.signal(signal.SIGINT, previous_int)
 
 
 if __name__ == "__main__":

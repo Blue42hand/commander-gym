@@ -5,6 +5,7 @@ import io
 import json
 import os
 import sys
+import signal
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -51,6 +52,12 @@ class ExperimentalPrefixTests(unittest.TestCase):
                 self.assertNotIn("OPENAI_API_KEY", kwargs["env"])
                 self.assertLessEqual(kwargs["timeout"], 900)
                 return SimpleNamespace(returncode=1)
+            previous_term = signal.getsignal(signal.SIGTERM)
+            previous_int = signal.getsignal(signal.SIGINT)
+            def cleanup_with_signals(*_args):
+                signal.raise_signal(signal.SIGTERM)
+                signal.raise_signal(signal.SIGINT)
+                assert_locked()
             with patch("sys.argv", argv), patch("scripts.run_two_luna_binding_game.subprocess.check_output",
                     side_effect=["fixture", "", "fixture", ""]), \
                     patch("scripts.run_two_luna_binding_game.stage_experimental_wait_catalog",
@@ -60,11 +67,13 @@ class ExperimentalPrefixTests(unittest.TestCase):
                     patch("scripts.run_two_luna_binding_game.await_ready"), \
                     patch("scripts.run_two_luna_binding_game.subprocess.Popen") as started, \
                     patch("scripts.run_two_luna_binding_game.subprocess.run", side_effect=runner), \
-                    patch("scripts.run_two_luna_binding_game._stop_and_verify_group", side_effect=assert_locked) as cleanup, \
+                    patch("scripts.run_two_luna_binding_game._stop_and_verify_group", side_effect=cleanup_with_signals) as cleanup, \
                     redirect_stdout(io.StringIO()):
                 started.return_value.poll.return_value = 0
                 self.assertEqual(launch_main(), 1)
             self.assertEqual(cleanup.call_count, 2)
+            self.assertEqual(signal.getsignal(signal.SIGTERM), previous_term)
+            self.assertEqual(signal.getsignal(signal.SIGINT), previous_int)
             sidecar_env = started.call_args_list[0].kwargs["env"]
             config = binding_openai_game_server_config_from_environment(sidecar_env)
             self.assertEqual(config.prefix_guard.turn_limit, 8)
