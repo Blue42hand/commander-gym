@@ -157,6 +157,7 @@ def supervise(plan: dict, gym: Path, run: Path, key_file: Path, python: Path):
     processes, logs = [], []
     reason, error_type, status = "startup_failure", None, 1
     terminal = None
+    provenance = fatal = None
     with exclusive_runtime_lock(Path(plan["runtimeLock"])):
         receipt = preflight(plan, gym)
         if run.exists():
@@ -207,9 +208,22 @@ def supervise(plan: dict, gym: Path, run: Path, key_file: Path, python: Path):
                 # Native cancellation can race an already dispatched sidecar request.
                 # Keep services alive until it settles, bounded by the original deadline.
                 if native.receipt is not None and snapshot["unsettledRequests"] <= receipt["snapshot"]["unsettledRequests"]:
-                    terminal = native.receipt
-                    reason = "native_game_over"
-                    break
+                    budget = OpenAIRunBudget(Path(plan["budgetLedger"]), plan["cumulativeCapUsd"],
+                                             authorized_max_usd=plan["cumulativeCapUsd"],
+                                             max_requests=plan["cumulativeMaxRequests"])
+                    _, _, drained, _ = _finalize_provenance(run / "policy.jsonl", budget,
+                                                            receipt["snapshot"]["requests"], timeout_seconds=0)
+                    if drained:
+                        # Settlement precedes policy serialization; a late callback
+                        # can also report an error after the watches' first scan.
+                        provenance.scan()
+                        fatal.scan([])
+                        if fatal.failures or fatal.policy_failure or provenance.failed:
+                            reason = "callback_or_native_failure"
+                        else:
+                            terminal = native.receipt
+                            reason = "native_game_over"
+                        break
                 if any(p.poll() is not None for p in processes):
                     reason = "service_exited"
                     break
@@ -232,6 +246,11 @@ def supervise(plan: dict, gym: Path, run: Path, key_file: Path, python: Path):
                     _stop_and_verify_group(process)
                 for log in logs:
                     log.close()
+                if reason == "native_game_over":
+                    provenance.scan()
+                    fatal.scan([])
+                    if fatal.failures or fatal.policy_failure or provenance.failed:
+                        reason, terminal = "callback_or_native_failure", None
                 status = final_receipt(plan, receipt, run, reason, error_type, terminal)
             finally:
                 for s, handler in old.items():
