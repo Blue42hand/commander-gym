@@ -131,10 +131,10 @@ def final_receipt(plan: dict, receipt: dict, run: Path, reason: str, error_type:
                   terminal: dict | None = None):
     budget = OpenAIRunBudget(Path(plan["budgetLedger"]), plan["cumulativeCapUsd"],
                              authorized_max_usd=plan["cumulativeCapUsd"], max_requests=plan["cumulativeMaxRequests"])
-    after = budget.snapshot()
     before = receipt["snapshot"]
     _, recorded, reconciled, error = _finalize_provenance(run / "policy.jsonl", budget,
                                                         before["requests"], timeout_seconds=0)
+    after = budget.snapshot()
     new_unsettled = after["unsettledRequests"] - before["unsettledRequests"]
     result = {"reason": reason, "errorType": error_type, "qualification": False,
               "naturalTerminalVerified": reason == "native_game_over" and terminal is not None,
@@ -227,7 +227,7 @@ def supervise(plan: dict, gym: Path, run: Path, key_file: Path, python: Path):
                 if any(p.poll() is not None for p in processes):
                     reason = "service_exited"
                     break
-                if (snapshot["requests"] >= receipt["sessionMaxRequests"] or snapshot["estimatedUsd"] >= receipt["sessionCapUsd"]):
+                if native.receipt is None and (snapshot["requests"] >= receipt["sessionMaxRequests"] or snapshot["estimatedUsd"] >= receipt["sessionCapUsd"]):
                     # Let the last already-reserved call settle; no further reserve
                     # can pass the atomic sidecar ceiling. Wall bound still applies.
                     if snapshot["unsettledRequests"] <= receipt["snapshot"]["unsettledRequests"]:

@@ -29,6 +29,7 @@ dependencies {
     testImplementation("com.wingedsheep:argentum-rules-engine")
     testImplementation("com.wingedsheep:argentum-sdk")
     testImplementation("org.springframework.boot:spring-boot-starter-test:4.1.0")
+    testImplementation("org.springframework:spring-websocket")
 }
 
 kotlin { jvmToolchain(21) }

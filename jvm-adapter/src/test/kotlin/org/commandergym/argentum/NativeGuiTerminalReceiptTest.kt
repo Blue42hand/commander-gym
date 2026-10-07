@@ -46,8 +46,8 @@ class NativeGuiTerminalReceiptTest {
                         EntityId("ai-0"), GameOverReason.LIFE_ZERO, gameId = "offline-human-three-ai")))
                     sessions.forEach { it.sendMessage(message) }
                     val deadline = System.nanoTime() + 5_000_000_000L
-                    while (sessions.any { it.isOpen } && System.nanoTime() < deadline) Thread.sleep(10)
-                    assertTrue(sessions.none { it.isOpen })
+                    while (sessions.any { it.isOpen() } && System.nanoTime() < deadline) Thread.sleep(10)
+                    assertTrue(sessions.none { it.isOpen() })
                     val first = Files.readString(path)
                     sessions.forEach { it.sendMessage(message) }
                     logger.info("AI game over. Winner: {}", EntityId("different-duplicate"))
