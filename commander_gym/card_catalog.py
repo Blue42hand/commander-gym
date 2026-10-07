@@ -319,7 +319,8 @@ class CardCatalog:
                      edhrec_rank_min: int | None = None, edhrec_rank_max: int | None = None,
                      penny_rank_min: int | None = None, penny_rank_max: int | None = None,
                      sort_by: str = 'name', limit: int = 20,
-                     cursor: str | None = None) -> dict[str, Any]:
+                     cursor: str | None = None,
+                     _registry_filter: tuple[str, tuple[str, ...]] | None = None) -> dict[str, Any]:
         limit = _limit(limit)
         if tag_kind not in ('oracle', 'art'):
             raise CatalogError('tag_kind must be oracle or art')
@@ -362,11 +363,16 @@ class CardCatalog:
         if rank_filters or sort_by != 'name':
             scoped_filters.update(rank_filters)
             scoped_filters['sort_by'] = sort_by
+        if _registry_filter is not None:
+            scoped_filters['registered_in'] = _registry_filter[0]
         scope = _scope('search_cards', scoped_filters)
         after = (_cursor_decode(cursor, self.snapshot_id, scope) if sort_by == 'name' else
                  _rank_cursor_decode(cursor, self.snapshot_id, scope))
         where = ['c.snapshot_id=?']
         args: list[Any] = [self.snapshot_id]
+        if _registry_filter is not None:
+            where.append('c.oracle_id IN (SELECT value FROM json_each(?))')
+            args.append(json.dumps(_registry_filter[1]))
         for column, value in (('name', name), ('oracle_text', oracle_text), ('type_line', type_line)):
             if value:
                 where.append(f"(c.{column} LIKE ? ESCAPE '\\' OR EXISTS ("

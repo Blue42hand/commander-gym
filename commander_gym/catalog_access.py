@@ -12,6 +12,7 @@ import re
 from typing import Any
 
 from .card_catalog import CardCatalog, CatalogError
+from .engine_coverage import load_evidence, lookup, metadata
 
 
 _SNAPSHOT_ID = re.compile(r"[0-9a-f]{24}\Z")
@@ -58,8 +59,50 @@ class CatalogAccess:
                     limit: int = 20, cursor: str | None = None) -> dict[str, Any]:
         return self._catalog(snapshot_id).search_tags(query, kind=kind, limit=limit, cursor=cursor)
 
-    def search_cards(self, snapshot_id: str, **filters: Any) -> dict[str, Any]:
-        return self._catalog(snapshot_id).search_cards(**filters)
+    def search_cards(self, snapshot_id: str, *, registered_in: str | None = None,
+                     **filters: Any) -> dict[str, Any]:
+        if '_registry_filter' in filters:
+            raise CatalogError('registry filter must use a pinned coverage_id')
+        catalog = self._catalog(snapshot_id)
+        payload = None
+        if registered_in is not None:
+            payload = load_evidence(self.root, registered_in, catalog)
+            filters['_registry_filter'] = (registered_in, tuple(
+                key for key, entry in payload['cards'].items()
+                if entry['registry_presence'] == 'present'))
+        result = catalog.search_cards(**filters)
+        if payload is not None:
+            result['engine_coverage'] = metadata(registered_in, payload)
+        return result
+
+    def get_engine_coverage(self, snapshot_id: str, oracle_id: str,
+                            coverage_id: str | None = None) -> dict[str, Any]:
+        catalog = self._catalog(snapshot_id)
+        payload = None if coverage_id is None else load_evidence(self.root, coverage_id, catalog)
+        return lookup(catalog, oracle_id, coverage_id, payload)
+
+    def list_engine_coverage(self, snapshot_id: str) -> dict[str, Any]:
+        """Discover immutable evidence IDs without choosing a preferred revision."""
+        catalog = self._catalog(snapshot_id)
+        directory = self.root / 'engine-coverage'
+        if directory.is_symlink():
+            raise CatalogError('coverage directory unavailable')
+        paths = sorted(directory.glob('*.json')) if directory.is_dir() else []
+        if len(paths) > 50:
+            raise CatalogError('too many coverage artifacts; operator retention review required')
+        evidence = []
+        for path in paths:
+            # A snapshot mismatch is expected when older evidence is retained.
+            from .engine_coverage import EVIDENCE_ID, _json, _read
+            if not EVIDENCE_ID.fullmatch(path.stem):
+                raise CatalogError('invalid coverage artifact name')
+            artifact = _json(_read(path))
+            if not isinstance(artifact.get('evidence'), dict):
+                raise CatalogError('invalid coverage artifact')
+            if artifact['evidence'].get('snapshot_id') == snapshot_id:
+                evidence.append(metadata(path.stem, load_evidence(self.root, path.stem, catalog)))
+        return {'snapshot_id': snapshot_id, 'engine_coverage': evidence,
+                'selection_required': True}
 
     def get_card(self, snapshot_id: str, *, oracle_id: str | None = None,
                  printing_id: str | None = None) -> dict[str, Any] | None:
