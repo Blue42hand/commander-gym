@@ -276,7 +276,8 @@ def launch(args, parser):
     # Ambient experiment settings must not mutate a default v7 run.
     for key in ("COMMANDER_GYM_OPENAI_SESSION_CAP_USD", "COMMANDER_GYM_OPENAI_SESSION_MAX_REQUESTS",
                 "COMMANDER_GYM_PREFIX_TURN_LIMIT", "COMMANDER_GYM_PREFIX_DEADLINE_UNIX",
-                "COMMANDER_GYM_PREFIX_STOP_RECEIPT"):
+                "COMMANDER_GYM_PREFIX_STOP_RECEIPT", "COMMANDER_GYM_HUMAN_GUI_DEADLINE_UNIX",
+                "COMMANDER_GYM_HUMAN_GUI_STOP_RECEIPT"):
         env.pop(key, None)
     if args.session_cap_usd is not None:
         env["COMMANDER_GYM_OPENAI_SESSION_CAP_USD"] = str(args.session_cap_usd)
