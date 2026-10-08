@@ -27,7 +27,7 @@ def observation():
 
 
 class CapturedChoicesTests(unittest.TestCase):
-    def fixture(self, variant='accepted'):
+    def fixture(self, variant='accepted', *, compressed_source=False, large_observation=False, choice_ids=('synthetic-correlation',)):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         root = Path(temp.name)
@@ -46,49 +46,53 @@ class CapturedChoicesTests(unittest.TestCase):
             if seat: body['seatId'] = seat
             exact = json.dumps(body, separators=(',', ':'))
             previous = hashlib.sha256(exact.encode()).hexdigest()
-            with path.open('a') as stream: stream.write(json.dumps({'body': exact, 'sha256': previous})+'\n')
+            from commander_gym.record_codec import encode_record
+            physical = (json.dumps({'body': exact, 'sha256': previous})+'\n').encode()
+            with path.open('ab') as stream: stream.write(encode_record(physical, compress=compressed_source))
         add('initialization', {'setup': {'seed': 42, 'players': [{'playerId': 'seat-a',
             'deck': {'cards': ['Forest', 'Forest']}}]}, 'pinnedCards': []})
-        before = observation()
-        evidence = context(before)
-        add('ai_decision_input', evidence, 'seat-a')
         pins = {key: 'synthetic' for key in PIN_KEYS}
         pins['gym'] = 'b'*40
         capture = NativeGameCapture(root, pins)
         self.addCleanup(capture.close)
         sink = capture.seat_sink(game.name, 'seat-a')
-        lineage = {key: {'artifact_type': key, 'artifact_id': key+'-a', 'revision': 'v1', 'fingerprint': 'a'*64}
-                   for key in ('binding', 'deck', 'pilot')}
-        lineage.update(deck_cards={'Forest': 2}, pilot_name='synthetic-pilot', pilot_version='v1')
-        enriched = {**before, 'schemaHash': evidence['schemaHash'], 'stateDigest': evidence['stateDigest'],
-                    'knownDeck': {'cards': {'Forest': 2}}}
-        if variant == 'observation_mismatch': enriched['state'] = {'viewingPlayerId': 'seat-a', 'ownHand': ['Island']}
-        if variant == 'lineage_mismatch': lineage['deck_cards'] = {'Island': 2}
-        if variant == 'admin_addition': enriched['refereeState'] = {'opponentHidden': 'synthetic-secret'}
-        if variant == 'deck_addition': enriched['knownDeck']['opponentDeck'] = ['synthetic-secret']
-        event = SeatProvenance('chooseAction', enriched, {'channel': 'action', 'actionId': 0,
-            'params': {'targets': ['synthetic']} if variant == 'parameters' else {},
-            'metadata': {'input_tokens': 17, 'rationale': 'actual synthetic rationale'}}, evidence, lineage)
-        sink.started(event)
-        sink.finished(event)
-        if variant == 'duplicate_callback':
+        for cid in choice_ids:
+            before = observation()
+            if large_observation: before['state']['ownHand'].append('synthetic-own-card-' * 2000)
+            evidence = context(before, cid)
+            add('ai_decision_input', evidence, 'seat-a')
+            lineage = {key: {'artifact_type': key, 'artifact_id': key+'-a', 'revision': 'v1', 'fingerprint': 'a'*64}
+                       for key in ('binding', 'deck', 'pilot')}
+            lineage.update(deck_cards={'Forest': 2}, pilot_name='synthetic-pilot', pilot_version='v1')
+            enriched = {**before, 'schemaHash': evidence['schemaHash'], 'stateDigest': evidence['stateDigest'],
+                        'knownDeck': {'cards': {'Forest': 2}}}
+            if variant == 'observation_mismatch': enriched['state'] = {'viewingPlayerId': 'seat-a', 'ownHand': ['Island']}
+            if variant == 'lineage_mismatch': lineage['deck_cards'] = {'Island': 2}
+            if variant == 'admin_addition': enriched['refereeState'] = {'opponentHidden': 'synthetic-secret'}
+            if variant == 'deck_addition': enriched['knownDeck']['opponentDeck'] = ['synthetic-secret']
+            event = SeatProvenance('chooseAction', enriched, {'channel': 'action', 'actionId': 0,
+                'params': {'targets': ['synthetic']} if variant == 'parameters' else {},
+                'metadata': {'input_tokens': 17, 'rationale': 'actual synthetic rationale'}}, evidence, lineage)
             sink.started(event)
             sink.finished(event)
-        action = before['legalActions'][0]['action']
-        add('native_transition', {'action': action, 'result': {'state': {'opponentHidden': 'synthetic-admin-secret'},
-            'events': [], 'outcome': {'type': 'Done'}}, 'beforeStateDigest': 'c'*64, 'effectiveStateDigest': 'd'*64})
-        after = deepcopy(before)
-        after['state']['ownHand'] = []
-        after['legalActions'] = []
-        result = {'version': 1, 'correlationId': evidence['correlationId'], 'status': 'accepted',
-                  'inputStateDigest': evidence['stateDigest'], 'semanticId': 'native-pass',
-                  'actionId': 0, 'action': action, 'resultObservation': context(after)}
-        if variant in {'rejected', 'stale', 'overridden'}:
-            add('ai_decision_disposition', {'correlationId': evidence['correlationId'], 'status': variant}, 'seat-a')
-        elif variant != 'missing_result':
-            if variant == 'wrong_seat': result['resultObservation'] = context({**after, 'perspectivePlayerId': 'seat-b'})
-            add('ai_decision_result', result, 'seat-a')
-            if variant == 'duplicate_result': add('ai_decision_result', result, 'seat-a')
+            if variant == 'duplicate_callback':
+                sink.started(event)
+                sink.finished(event)
+            action = before['legalActions'][0]['action']
+            add('native_transition', {'action': action, 'result': {'state': {'opponentHidden': 'synthetic-admin-secret'},
+                'events': [], 'outcome': {'type': 'Done'}}, 'beforeStateDigest': 'c'*64, 'effectiveStateDigest': 'd'*64})
+            after = deepcopy(before)
+            after['state']['ownHand'] = []
+            after['legalActions'] = []
+            result = {'version': 1, 'correlationId': evidence['correlationId'], 'status': 'accepted',
+                      'inputStateDigest': evidence['stateDigest'], 'semanticId': 'native-pass',
+                      'actionId': 0, 'action': action, 'resultObservation': context(after)}
+            if variant in {'rejected', 'stale', 'overridden'}:
+                add('ai_decision_disposition', {'correlationId': evidence['correlationId'], 'status': variant}, 'seat-a')
+            elif variant != 'missing_result':
+                if variant == 'wrong_seat': result['resultObservation'] = context({**after, 'perspectivePlayerId': 'seat-b'})
+                add('ai_decision_result', result, 'seat-a')
+                if variant == 'duplicate_result': add('ai_decision_result', result, 'seat-a')
         add('terminal', {'nativeGameOver': True, 'winnerId': 'seat-a', 'administrativeStall': None})
         capture.scan()
         return game
@@ -105,6 +109,11 @@ class CapturedChoicesTests(unittest.TestCase):
         self.assertIsNone(record['metadata']['timing']['submission_elapsed_ms'])
         self.assertNotIn('synthetic-admin-secret', json.dumps(record))
         self.assertNotIn('synthetic-correlation', json.dumps(record['observation']))
+
+    def test_callback_order_is_chronological_for_reverse_lexical_correlation_ids(self):
+        records, diagnostics = accepted_choice_records(self.fixture(choice_ids=('z-first', 'a-second')))
+        self.assertEqual([r.to_dict()['decision_id'] for r in records], ['z-first', 'a-second'])
+        self.assertEqual(diagnostics, {})
 
     def test_rejected_incomplete_stale_duplicate_overridden_and_parameterized_choices_stay_diagnostic(self):
         for variant in ('rejected', 'stale', 'overridden', 'missing_result', 'duplicate_callback',

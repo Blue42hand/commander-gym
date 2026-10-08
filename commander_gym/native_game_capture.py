@@ -13,10 +13,14 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
+from collections.abc import Sequence
+from itertools import islice
+import copy
+from .record_codec import NATIVE_MAX_RECORD_BYTES, decode_record, physical_lines
 
 from .game_journal import (
     JournalError, PIN_KEYS, ZERO, PrivateGameJournal, RecorderSeatSink,
-    _json, _private_dir, _safe, inspect_journal, publish_finalized_manifest, verify_finalized_manifest,
+    _json, _private_dir, _safe, RowSlice, inspect_journal, publish_finalized_manifest, verify_finalized_manifest,
 )
 
 
@@ -31,7 +35,7 @@ class NativeCursor:
     revisions: set[str] = field(default_factory=set)
 
 
-def read_native_source(directory: Path, cursor: NativeCursor | None = None) -> list[dict[str, Any]]:
+def iter_native_source(directory: Path, cursor: NativeCursor | None = None, *, stop_offset: int | None = None):
     """Verify complete newline-terminated rows; an incomplete live tail stays pending.
 
     A closed source has a terminal as its last row. No prefix is promoted to a
@@ -47,20 +51,24 @@ def read_native_source(directory: Path, cursor: NativeCursor | None = None) -> l
     if (cursor.inode is not None and cursor.inode != inode) or stat.st_size < cursor.offset:
         raise JournalError('native source replaced or shortened')
     cursor.inode = inode
-    rows = []
     with path.open('rb') as stream:
         stream.seek(cursor.offset)
-        for line in stream:
-            if not line.endswith(b'\n'):
+        lines = physical_lines(stream, max_bytes=NATIVE_MAX_RECORD_BYTES)
+        while stop_offset is None or cursor.offset < stop_offset:
+            try:
+                physical = next(lines)
+            except StopIteration:
+                break
+            if not physical.endswith(b'\n'):
                 break
             try:
-                wrapper = json.loads(line)
+                wrapper = json.loads(decode_record(physical, max_bytes=NATIVE_MAX_RECORD_BYTES))
                 if not isinstance(wrapper, dict) or not isinstance(wrapper.get('body'), str):
                     raise JournalError('invalid native wrapper')
                 digest = hashlib.sha256(wrapper['body'].encode('utf-8')).hexdigest()
                 body = json.loads(wrapper['body'])
                 if (wrapper.get('sha256') != digest or not isinstance(body, dict) or
-                        body.get('schemaVersion') != 1 or body.get('gameId') != directory.name or
+                        type(body.get('schemaVersion')) is not int or body.get('schemaVersion') != 1 or body.get('gameId') != directory.name or
                         type(body.get('sequence')) is not int or body['sequence'] != cursor.sequence + 1 or
                         body.get('previousSha256') != cursor.previous or cursor.terminal):
                     raise JournalError('native source integrity or ordering failure')
@@ -71,15 +79,43 @@ def read_native_source(directory: Path, cursor: NativeCursor | None = None) -> l
                 if body['visibility'] == 'seat' and not isinstance(body.get('seatId'), str):
                     raise JournalError('native seat identity unavailable')
                 _safe(body)
-                rows.append({'native': body, 'source_body': wrapper['body'], 'source_sha256': digest})
                 cursor.previous, cursor.revision = digest, body['engineRevision']
                 cursor.revisions.add(body['engineRevision'])
                 cursor.sequence += 1
-                cursor.offset += len(line)
+                cursor.offset += len(physical)
                 cursor.terminal = body['kind'] in {'terminal', 'session_closed'}
+                yield {'native': body, 'source_body': wrapper['body'], 'source_sha256': digest}
             except (ValueError, TypeError, KeyError) as error:
                 raise JournalError('native source verification failed') from error
-    return rows
+
+
+class NativeRows(Sequence):
+    """Reiterable verified physical range; only a single decoded row is resident."""
+    def __init__(self, directory, start, end, count):
+        self.directory, self.start, self.end, self.count = directory, start, end, count
+    def __len__(self): return self.count
+    def __iter__(self):
+        cursor = copy.deepcopy(self.start)
+        yield from iter_native_source(self.directory, cursor, stop_offset=self.end.offset)
+        if cursor.offset != self.end.offset or cursor.previous != self.end.previous:
+            raise JournalError('native prefix changed during read')
+    def __eq__(self, other):
+        return isinstance(other, Sequence) and len(self) == len(other) and all(a == b for a, b in zip(self, other))
+    def __getitem__(self, index):
+        if isinstance(index, slice):
+            return RowSlice(self, range(*index.indices(self.count)))
+        if index < 0: index += self.count
+        if not 0 <= index < self.count: raise IndexError(index)
+        return next(islice(iter(self), index, index + 1))
+
+
+def read_native_source(directory: Path, cursor: NativeCursor | None = None) -> Sequence:
+    """Legacy indexed reader contract, now disk-backed and memory-bounded."""
+    cursor = cursor if cursor is not None else NativeCursor()
+    start = copy.deepcopy(cursor)
+    count = 0
+    for _ in iter_native_source(directory, cursor): count += 1
+    return NativeRows(directory, start, copy.deepcopy(cursor), count)
 
 
 class NativeGameCapture:
@@ -147,7 +183,7 @@ class NativeGameCapture:
     def seat_sink(self, game_id: str, seat_id: str) -> RecorderSeatSink:
         with self._lock:
             self._validate_id(game_id)
-            rows = read_native_source(self.root / game_id)
+            rows = [] if game_id in self._journals else read_native_source(self.root / game_id)
             return RecorderSeatSink(self._journal(game_id, rows), seat_id, gym_revision=self.declared_pins['gym'])
 
     @staticmethod
@@ -169,15 +205,15 @@ class NativeGameCapture:
                             manifest = verify_finalized_manifest(directory)
                             self._finalized_bytes[game_id] = manifest['storage_bytes']
                         continue
-                    if (directory / '000000.jsonl').exists() and inspect_journal(directory)['closed']:
+                    if game_id not in self._journals and (directory / '000000.jsonl').exists() and inspect_journal(directory)['closed']:
                         publish_finalized_manifest(directory)
                         continue
                     cursor = self._cursors.setdefault(game_id, NativeCursor())
                     # Start from the last durable imported source row after a recorder restart.
                     if cursor.offset == 0 and (directory / '000000.jsonl').exists():
                         prior = inspect_journal(directory)
-                        source_rows = [{'native': json.loads(r['payload']['source_body']), 'source_body': r['payload']['source_body']}
-                                       for r in prior['rows'] if r['source'] == 'native']
+                        source_rows = ({'native': json.loads(r['payload']['source_body']), 'source_body': r['payload']['source_body']}
+                                       for r in prior['rows'] if r['source'] == 'native')
                         for item in source_rows:
                             if item['native']['kind'] == 'initialization':
                                 self._initializations[game_id] = item['native']
@@ -185,12 +221,12 @@ class NativeGameCapture:
                                 self._terminals[game_id] = {**item['native']['payload'], 'source_kind': item['native']['kind']}
                         # Verify the source prefix once; subsequent scans read only appended bytes.
                         verified = read_native_source(directory, cursor)
-                        imported_count = len(source_rows)
-                        if verified[:imported_count] != source_rows:
-                            # Transition rows also contain normalization, compare exact source body.
-                            if ([v['source_body'] for v in verified[:imported_count]] !=
-                                    [v['source_body'] for v in source_rows]):
-                                raise JournalError('native prefix differs from durable import')
+                        imported_count = prior['sources'].get('native', 0)
+                        source_rows = (r['payload']['source_body'] for r in prior['rows'] if r['source'] == 'native')
+                        from itertools import zip_longest
+                        if any(a != b['source_body'] if isinstance(b, dict) else True
+                               for a, b in zip_longest(source_rows, verified[:imported_count])):
+                            raise JournalError('native prefix differs from durable import')
                         rows = verified[imported_count:]
                     else:
                         rows = read_native_source(directory, cursor)

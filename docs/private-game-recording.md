@@ -1,5 +1,43 @@
 # Private game capture and finalized analysis contract
 
+## Lossless private transport and streaming readers
+
+New writers optionally encode each full logical newline-terminated record in a
+`recordCodec: 1`, `encoding: gzip-base64` frame, only when the frame saves physical
+bytes. `decodedBytes` pins the exact UTF-8 byte length; strict single-member gzip,
+CRC/length checks and canonical base64 reject malformed/truncated frames. Logical
+native bodies, journal schemas, sequences and SHA-256 chains remain unchanged.
+Plain records and compressed records can coexist; resume counts physical bytes.
+The native and Gym 1 GiB default caps, reserve and retention policy are unchanged.
+Compression reduces cap pressure; it cannot guarantee an arbitrary game's capture
+will fit. A recording failure still freezes evidence and marks incomplete coverage.
+
+Resource limits bound a native physical/decoded row to 64 MiB and a Gym row to
+256 MiB. Gym wraps the exact escaped native body plus own-seat or transition
+summaries, so its larger transport boundary covers the native producer range.
+Legacy plaintext records within these bounds remain supported. Oversized legacy
+rows fail verification/resume explicitly; their files are preserved. No historical
+record is transcoded, rewritten, deleted or silently promoted to complete.
+
+Journal/native-source readers now provide reiterable disk-backed sequences. They
+verify ordered hashes in streaming passes and retain a bounded number of rows,
+plus source/seat/revision/pending-activity metadata. Explicit caller `list(...)`
+materializes history; indexed/reverse access may require repeated scans. Hashing,
+finalization and discovery read artifacts in chunks. New seat projections are
+`.projection.json.gz` files, tagged `gzip-json-array-v1`, whose decoded bytes match
+the legacy JSON array exactly. Existing plaintext projections are reused, never
+replaced. `iter_projection_artifact` reads either format a bounded row at a time.
+Referee state never enters projections or pilot context.
+
+Accepted-choice export joins receipts in a private temporary SQLite index with a
+bounded cache, preserves first callback order, and holds one choice at a time.
+Only owned temporary index/export files are cleaned up. Export publication is
+exclusive and occurs after complete conversion and fsync. Final manifests have an
+8 MiB metadata read bound. Peak memory depends on the largest logical record and
+outstanding activity/metadata, rather than accumulated game-state history.
+No compression gain, exact replay or all-choice training qualification is implied.
+Deployment requires a service-owner matched engine/Gym release.
+
 ## Offline canonical conversion and replay qualification
 
 ### Bounded accepted AI-choice export
