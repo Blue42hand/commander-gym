@@ -65,7 +65,7 @@ def frame_from_callback(observation, choice, *, seat_id, context, evidence_ref, 
             offers.append(dict(instance_id=action.get('cardId'), affordable=offer.get('isAffordable') if type(offer.get('isAffordable')) is bool else None,
                                action_id=offer.get('actionId')))
     if (not observation.get('pendingDecision') and isinstance(choice, dict) and
-            choice.get('channel') == 'action'):
+            choice.get('channel') == 'action' and type(choice.get('actionId')) is int):
         matches = [a for a in actions if a.get('actionId') == choice.get('actionId')]
         if len(matches) == 1:
             action = matches[0].get('action', {})

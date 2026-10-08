@@ -225,3 +225,9 @@ class CardOpportunityTests(unittest.TestCase):
         with self.assertRaises(CardOpportunityError):
             _pointer({'x~2': 1}, '/x~2')
         self.assertEqual(1,_pointer({'x/y':1}, '/x~1y'))
+
+    def test_malformed_choice_id_is_not_a_selected_play(self):
+        for choice in ({'channel':'action','actionId':True},{'channel':'action'}):
+            c=self.card(report(callback(choice=choice)))
+            self.assertEqual(0,c['counts']['selected_play_windows'])
+            self.assertEqual(1,c['counts']['choice_unknown_windows'])
