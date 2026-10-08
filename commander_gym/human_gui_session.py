@@ -90,3 +90,22 @@ class GuiProvenanceWatch:
             self.callbacks += 1
             self.failed |= row.get("choice", {}).get("channel") == "error"
             self.native_game_over |= row.get("observation", {}).get("state", {}).get("isGameOver") is True
+
+
+class GuiNativeTerminalWatch:
+    """Read the local JVM's atomic, minimal native WebSocket notification receipt."""
+    def __init__(self, path: Path):
+        self.path = path
+        self.receipt = None
+
+    def scan(self):
+        if self.receipt is not None or not self.path.exists():
+            return
+        row = json.loads(self.path.read_bytes())
+        if (set(row) != {"schemaVersion", "source", "winnerId"}
+                or type(row["schemaVersion"]) is not int or row["schemaVersion"] != 1
+                or row["source"] != "native_ai_websocket_game_over"
+                or row["winnerId"] is not None and
+                (not isinstance(row["winnerId"], str) or not row["winnerId"])):
+            raise ValueError("invalid native GUI terminal receipt")
+        self.receipt = row
