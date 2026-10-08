@@ -133,6 +133,7 @@ def analyze_frames(frames, *, source, generator_revision):
             entry['windows'].append(dict(window_key=window, turn=turn, observable_context=copies[0].get('observable_context', {}),
                 in_hand=any(c['in_hand'] for c in instances), availability=availability,
                 selection=selection if availability == 'native_playable' else 'not_applicable',
+                selected_in_observation=(selected in ids) if choice_known else None,
                 execution='unknown', evidence_refs=list(refs.values()),
                 decision_ids=sorted({d for f in copies for d in f.get('decision_ids', [])})))
     result = []
@@ -140,6 +141,9 @@ def analyze_frames(frames, *, source, generator_revision):
         counts = Counter()
         for w in entry['windows']:
             counts['seen_windows'] += 1
+            counts['observed_selected_play_windows'] += int(w['selected_in_observation'] is True)
+            counts['selected_without_confirmed_opportunity_windows'] += int(
+                w['selected_in_observation'] is True and w['availability'] != 'native_playable')
             counts['in_hand_windows'] += int(w['in_hand'])
             counts[w['availability']+'_windows'] += 1
             if w['selection'] != 'not_applicable':
@@ -159,7 +163,7 @@ def analyze_frames(frames, *, source, generator_revision):
             play_selection_rate=dict(numerator=played, denominator=denominator,
                                      value=played/denominator if denominator else None,
                                      unknown_choices=counts['choice_unknown_windows']),
-            usefulness={basis: dict(helpful=0, neutral=0, harmful=0, unknown=played)
+            usefulness={basis: dict(helpful=0, neutral=0, harmful=0, unknown=counts['observed_selected_play_windows'])
                         for basis in ['ex_ante_choice', 'observed_effect']},
             exposure=dict(observed_hand_turns=hand_turns, observed_playable_hand_turns=playable_turns,
                 observed_unaffordable_hand_turns=unaffordable_turns,
@@ -361,7 +365,7 @@ def analyze_artifact(layout, source_artifact_id, *, annotation_artifact_ids=(), 
             annotation=annotation.to_dict()))
     for card in report['cards']:
         for window in card['windows']:
-            if window['selection'] != 'selected_play':
+            if window['selected_in_observation'] is not True:
                 continue
             for basis in card['usefulness']:
                 key = (card['seat_id'], _digest(card['context']), window['window_key'], card['identity'], basis)

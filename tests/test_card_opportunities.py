@@ -231,3 +231,13 @@ class CardOpportunityTests(unittest.TestCase):
             c=self.card(report(callback(choice=choice)))
             self.assertEqual(0,c['counts']['selected_play_windows'])
             self.assertEqual(1,c['counts']['choice_unknown_windows'])
+
+    def test_selected_play_survives_unknown_affordability_without_inflating_rate(self):
+        f=callback(choice={'channel':'action','actionId':1})
+        f['offers'][0]['affordable']=None
+        c=self.card(report(f))
+        self.assertEqual(1,c['counts']['observed_selected_play_windows'])
+        self.assertEqual(1,c['counts']['selected_without_confirmed_opportunity_windows'])
+        self.assertEqual(0,c['play_selection_rate']['denominator'])
+        self.assertTrue(c['windows'][0]['selected_in_observation'])
+        self.assertEqual(1,c['usefulness']['ex_ante_choice']['unknown'])

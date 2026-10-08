@@ -38,7 +38,8 @@ Structured/payment callbacks are excluded with coverage counts.
 
 The selected-play rate is selected / (selected + held) among observed affordable
 opportunities with known choices. Unknown choices are separately counted and
-excluded from that denominator. Holds require a known other selection. Conflicting
+excluded from that denominator. Holds require a known other selection. Observed selections are also counted independently
+of affordability; selections without confirmed opportunities never enter that rate. Conflicting
 selected cards in the same observed state produce an unknown choice. A selected
 callback is not proof of native execution; execution remains unknown.
 
