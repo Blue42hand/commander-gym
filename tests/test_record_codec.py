@@ -167,6 +167,10 @@ class RecordCodecTests(unittest.TestCase):
                     row = report['rows'][-1]
                     self.assertGreater(len(_json(row)), native_limit)
                     self.assertEqual(row['payload']['native']['payload']['own'], 'synthetic-' * 680)
+                    snapshot = read_native_source(game)
+                    # A later live tail is outside the verified snapshot, even if oversized.
+                    with source.open('ab') as stream: stream.write(b'x' * (native_limit + 1))
+                    self.assertEqual(len(list(snapshot)), 2)
                 finally: capture.close()
 
     def test_oversized_legacy_record_is_explicitly_rejected_without_modifying_it(self):

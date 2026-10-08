@@ -53,8 +53,12 @@ def iter_native_source(directory: Path, cursor: NativeCursor | None = None, *, s
     cursor.inode = inode
     with path.open('rb') as stream:
         stream.seek(cursor.offset)
-        for physical in physical_lines(stream, max_bytes=NATIVE_MAX_RECORD_BYTES):
-            if stop_offset is not None and cursor.offset >= stop_offset: break
+        lines = physical_lines(stream, max_bytes=NATIVE_MAX_RECORD_BYTES)
+        while stop_offset is None or cursor.offset < stop_offset:
+            try:
+                physical = next(lines)
+            except StopIteration:
+                break
             if not physical.endswith(b'\n'):
                 break
             try:
