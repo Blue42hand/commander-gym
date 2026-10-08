@@ -21,6 +21,7 @@ from .evidence import validate_raw_evidence_envelope
 from .storage import artifact_id_for_bytes
 
 VERSION = 1
+MANIFEST_KIND = "commander-gym.game-capture-manifest"
 ZERO = "0" * 64
 PIN_KEYS = ("engine", "gym", "models", "decks", "bindings", "config", "rng")
 FORBIDDEN = {"authorization", "headers", "rawheaders", "apikey", "password",
@@ -106,7 +107,7 @@ def inspect_journal(directory: Path) -> dict[str, Any]:
                 try:
                     row = json.loads(line)
                     digest = row.pop("sha256")
-                    if row["schema_version"] != VERSION:
+                    if type(row["schema_version"]) is not int or row["schema_version"] != VERSION:
                         raise JournalError("unsupported_schema")
                     if row["sequence"] != sequence or row["previous_sha256"] != previous:
                         raise JournalError("sequence_or_chain_gap")
@@ -317,7 +318,7 @@ class PrivateGameJournal:
         This is admin evidence, not the public replay presentation. It cannot supply
         human legal menus, per-choice timing, or emitted events absent from the input.
         """
-        if replay.get("version", 1) not in (1, 2):
+        if type(replay.get("version", 1)) is not int or replay.get("version", 1) not in (1, 2, 3, 4):
             raise JournalError("unsupported native compact replay version")
         if replay.get("gameId") != self.game_id or not isinstance(replay.get("actions"), list):
             raise JournalError("native replay identity or actions missing")
@@ -338,6 +339,29 @@ class PrivateGameJournal:
         if run["decision_ids"] != ids:
             raise JournalError("canonical decision IDs must match captured callbacks in order")
         return self.append("raw_evidence", {"envelope": dict(envelope)})
+
+    def finish_from_native_receipt(self, receipt_path: Path, *,
+                                   expected_sources: Mapping[str, int], gaps: list[str],
+                                   supervisor_termination: str) -> str:
+        """Consume #205's receipt only from this journal's own private run directory.
+
+        Receipt has no game ID. The orchestration owner must assign its path to this
+        session before launch; do not attach a historical or foreign receipt.
+        Supervisor termination remains an independent unchanged fact.
+        """
+        from .human_gui_session import GuiNativeTerminalWatch
+        if (receipt_path.is_symlink() or not receipt_path.resolve().is_relative_to(self.directory.resolve())
+                or receipt_path.stat().st_mode & 0o077):
+            raise JournalError("native terminal receipt must belong to this private run")
+        watcher = GuiNativeTerminalWatch(receipt_path)
+        watcher.scan()
+        receipt = watcher.receipt
+        if receipt is None:
+            raise JournalError("native terminal receipt is unavailable")
+        return self.finish({"kind": "native_terminal", "game_id": self.game_id,
+                            "winner_id": receipt["winnerId"], "native_receipt": receipt,
+                            "supervisor_termination": supervisor_termination},
+                           expected_sources=expected_sources, gaps=gaps)
 
     def publish_manifest(self) -> dict[str, Any]:
         """Recover publication after a crash between terminal fsync and manifest replace.
@@ -372,7 +396,7 @@ class PrivateGameJournal:
                                       "size_bytes": len(data), "artifact_id": artifact_id_for_bytes(data),
                                       "sha256": hashlib.sha256(data).hexdigest()})
             evidence_hash = hashlib.sha256(_json(artifacts)).hexdigest()
-            result = {"schema_version": VERSION, "run_id": report["run_id"],
+            result = {"schema_version": VERSION, "kind": MANIFEST_KIND, "run_id": report["run_id"],
                       "game_id": report["rows"][0]["payload"]["game_id"],
                       "ready_for_analysis": True, "recording_complete": report["recording_complete"],
                       "journal_root_sha256": report["root_sha256"],
@@ -423,7 +447,8 @@ def verify_finalized_manifest(directory: Path) -> dict[str, Any]:
         raise JournalError("manifest must be private and not a symlink")
     manifest = json.loads(path.read_bytes())
     _safe(manifest)
-    if (manifest.get("schema_version") != VERSION or not report["closed"] or
+    if (manifest.get("kind") != MANIFEST_KIND or type(manifest.get("schema_version")) is not int or
+            manifest.get("schema_version") != VERSION or not report["closed"] or
             manifest.get("ready_for_analysis") is not True or
             manifest.get("run_id") != report["run_id"] or
             manifest.get("journal_root_sha256") != report["root_sha256"] or
@@ -464,9 +489,9 @@ def discover_finalized_manifests(runs_root: Path) -> list[dict[str, Any]]:
             manifest = verify_finalized_manifest(directory)
         except (OSError, ValueError, KeyError, TypeError):
             continue
-        results.append({key: manifest[key] for key in (
+        results.append({"relative_run_directory": directory.name, **{key: manifest[key] for key in (
             "schema_version", "run_id", "game_id", "ready_for_analysis", "recording_complete",
-            "artifact_hash", "journal_root_sha256", "outcome", "gaps", "analysis")})
+            "artifact_hash", "journal_root_sha256", "outcome", "gaps", "analysis")}})
     return results
 
 

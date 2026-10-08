@@ -2,6 +2,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -89,6 +90,15 @@ class JournalTests(unittest.TestCase):
         row['schema_version'] = 999
         path.write_text(json.dumps(row) + '\n')
         self.assertIn('unsupported_schema', inspect_journal(self.root)['issues'])
+    def test_missing_segment_is_detected(self):
+        with self.writer(segment_bytes=300) as w: self.native(w)
+        (self.root / '000001.jsonl').rename(self.root / '000003.jsonl')
+        self.assertIn('missing_segment', inspect_journal(self.root)['issues'])
+    def test_resume_changed_pins_is_refused(self):
+        with self.writer(): pass
+        changed = dict(PINS, gym={'revision': 'different'})
+        with self.assertRaisesRegex(JournalError, 'pins mismatch'):
+            PrivateGameJournal(self.root, 'r', changed, game_id='g')
     def test_hash_tampering(self):
         with self.writer() as w: self.native(w)
         path = self.root / '000000.jsonl'
@@ -123,7 +133,7 @@ class JournalTests(unittest.TestCase):
             with self.assertRaisesRegex(JournalError, 'failed'): w.append('coverage_gap', {})
     def test_native_replay_stays_admin_and_is_not_replay_certification(self):
         with self.writer() as w:
-            w.native_replay({'version': 2, 'gameId': 'g', 'setup': {'seed': 42},
+            w.native_replay({'version': 4, 'gameId': 'g', 'setup': {'seed': 42},
                              'actions': [{'type': 'PassPriority'}], 'pinnedCards': ['synthetic']})
             w.finish({'kind': 'native_terminal'}, expected_sources={}, gaps=['native_events_unavailable'])
         report = inspect_journal(self.root)
@@ -147,5 +157,41 @@ class JournalTests(unittest.TestCase):
                 {'semanticId': 'synthetic:pass', 'action': {'type': 'PassPriority', 'playerId': 'a'}}], None)
             self.assertEqual(pilot.seen, 'decision_started')
         self.assertEqual(inspect_journal(self.root)['rows'][-1]['kind'], 'seat_callback')
+
+    def test_existing_raw_evidence_contract_reused_without_new_training_schema(self):
+        from commander_gym.evidence import build_raw_evidence_envelope, validate_raw_evidence_envelope
+        from tests.test_evidence import RawEvidenceTests
+        fixture = RawEvidenceTests()
+        with self.writer() as w:
+            self.native(w)
+            sink = RecorderSeatSink(w, 'a')
+            event = SeatProvenance('chooseAction', OBS, {'channel': 'action', 'actionId': 0})
+            sink.started(event)
+            sink.finished(event)
+            decision_id = inspect_journal(self.root)['rows'][-1]['payload']['decision_id']
+            record = replace(fixture.make_record(), game_id='g', decision_id=decision_id)
+            run = replace(fixture.make_run(), run_id='r', game_id='g', decision_ids=[decision_id])
+            envelope = build_raw_evidence_envelope(run, [record], commander_gym_revision='synthetic-gym')
+            w.raw_evidence(envelope)
+            with self.assertRaisesRegex(JournalError, 'already attached'): w.raw_evidence(envelope)
+            w.finish({'kind': 'native_terminal'}, expected_sources={'native': 1, 'seat:a': 1}, gaps=[])
+        report = inspect_journal(self.root)
+        self.assertTrue(report['recording_complete'])
+        manifest = json.loads((self.root / 'manifest.json').read_bytes())
+        artifact = next(a for a in manifest['artifacts'] if a['role'] == 'canonical_raw_evidence')
+        validate_raw_evidence_envelope(json.loads((self.root / artifact['path']).read_bytes()))
+        self.assertTrue(artifact['artifact_id'].startswith('sha256:'))
+
+    def test_native_receipt_uses_merged_contract_and_preserves_supervisor(self):
+        with self.writer() as w:
+            receipt = self.root / 'native-terminal.json'
+            receipt.write_text(json.dumps({'schemaVersion': 1,
+                'source': 'native_ai_websocket_game_over', 'winnerId': 'a'}))
+            receipt.chmod(0o600)
+            w.finish_from_native_receipt(receipt, expected_sources={}, gaps=['native_events_unavailable'],
+                                         supervisor_termination='operator_stop')
+        outcome = inspect_journal(self.root)['rows'][-1]['payload']['outcome']
+        self.assertEqual(outcome['kind'], 'native_terminal')
+        self.assertEqual(outcome['supervisor_termination'], 'operator_stop')
 
 if __name__ == '__main__': unittest.main()
