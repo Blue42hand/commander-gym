@@ -150,6 +150,9 @@ class GameServerBindingRegistry:
             player_id,
             provenance_sink=provenance_sink,
             decision_start_sink=decision_start_sink,
+            recording_lineage={'binding': resolved.binding.to_dict(), 'deck': resolved.deck.to_dict(),
+                'pilot': resolved.pilot.to_dict(), 'deck_cards': dict(self._profiles[binding_id].deck_list),
+                'pilot_name': resolved.artificial_player.name, 'pilot_version': resolved.artificial_player.version},
         )
         # The canonical Binding already owns the exact library composition. The
         # JVM edge checks Argentum's delivered list against the same profile.

@@ -2,14 +2,47 @@
 
 ## Offline canonical conversion and replay qualification
 
-Against merged Gym `2a5b261c38e2623d71ad98e3b8da29fd596bcb17` and engine
+### Bounded accepted AI-choice export
+
+The opt-in `RecordedAiPlayerController` extension carries a native decision-evidence
+context outside rule actions. Native captures exact seat-visible observation bytes,
+their SHA-256, a versioned native schema hash and correlation ID. `GameSession` emits
+the accepted action and its own-seat result before terminal sealing. Evidence failures
+freeze capture without preventing the normal native action path. Existing controllers
+keep their original interface and behavior.
+
+Gym records the correlation outside model observations and retains exact resolved
+deck/Binding/Pilot references. After a game journal seals, run:
+
+```sh
+python -m commander_gym.captured_choices <private-game-directory> --output <private-directory>/accepted-choices.jsonl
+```
+
+The destination must be a new file inside an existing private directory outside the
+source journal's segment directory. The exporter
+never overwrites historical data. Output rows use the existing `DecisionRecord` schema,
+including journal/native-source hashes and exact engine/Gym/lineage provenance. It
+verifies the native source against the journal and joins exactly one input, start,
+completion and accepted result. Only matching parameter-free enumerated choices are
+supported. Rejected, stale, duplicate, overridden, incomplete, parameterized, mulligan
+and structured choices stay diagnostic-only. Unknown observation additions and unknown
+own-deck fields are rejected; referee states/events never become record inputs/targets.
+
+This explicit offline subset export does not attach a full-run raw-evidence envelope,
+change `recording_complete`, qualify a dataset, or certify exact replay. Existing dataset
+membership and qualification remain separate. Legacy captures cannot be backfilled with
+invented joins. Production activation requires the service owner's matched native/Gym
+release; active qualification pins and lifecycle health contracts are unchanged here.
+
+At the earlier merged baseline, Gym `2a5b261c38e2623d71ad98e3b8da29fd596bcb17` and engine
 `54bd8c68bd6fd4c03f811d2a13a2ee4c6b1d3905`, callback action menus and structured
 decisions already retain native semantic IDs. Ordinary callback observations lack
 native `schemaHash` and own-seat `stateDigest`. The callback UUID is local to the
 recorder: it is not joined to the native applied/rejected action or subsequent own-seat
 result. Mulligan/bottom callback aliases are Gym-authored routing aids. These are
 missing producer evidence/fields; the capture-to-canonical execution-trace adapter is
-also unimplemented. Existing `pilot_records.py` conversion requires that evidence,
+was also unimplemented. The bounded export above fills only the accepted enumerated
+subset; full-run conversion remains unavailable. Existing `pilot_records.py` conversion requires that evidence,
 plus validated per-decision deck/Binding lineage. Timestamp or action similarity must
 not substitute for an execution join, and admin state hashes cannot substitute for
 own-seat observation digests.

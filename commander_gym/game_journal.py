@@ -557,10 +557,12 @@ class RecorderSeatSink:
     def started(self, event: Any) -> None:
         if getattr(self._pending, "decision_id", None) is not None:
             raise JournalError("overlapping seat callback on the same worker")
-        decision_id = str(uuid.uuid4())
+        context = getattr(event, 'decision_evidence', None)
+        decision_id = context['correlationId'] if context is not None else str(uuid.uuid4())
         self.journal.append("decision_started", {"decision_id": decision_id,
                             "callback": event.callback, "observation": event.observation,
-                            "gym_revision": self.gym_revision},
+                            "gym_revision": self.gym_revision, "decision_evidence": context,
+                            "lineage": getattr(event, 'lineage', None)},
                             seat_id=self.seat_id)
         self._pending.decision_id = decision_id
 
@@ -572,6 +574,8 @@ class RecorderSeatSink:
         with self.journal._lock:
             self.journal.append("seat_callback", {"decision_id": decision_id,
                                 "callback": event.callback, "observation": event.observation,
-                                "choice": event.choice, "gym_revision": self.gym_revision}, seat_id=self.seat_id,
+                                "choice": event.choice, "gym_revision": self.gym_revision,
+                                "decision_evidence": getattr(event, 'decision_evidence', None),
+                                "lineage": getattr(event, 'lineage', None)}, seat_id=self.seat_id,
                                 source=source, source_sequence=self.journal.sources.get(source, 0))
         self._pending.decision_id = None
