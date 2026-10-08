@@ -92,7 +92,7 @@ or health detail public.
 The normal quick lobby and human Free-for-All pod mark their native session as a
 manual human start. Automatic bracket matches and AI-only pods do not. The marker
 persists across recovery; older unmarked sessions fail closed for manual Luna.
-Each policy callback rechecks the server marker and presence of a human seat.
+Each policy callback rechecks the server marker and persisted classification of a human seat (a reconnecting socket is not required).
 The authenticated sidecar additionally requires the adapter's admission marker,
 game identity and explicit Binding. This is server authorization, not a client
 Boolean or network classification inferred by the Pilot.
