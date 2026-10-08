@@ -25,6 +25,8 @@ from .deck_package import ArtifactRef
 from .delegated_autopass import DelegatedAutopassPilot
 from .game_server_bindings import GameServerBindingError, GameServerBindingRegistry
 from .game_journal import PrivateGameJournal, RecorderSeatSink
+from .native_game_capture import NativeGameCapture
+from .recording_health import RecordingHealthReporter
 from .game_server_openai_sidecar import (
     JsonlSeatProvenanceWriter,
     OpenAIGameServerSidecarConfig,
@@ -560,6 +562,7 @@ def build_binding_openai_game_server_sidecar(
     provenance_sink: SeatProvenanceSink | None = None,
     component_resolver: PilotComponentResolver | None = None,
     game_journal: PrivateGameJournal | None = None,
+    game_capture: NativeGameCapture | None = None,
 ) -> GameServerSidecarServer:
     """Build the Binding-only OpenAI sidecar from one instance-supplied catalog.
 
@@ -622,13 +625,20 @@ def build_binding_openai_game_server_sidecar(
 
     sidecar = config.sidecar.sidecar_config()
 
-    def profile_seat_factory(player_id: str, profile_id: str):
+    if game_journal is not None and game_capture is not None:
+        raise GameServerBindingError("choose one game recording owner")
+
+    def profile_seat_factory(player_id: str, profile_id: str, game_id: str | None = None):
         sink = (
             None
             if provenance_sink is None
             else lambda event, player_id=player_id: provenance_sink(player_id, event)
         )
         recording = None if game_journal is None else RecorderSeatSink(game_journal, player_id)
+        if game_capture is not None:
+            if game_id is None:
+                raise GameServerBindingError("recording requires native game identity")
+            recording = game_capture.seat_sink(game_id, player_id)
 
         def completed(event):
             if recording is not None:
@@ -648,6 +658,8 @@ def build_binding_openai_game_server_sidecar(
         sidecar,
         profiles=registry.profile_payloads(),
         profile_seat_factory=profile_seat_factory,
+        game_profile_seat_factory=(None if game_capture is None else
+            lambda game_id, player_id, profile_id: profile_seat_factory(player_id, profile_id, game_id)),
     )
 
 
@@ -655,7 +667,13 @@ def main() -> int:
     """Run the Binding-first OpenAI game-server policy sidecar until interrupted."""
 
     config = binding_openai_game_server_config_from_environment(os.environ)
-    server = build_binding_openai_game_server_sidecar(config)
+    capture = NativeGameCapture.from_environment(os.environ)
+    reporter = RecordingHealthReporter.from_environment(capture, os.environ)
+    server = build_binding_openai_game_server_sidecar(config, game_capture=capture)
+    if capture is not None:
+        capture.start()
+    if reporter is not None:
+        reporter.start()
     print(
         "Commander Gym Binding game-server sidecar "
         f"listening on {config.sidecar.bind_host}:{server.server_port} "
@@ -667,7 +685,11 @@ def main() -> int:
     except KeyboardInterrupt:
         pass
     finally:
+        if reporter is not None:
+            reporter.close()
         server.server_close()
+        if capture is not None:
+            capture.close()
     return 0
 
 

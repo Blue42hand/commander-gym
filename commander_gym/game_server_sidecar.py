@@ -37,6 +37,7 @@ _PROFILE_PATH = "/v1/controller-profiles"
 
 SeatFactory = Callable[[str], GameServerSeatAdapter]
 ProfileSeatFactory = Callable[[str, str], GameServerSeatAdapter]
+GameProfileSeatFactory = Callable[[str, str, str], GameServerSeatAdapter]
 
 
 class GameServerSidecarConfigurationError(RuntimeError):
@@ -74,12 +75,14 @@ class GameServerSidecarServer(ThreadingHTTPServer):
         seat_factory: SeatFactory | None = None,
         profiles: Sequence[Mapping[str, Any]] = (),
         profile_seat_factory: ProfileSeatFactory | None = None,
+        game_profile_seat_factory: GameProfileSeatFactory | None = None,
     ) -> None:
         self.sidecar_config = config
         self.seats = dict(seats or {})
         self._seat_factory = seat_factory
         self._profile_seat_factory = profile_seat_factory
-        self._profile_seats: dict[tuple[str, str], GameServerSeatAdapter] = {}
+        self._game_profile_seat_factory = game_profile_seat_factory
+        self._profile_seats: dict[tuple[str | None, str, str], GameServerSeatAdapter] = {}
         self._profiles = self._validate_profiles(profiles)
         if self._profiles and self._profile_seat_factory is None:
             raise GameServerSidecarConfigurationError(
@@ -162,6 +165,7 @@ class GameServerSidecarServer(ThreadingHTTPServer):
         self,
         player_id: str,
         profile_id: str | None = None,
+        game_id: str | None = None,
     ) -> GameServerSeatAdapter:
         """Return the stable adapter for one Argentum seat/profile pair.
 
@@ -173,14 +177,18 @@ class GameServerSidecarServer(ThreadingHTTPServer):
         if profile_id is not None:
             if profile_id not in self._profiles or self._profile_seat_factory is None:
                 raise UnknownProfileError(profile_id)
-            key = (player_id, profile_id)
+            if self._game_profile_seat_factory is not None and game_id is None:
+                raise ValueError("recorded callback requires gameSessionId")
+            key = (game_id, player_id, profile_id)
             adapter = self._profile_seats.get(key)
             if adapter is not None:
                 return adapter
             with self._seat_lock:
                 adapter = self._profile_seats.get(key)
                 if adapter is None:
-                    adapter = self._profile_seat_factory(player_id, profile_id)
+                    adapter = (self._game_profile_seat_factory(game_id, player_id, profile_id)
+                               if self._game_profile_seat_factory is not None and game_id is not None
+                               else self._profile_seat_factory(player_id, profile_id))
                     if not isinstance(adapter, GameServerSeatAdapter):
                         raise TypeError(
                             "profile_seat_factory must return GameServerSeatAdapter"
@@ -235,7 +243,10 @@ class GameServerSidecarHandler(BaseHTTPRequestHandler):
                 not isinstance(profile_id, str) or not profile_id
             ):
                 raise ValueError("profileId must be a non-empty string")
-            adapter = self.server.resolve_seat(player_id, profile_id)  # type: ignore[attr-defined]
+            game_id = request.get("gameSessionId")
+            if game_id is not None and (not isinstance(game_id, str) or not game_id):
+                raise ValueError("gameSessionId must be a non-empty string")
+            adapter = self.server.resolve_seat(player_id, profile_id, game_id)  # type: ignore[attr-defined]
             response = self._invoke(callback, adapter, request)
         except UnknownProfileError:
             self._write(404, {"error": "unknown_profile"})
@@ -275,7 +286,7 @@ class GameServerSidecarHandler(BaseHTTPRequestHandler):
     ) -> Mapping[str, Any]:
         if "snapshot" in request:
             raise ValueError("trusted runtime snapshot is forbidden at the policy boundary")
-        common = {"playerId", "profileId"}
+        common = {"playerId", "profileId", "gameSessionId"}
         if callback == "chooseAction":
             self._require_keys(
                 request,
