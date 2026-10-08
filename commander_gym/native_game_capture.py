@@ -16,7 +16,7 @@ from typing import Any, Mapping
 from collections.abc import Sequence
 from itertools import islice
 import copy
-from .record_codec import NATIVE_MAX_RECORD_BYTES, decode_record, physical_lines
+from .record_codec import NATIVE_MAX_RECORD_BYTES, decode_record, physical_lines, ScanCancelled, check_cancelled
 
 from .game_journal import (
     JournalError, PIN_KEYS, ZERO, PrivateGameJournal, RecorderSeatSink,
@@ -35,7 +35,7 @@ class NativeCursor:
     revisions: set[str] = field(default_factory=set)
 
 
-def iter_native_source(directory: Path, cursor: NativeCursor | None = None, *, stop_offset: int | None = None):
+def iter_native_source(directory: Path, cursor: NativeCursor | None = None, *, stop_offset: int | None = None, cancel=None):
     """Verify complete newline-terminated rows; an incomplete live tail stays pending.
 
     A closed source has a terminal as its last row. No prefix is promoted to a
@@ -53,7 +53,7 @@ def iter_native_source(directory: Path, cursor: NativeCursor | None = None, *, s
     cursor.inode = inode
     with path.open('rb') as stream:
         stream.seek(cursor.offset)
-        lines = physical_lines(stream, max_bytes=NATIVE_MAX_RECORD_BYTES)
+        lines = physical_lines(stream, max_bytes=NATIVE_MAX_RECORD_BYTES, cancel=cancel)
         while stop_offset is None or cursor.offset < stop_offset:
             try:
                 physical = next(lines)
@@ -62,7 +62,8 @@ def iter_native_source(directory: Path, cursor: NativeCursor | None = None, *, s
             if not physical.endswith(b'\n'):
                 break
             try:
-                wrapper = json.loads(decode_record(physical, max_bytes=NATIVE_MAX_RECORD_BYTES))
+                wrapper = json.loads(decode_record(physical, max_bytes=NATIVE_MAX_RECORD_BYTES, cancel=cancel))
+                check_cancelled(cancel)
                 if not isinstance(wrapper, dict) or not isinstance(wrapper.get('body'), str):
                     raise JournalError('invalid native wrapper')
                 digest = hashlib.sha256(wrapper['body'].encode('utf-8')).hexdigest()
@@ -79,6 +80,7 @@ def iter_native_source(directory: Path, cursor: NativeCursor | None = None, *, s
                 if body['visibility'] == 'seat' and not isinstance(body.get('seatId'), str):
                     raise JournalError('native seat identity unavailable')
                 _safe(body)
+                check_cancelled(cancel)
                 cursor.previous, cursor.revision = digest, body['engineRevision']
                 cursor.revisions.add(body['engineRevision'])
                 cursor.sequence += 1
@@ -91,12 +93,13 @@ def iter_native_source(directory: Path, cursor: NativeCursor | None = None, *, s
 
 class NativeRows(Sequence):
     """Reiterable verified physical range; only a single decoded row is resident."""
-    def __init__(self, directory, start, end, count):
+    def __init__(self, directory, start, end, count, cancel=None):
         self.directory, self.start, self.end, self.count = directory, start, end, count
+        self.cancel = cancel
     def __len__(self): return self.count
     def __iter__(self):
         cursor = copy.deepcopy(self.start)
-        yield from iter_native_source(self.directory, cursor, stop_offset=self.end.offset)
+        yield from iter_native_source(self.directory, cursor, stop_offset=self.end.offset, cancel=self.cancel)
         if cursor.offset != self.end.offset or cursor.previous != self.end.previous:
             raise JournalError('native prefix changed during read')
     def __eq__(self, other):
@@ -109,13 +112,13 @@ class NativeRows(Sequence):
         return next(islice(iter(self), index, index + 1))
 
 
-def read_native_source(directory: Path, cursor: NativeCursor | None = None) -> Sequence:
+def read_native_source(directory: Path, cursor: NativeCursor | None = None, *, cancel=None) -> Sequence:
     """Legacy indexed reader contract, now disk-backed and memory-bounded."""
     cursor = cursor if cursor is not None else NativeCursor()
     start = copy.deepcopy(cursor)
     count = 0
-    for _ in iter_native_source(directory, cursor): count += 1
-    return NativeRows(directory, start, copy.deepcopy(cursor), count)
+    for _ in iter_native_source(directory, cursor, cancel=cancel): count += 1
+    return NativeRows(directory, start, copy.deepcopy(cursor), count, cancel)
 
 
 class NativeGameCapture:
@@ -143,6 +146,7 @@ class NativeGameCapture:
         self._finalized_bytes: dict[str, int] = {}
         self._terminals: dict[str, dict[str, Any]] = {}
         self._stop = threading.Event()
+        self._stop_requested = False
         self.errors: dict[str, str] = {}
         self._thread: threading.Thread | None = None
 
@@ -173,17 +177,21 @@ class NativeGameCapture:
                            'declared_engine': self.declared_pins['engine']}}
         if (self.root / game_id / '000000.jsonl').exists():
             # Preserve immutable first-run pins and append current runtime provenance separately.
-            pins = inspect_journal(self.root / game_id)['rows'][0]['payload']['pins']
-        journal = PrivateGameJournal(self.root / game_id, game_id, pins, game_id=game_id)
-        journal.append('runtime_context', {'declared_pins': self.declared_pins},
-                       source='gym-runtime', source_sequence=journal.sources.get('gym-runtime', 0))
+            pins = inspect_journal(self.root / game_id, cancel=self.stop_requested)['rows'][0]['payload']['pins']
+        journal = PrivateGameJournal(self.root / game_id, game_id, pins, game_id=game_id, cancel=self.stop_requested)
+        try:
+            journal.append('runtime_context', {'declared_pins': self.declared_pins},
+                           source='gym-runtime', source_sequence=journal.sources.get('gym-runtime', 0))
+        except BaseException:
+            journal.close()
+            raise
         self._journals[game_id] = journal
         return journal
 
     def seat_sink(self, game_id: str, seat_id: str) -> RecorderSeatSink:
         with self._lock:
             self._validate_id(game_id)
-            rows = [] if game_id in self._journals else read_native_source(self.root / game_id)
+            rows = [] if game_id in self._journals else read_native_source(self.root / game_id, cancel=self.stop_requested)
             return RecorderSeatSink(self._journal(game_id, rows), seat_id, gym_revision=self.declared_pins['gym'])
 
     @staticmethod
@@ -195,6 +203,8 @@ class NativeGameCapture:
         """Import stable rows and finalize every native terminal, including human-only games."""
         with self._lock:
             for directory in sorted(self.root.iterdir()):
+                if self.stop_requested():
+                    return
                 if directory.is_symlink() or not directory.is_dir() or not (directory / 'native-000000.ndjson').exists():
                     continue
                 game_id = directory.name
@@ -202,16 +212,16 @@ class NativeGameCapture:
                     self._validate_id(game_id)
                     if (directory / 'manifest.json').exists():
                         if game_id not in self._finalized_bytes:
-                            manifest = verify_finalized_manifest(directory)
+                            manifest = verify_finalized_manifest(directory, cancel=self.stop_requested)
                             self._finalized_bytes[game_id] = manifest['storage_bytes']
                         continue
-                    if game_id not in self._journals and (directory / '000000.jsonl').exists() and inspect_journal(directory)['closed']:
-                        publish_finalized_manifest(directory)
+                    if game_id not in self._journals and (directory / '000000.jsonl').exists() and inspect_journal(directory, cancel=self.stop_requested)['closed']:
+                        publish_finalized_manifest(directory, cancel=self.stop_requested)
                         continue
                     cursor = self._cursors.setdefault(game_id, NativeCursor())
                     # Start from the last durable imported source row after a recorder restart.
                     if cursor.offset == 0 and (directory / '000000.jsonl').exists():
-                        prior = inspect_journal(directory)
+                        prior = inspect_journal(directory, cancel=self.stop_requested)
                         source_rows = ({'native': json.loads(r['payload']['source_body']), 'source_body': r['payload']['source_body']}
                                        for r in prior['rows'] if r['source'] == 'native')
                         for item in source_rows:
@@ -220,7 +230,7 @@ class NativeGameCapture:
                             if item['native']['kind'] in {'terminal', 'session_closed'}:
                                 self._terminals[game_id] = {**item['native']['payload'], 'source_kind': item['native']['kind']}
                         # Verify the source prefix once; subsequent scans read only appended bytes.
-                        verified = read_native_source(directory, cursor)
+                        verified = read_native_source(directory, cursor, cancel=self.stop_requested)
                         imported_count = prior['sources'].get('native', 0)
                         source_rows = (r['payload']['source_body'] for r in prior['rows'] if r['source'] == 'native')
                         from itertools import zip_longest
@@ -229,7 +239,7 @@ class NativeGameCapture:
                             raise JournalError('native prefix differs from durable import')
                         rows = verified[imported_count:]
                     else:
-                        rows = read_native_source(directory, cursor)
+                        rows = read_native_source(directory, cursor, cancel=self.stop_requested)
                     for item in rows:
                         if item['native']['kind'] == 'initialization':
                             self._initializations[game_id] = item['native']
@@ -282,6 +292,11 @@ class NativeGameCapture:
                             journal.close()
                             self._journals.pop(game_id, None)
                     self.errors.pop(game_id, None)
+                except ScanCancelled:
+                    # A verified cursor may be ahead of the durable import. Retry
+                    # from the journal prefix if this object is ever inspected again.
+                    self._cursors.pop(game_id, None)
+                    return
                 except (OSError, ValueError, KeyError, TypeError) as error:
                     # Class only: no credential-bearing exception text or raw request headers.
                     self.errors[game_id] = type(error).__name__
@@ -291,7 +306,7 @@ class NativeGameCapture:
         if self._thread is not None:
             raise JournalError('capture scanner already started')
         def loop() -> None:
-            while not self._stop.is_set():
+            while not self.stop_requested():
                 self.scan()
                 self._stop.wait(1)
         self._thread = threading.Thread(target=loop, name='private-game-capture', daemon=True)
@@ -332,12 +347,31 @@ class NativeGameCapture:
                     'terminal_waiting_for_callbacks': sorted(game for game, journal in self._journals.items()
                         if game in self._terminals and journal.pending_decisions)}
 
+    def stop_requested(self) -> bool:
+        return self._stop_requested
+
+    def request_stop(self) -> None:
+        """Python signal-handler path: plain latch assignment, no lock or I/O."""
+        self._stop_requested = True
+
     def close(self) -> None:
-        self._stop.set()
+        self.request_stop()
+        self._stop.set()  # Wake waiters only in ordinary cleanup, never a handler.
+        deadline = time.monotonic() + 5
         if self._thread is not None:
-            self._thread.join(timeout=5)
-        with self._lock:
-            self.scan()
+            self._thread.join(timeout=max(0, deadline - time.monotonic()))
+        if not self._lock.acquire(timeout=max(0, deadline - time.monotonic())):
+            raise TimeoutError('capture scan did not stop within close deadline')
+        try:
+            # Shutdown never launches a cold scan or invents a terminal. Every
+            # committed append is already fsynced; next startup recovers the rest.
             for journal in self._journals.values():
-                journal.close()  # unsealed prefixes remain incomplete, never operator_stop rewritten
+                if not journal._lock.acquire(timeout=max(0, deadline - time.monotonic())):
+                    raise TimeoutError('journal writer did not stop within close deadline')
+                try:
+                    journal.close()
+                finally:
+                    journal._lock.release()
             self._journals.clear()
+        finally:
+            self._lock.release()

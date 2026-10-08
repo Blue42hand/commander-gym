@@ -19,7 +19,7 @@ from typing import Any, Mapping
 from collections.abc import Sequence
 from itertools import islice
 import gzip
-from .record_codec import encode_record, decode_record, physical_lines, file_identity
+from .record_codec import encode_record, decode_record, physical_lines, file_identity, check_cancelled
 
 from .evidence import validate_raw_evidence_envelope
 from .storage import artifact_id_for_bytes
@@ -98,7 +98,7 @@ def _immutable_private(path: Path, data: bytes) -> None:
     _atomic_private(path, data)
 
 
-def _iter_journal_rows(directory: Path):
+def _iter_journal_rows(directory: Path, *, cancel=None):
     previous, sequence, run_id = ZERO, 0, None
     sources = {}
     terminal = False
@@ -109,11 +109,12 @@ def _iter_journal_rows(directory: Path):
         if path.is_symlink() or path.stat().st_mode & 0o077:
             raise JournalError("journal segment must be private and not a symlink")
         with path.open("rb") as handle:
-            for physical in physical_lines(handle):
+            for physical in physical_lines(handle, cancel=cancel):
                 if not physical.endswith(b"\n"):
                     raise JournalError("partial_tail")
                 try:
-                    row = json.loads(decode_record(physical))
+                    row = json.loads(decode_record(physical, cancel=cancel))
+                    check_cancelled(cancel)
                     if not isinstance(row, dict) or not isinstance(row.get("payload"), dict):
                         raise JournalError("invalid_row_shape")
                     if not isinstance(row.get("kind"), str) or not isinstance(row.get("run_id"), str):
@@ -140,6 +141,7 @@ def _iter_journal_rows(directory: Path):
                     terminal = row["kind"] == "terminal"
                     run_id, previous = row["run_id"], digest
                     row["sha256"] = digest
+                    check_cancelled(cancel)
                     yield row
                     sequence += 1
                 except (ValueError, KeyError, TypeError) as exc:
@@ -148,15 +150,16 @@ def _iter_journal_rows(directory: Path):
 
 class JournalRows(Sequence):
     """Verified-prefix disk view. Iteration retains one decoded row, never history."""
-    def __init__(self, directory, count, root, first, last):
+    def __init__(self, directory, count, root, first, last, cancel=None):
         self.directory, self.count, self.root = directory, count, root
         self.first, self.last = first, last
+        self.cancel = cancel
     def __len__(self):
         return self.count
     def __iter__(self):
         last = None
         count = 0
-        for row in islice(_iter_journal_rows(self.directory), self.count):
+        for row in islice(_iter_journal_rows(self.directory, cancel=self.cancel), self.count):
             count += 1; last = row
             yield row
         if count != self.count or (last is not None and last['sha256'] != self.root):
@@ -187,7 +190,7 @@ class RowSlice(Sequence):
         return isinstance(other, Sequence) and len(self) == len(other) and all(a == b for a, b in zip(self, other))
 
 
-def inspect_journal(directory: Path) -> dict[str, Any]:
+def inspect_journal(directory: Path, *, cancel=None) -> dict[str, Any]:
     """Stream-verify a prefix; rows are a reiterable disk-backed Sequence.
 
     Hashes detect alteration, not an attacker rewriting the chain. Preserve the root
@@ -198,7 +201,7 @@ def inspect_journal(directory: Path) -> dict[str, Any]:
     previous, sequence, run_id = ZERO, 0, None
     issues, sources = [], {}
     try:
-        for row in _iter_journal_rows(directory):
+        for row in _iter_journal_rows(directory, cancel=cancel):
             first = row if first is None else first
             last = row
             run_id, previous = row['run_id'], row['sha256']
@@ -211,7 +214,7 @@ def inspect_journal(directory: Path) -> dict[str, Any]:
     if first is None: issues.append('empty_journal')
     if not terminal: issues.append('missing_terminal')
     return {'schema_version': VERSION, 'run_id': run_id,
-            'rows': JournalRows(directory, sequence, previous, first, last),
+            'rows': JournalRows(directory, sequence, previous, first, last, cancel),
             'issues': issues, 'root_sha256': previous, 'sources': sources,
             'integrity_ok': not any(i != 'missing_terminal' for i in issues),
             'closed': terminal and not issues,
@@ -229,7 +232,7 @@ class PrivateGameJournal:
                  segment_bytes: int = 16 * 1024 * 1024,
                  max_bytes: int = 1024 * 1024 * 1024,
                  terminal_reserve: int = 64 * 1024,
-                 compress_records: bool = True) -> None:
+                 compress_records: bool = True, cancel=None) -> None:
         if not isinstance(run_id, str) or not run_id:
             raise JournalError("run_id is required")
         if set(pins) != set(PIN_KEYS):
@@ -243,6 +246,7 @@ class PrivateGameJournal:
         self.segment_bytes, self.max_bytes = segment_bytes, max_bytes
         self.reserve = terminal_reserve
         self.compress_records = compress_records
+        self.cancel = cancel
         self._lock = threading.RLock()
         self._fd = os.open(directory / ".writer.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
         try:
@@ -254,7 +258,7 @@ class PrivateGameJournal:
             self.segment, self.used = 0, 0
             files = sorted(directory.glob("*.jsonl"))
             if files:
-                report = inspect_journal(directory)
+                report = inspect_journal(directory, cancel=self.cancel)
                 if not report["integrity_ok"] or report["closed"]:
                     raise JournalError("cannot resume damaged or closed journal")
                 if report["run_id"] != run_id or report["rows"][0]["payload"]["pins"] != dict(pins):
@@ -284,6 +288,7 @@ class PrivateGameJournal:
     def append(self, kind: str, payload: Mapping[str, Any], *, seat_id: str | None = None,
                source: str | None = None, source_sequence: int | None = None) -> str:
         with self._lock:
+            check_cancelled(self.cancel)
             if self._fd < 0 or self.terminal or self.failed:
                 raise JournalError("journal is closed or failed")
             if kind not in {"manifest", "resume", "native_transition", "native_replay",
@@ -337,11 +342,13 @@ class PrivateGameJournal:
             limit = self.max_bytes if kind == "terminal" else self.max_bytes - self.reserve
             if self.used + len(data) > limit:
                 raise JournalError("storage limit reached; stop collection and seal partial journal")
+            check_cancelled(self.cancel)
             path = self.directory / f"{self.segment:06d}.jsonl"
             if path.exists() and path.stat().st_size + len(data) > self.segment_bytes:
                 self.segment += 1
                 path = self.directory / f"{self.segment:06d}.jsonl"
             created = not path.exists()
+            check_cancelled(self.cancel)
             fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
             try:
                 if os.fstat(fd).st_mode & 0o077:
@@ -373,7 +380,7 @@ class PrivateGameJournal:
                gaps: list[str]) -> str:
         """Outcome is evidence, never supervisor qualification or a replay guarantee."""
         with self._lock:
-            report = inspect_journal(self.directory)
+            report = inspect_journal(self.directory, cancel=self.cancel)
             if not report["integrity_ok"]:
                 raise JournalError("cannot seal a damaged journal")
             missing_pins = report["rows"][0]["payload"]["unavailable_pins"]
@@ -406,6 +413,7 @@ class PrivateGameJournal:
                              ({"canonical_training_evidence_unavailable"} if envelopes is None else set()) |
                              ({"canonical_training_coverage_mismatch"} if envelopes and not canonical_coverage else set()) |
                              ({"native_transitions_unavailable"} if not has_transitions else set()))
+            check_cancelled(self.cancel)
             root = self.append("terminal", {"outcome": dict(outcome), "gaps": missing,
                                            "expected_sources": dict(expected_sources),
                                            "observed_sources": dict(self.sources),
@@ -475,10 +483,10 @@ class PrivateGameJournal:
         with self._lock:
             if (self.directory / 'manifest.json').exists():
                 try:
-                    return verify_finalized_manifest(self.directory)
+                    return verify_finalized_manifest(self.directory, cancel=self.cancel)
                 except (OSError, ValueError, KeyError, TypeError) as error:
                     raise JournalError('finalized artifact is immutable; saved manifest failed verification') from error
-            report = inspect_journal(self.directory)
+            report = inspect_journal(self.directory, cancel=self.cancel)
             if not report["closed"]:
                 raise JournalError("only a sealed intact journal can be published")
             artifacts = []
@@ -489,8 +497,8 @@ class PrivateGameJournal:
                 role = ("admin_journal" if path.suffix == ".jsonl" else
                         "admin_native_source" if path.suffix == '.ndjson' else "admin_capture_gap")
                 artifacts.append({"path": path.name, "role": role, "size_bytes": path.stat().st_size,
-                                  "artifact_id": "sha256:" + file_identity(path)[1],
-                                  "sha256": file_identity(path)[1]})
+                                  "artifact_id": "sha256:" + file_identity(path, cancel=self.cancel)[1],
+                                  "sha256": file_identity(path, cancel=self.cancel)[1]})
             seats = sorted({row["seat_id"] for row in report["rows"] if row["seat_id"] is not None})
             for seat in seats:
                 # IDs never become file paths; projections are derived, not competing truth.
@@ -498,7 +506,7 @@ class PrivateGameJournal:
                 name = legacy_name if (self.directory / legacy_name).exists() else legacy_name + '.gz'
                 path = self.directory / name
                 _immutable_stream(path, projection_chunks(report, seat) if name == legacy_name else gzip_chunks(projection_chunks(report, seat)))
-                size, digest = file_identity(path)
+                size, digest = file_identity(path, cancel=self.cancel)
                 artifacts.append({'path': name, 'role': 'derived_seat_projection', 'seat_id': seat,
                                   'size_bytes': size, 'artifact_id': 'sha256:' + digest, 'sha256': digest,
                                   **({'encoding': 'gzip-json-array-v1'} if name.endswith('.gz') else {})})
@@ -521,6 +529,7 @@ class PrivateGameJournal:
                       "gaps": report["rows"][-1]["payload"]["gaps"],
                       "analysis": {"report_path_template": "analysis/{analysis_version}/report.json",
                                    "idempotency_fields": ["run_id", "artifact_hash", "analysis_version"]}}
+            check_cancelled(self.cancel)
             _immutable_private(self.directory / "manifest.json", _json(result) + b"\n")
             return result
 
@@ -592,16 +601,16 @@ def seat_projection(report: Mapping[str, Any], seat_id: str) -> list[dict[str, A
             for row in report["rows"] if row["visibility"] == "seat" and row["seat_id"] == seat_id]
 
 
-def publish_finalized_manifest(directory: Path) -> dict[str, Any]:
+def publish_finalized_manifest(directory: Path, *, cancel=None) -> dict[str, Any]:
     """Idempotent local recovery after terminal durability but before publication."""
     journal = object.__new__(PrivateGameJournal)
-    journal.directory, journal._lock = directory, threading.RLock()
+    journal.directory, journal._lock, journal.cancel = directory, threading.RLock(), cancel
     return journal.publish_manifest()
 
 
-def verify_finalized_manifest(directory: Path) -> dict[str, Any]:
+def verify_finalized_manifest(directory: Path, *, cancel=None) -> dict[str, Any]:
     """Discovery gate: verify journal and every artifact before analysis claims."""
-    report = inspect_journal(directory)
+    report = inspect_journal(directory, cancel=cancel)
     path = directory / "manifest.json"
     if path.is_symlink() or path.stat().st_mode & 0o077:
         raise JournalError("manifest must be private and not a symlink")
@@ -638,7 +647,7 @@ def verify_finalized_manifest(directory: Path) -> dict[str, Any]:
         path = directory / name
         if path.is_symlink() or path.stat().st_mode & 0o077:
             raise JournalError("artifact must be private and not a symlink")
-        size, digest = file_identity(path)
+        size, digest = file_identity(path, cancel=cancel)
         if (digest != artifact['sha256'] or 'sha256:' + digest != artifact['artifact_id'] or
                 size != artifact['size_bytes']):
             raise JournalError("finalized artifact hash or size mismatch")
