@@ -3,7 +3,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from commander_gym.game_journal import JournalError
 from commander_gym.recording_health import RecordingHealthReporter
@@ -69,6 +69,44 @@ class RecordingHealthTests(unittest.TestCase):
         self.reporter.tick()
         self.assertEqual(self.reporter.last_error, 'JournalError')
         self.reporter.exchange.assert_called_once_with({'protocol': 1, 'op': 'status'})
+
+    def test_disposition_snapshot_publishes_only_after_successful_recording_exchange(self):
+        self.capture.operational_metrics.return_value.update(acknowledgedIncomplete=1,
+            acknowledgedIncompleteRegistrySha256='d'*64)
+        def exchange(request):
+            self.assertIsNone(self.reporter.last_successful_disposition)
+            return self.status if request['op'] == 'status' else {'ok': True}
+        self.reporter.exchange = Mock(side_effect=exchange)
+        with patch('commander_gym.recording_health.time.time', return_value=self.now):
+            self.reporter.tick()
+        snapshot = self.reporter.last_successful_disposition
+        self.assertEqual(snapshot['acknowledgedIncomplete'], 1)
+        self.assertEqual(snapshot['registrySha256'], 'd'*64)
+        self.assertEqual(snapshot['observedUnix'], self.now)
+        self.assertEqual(snapshot['report'], self.reporter.last_successful_report)
+        wire = self.reporter.exchange.call_args.args[0]
+        self.assertNotIn('acknowledgedIncomplete', wire)
+        self.assertNotIn('registrySha256', wire)
+        snapshot['report']['pendingRecordWrites'] = 999
+        self.assertEqual(self.reporter.last_successful_report['pendingRecordWrites'], 0)
+        self.reporter.exchange.side_effect = JournalError('synthetic failure')
+        self.reporter.tick()
+        self.assertIsNone(self.reporter.last_successful_disposition)
+        self.assertIsNone(self.reporter.last_successful_report)
+
+    def test_stop_during_successful_exchange_cannot_publish_disposition(self):
+        def exchange(request):
+            if request['op'] == 'recording': self.reporter.request_stop()
+            return self.status if request['op'] == 'status' else {'ok': True}
+        self.reporter.exchange = Mock(side_effect=exchange)
+        with patch('commander_gym.recording_health.time.time', return_value=self.now): self.reporter.tick()
+        self.assertIsNone(self.reporter.last_successful_disposition)
+
+    def test_acknowledged_count_requires_exact_registry_digest(self):
+        self.capture.operational_metrics.return_value['acknowledgedIncomplete'] = 1
+        with self.assertRaises(JournalError): self.reporter.build_report(self.status, now=self.now)
+        self.capture.operational_metrics.return_value['acknowledgedIncompleteRegistrySha256'] = 'wrong'
+        with self.assertRaises(JournalError): self.reporter.build_report(self.status, now=self.now)
 
 
 class OperationalMetricsTests(unittest.TestCase):

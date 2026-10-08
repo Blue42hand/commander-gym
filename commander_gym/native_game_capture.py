@@ -18,6 +18,8 @@ from itertools import islice
 import copy
 from .record_codec import NATIVE_MAX_RECORD_BYTES, decode_record, physical_lines, ScanCancelled, check_cancelled
 
+from .historical_recording import HistoricalIncompleteRegistry
+
 from .game_journal import (
     JournalError, PIN_KEYS, ZERO, PrivateGameJournal, RecorderSeatSink,
     _json, _private_dir, _safe, RowSlice, inspect_journal, publish_finalized_manifest, verify_finalized_manifest,
@@ -127,7 +129,8 @@ class NativeGameCapture:
     Pins are supplied privately by the operator. Native setup supplies the actual
     engine/decks/config/RNG rather than guessing them from the selected profile.
     """
-    def __init__(self, root: Path, declared_pins: Mapping[str, Any], *, terminal_grace_seconds: int = 600) -> None:
+    def __init__(self, root: Path, declared_pins: Mapping[str, Any], *, terminal_grace_seconds: int = 600,
+                 acknowledged_incomplete_registry: Path | None = None) -> None:
         _private_dir(root)
         if set(declared_pins) != set(PIN_KEYS):
             raise JournalError('recording pins require every explicit pin key')
@@ -149,6 +152,8 @@ class NativeGameCapture:
         self._stop_requested = False
         self.errors: dict[str, str] = {}
         self._thread: threading.Thread | None = None
+        self._historical = (HistoricalIncompleteRegistry(self.root, acknowledged_incomplete_registry, cancel=self.stop_requested)
+                            if acknowledged_incomplete_registry is not None else None)
 
     @classmethod
     def from_environment(cls, environment: Mapping[str, str]) -> NativeGameCapture | None:
@@ -163,6 +168,8 @@ class NativeGameCapture:
         return cls(Path(root), json.loads(path.read_bytes()))
 
     def _journal(self, game_id: str, rows: list[dict[str, Any]]) -> PrivateGameJournal:
+        if self._historical is not None and game_id in self._historical.entries:
+            raise JournalError('acknowledged historical capture cannot have a live journal')
         if game_id in self._journals:
             return self._journals[game_id]
         initialization = self._initializations.get(game_id) or next((row['native'] for row in rows if row['native']['kind'] == 'initialization'), None)
@@ -191,6 +198,9 @@ class NativeGameCapture:
     def seat_sink(self, game_id: str, seat_id: str) -> RecorderSeatSink:
         with self._lock:
             self._validate_id(game_id)
+            self._verify_historical()
+            if self._historical is not None and self._historical.contains(game_id):
+                raise JournalError('acknowledged historical capture cannot receive a seat callback')
             rows = [] if game_id in self._journals else read_native_source(self.root / game_id, cancel=self.stop_requested)
             return RecorderSeatSink(self._journal(game_id, rows), seat_id, gym_revision=self.declared_pins['gym'])
 
@@ -199,15 +209,30 @@ class NativeGameCapture:
         if not isinstance(game_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', game_id):
             raise JournalError('invalid native game identity')
 
+    def _verify_historical(self) -> None:
+        if self._historical is not None:
+            try:
+                self._historical.verify()
+                self.errors.pop('historical_acknowledgements', None)
+            except (OSError, ValueError, KeyError, TypeError) as error:
+                self.errors['historical_acknowledgements'] = type(error).__name__
+                raise
+
     def scan(self) -> None:
         """Import stable rows and finalize every native terminal, including human-only games."""
         with self._lock:
+            try:
+                self._verify_historical()
+            except (ScanCancelled, OSError, ValueError, KeyError, TypeError):
+                return  # Invalid attestation never falls through to ordinary import.
             for directory in sorted(self.root.iterdir()):
                 if self.stop_requested():
                     return
                 if directory.is_symlink() or not directory.is_dir() or not (directory / 'native-000000.ndjson').exists():
                     continue
                 game_id = directory.name
+                if self._historical is not None and self._historical.contains(game_id):
+                    continue
                 try:
                     self._validate_id(game_id)
                     if (directory / 'manifest.json').exists():
@@ -315,11 +340,19 @@ class NativeGameCapture:
     def operational_metrics(self) -> dict[str, Any]:
         """Aggregate durable evidence only; pending tails/choices prevent drain acknowledgement."""
         with self._lock:
+            try:
+                self._verify_historical()
+            except (ScanCancelled, OSError, ValueError, KeyError, TypeError):
+                pass  # No held exclusion remains; conservative pending counts below.
+            acknowledged = len(self._historical.held) if self._historical is not None else 0
             pending = 0
             durable = sum(self._finalized_bytes.values())
             for directory in self.root.iterdir():
                 source = directory / 'native-000000.ndjson'
                 if directory.is_symlink() or not directory.is_dir() or not source.exists():
+                    continue
+                if self._historical is not None and self._historical.contains(directory.name):
+                    durable += sum(meta['size'] for meta in self._historical.entries[directory.name]['files'].values())
                     continue
                 if directory.name in self._finalized_bytes:
                     continue
@@ -336,12 +369,20 @@ class NativeGameCapture:
                     with journal._lock:
                         pending += len(journal.pending_decisions)
                         durable += sum(p.stat().st_size for p in directory.glob('[0-9]*.jsonl'))
-            return {'healthy': not self.errors, 'pendingRecordWrites': pending, 'durableBytes': durable}
+            return {'healthy': not self.errors, 'pendingRecordWrites': pending, 'durableBytes': durable,
+                    'acknowledgedIncomplete': acknowledged,
+                    'acknowledgedIncompleteRegistrySha256': (self._historical.registry_sha256
+                        if self._historical is not None and self._historical._verified else None)}
 
     def health(self) -> dict[str, Any]:
         """Read-only operational metadata; no game state, model text or seat context."""
         with self._lock:
+            try:
+                self._verify_historical()
+            except (ScanCancelled, OSError, ValueError, KeyError, TypeError):
+                pass
             return {'active_games': sorted(self._journals), 'errors': dict(self.errors),
+                    'acknowledged_incomplete': len(self._historical.held) if self._historical is not None else 0,
                     'native_gap_games': sorted(p.name for p in self.root.iterdir()
                         if p.is_dir() and not p.is_symlink() and any(p.glob('native-gap-*.json'))),
                     'terminal_waiting_for_callbacks': sorted(game for game, journal in self._journals.items()
@@ -374,4 +415,6 @@ class NativeGameCapture:
                     journal._lock.release()
             self._journals.clear()
         finally:
+            if self._historical is not None:
+                self._historical.close()
             self._lock.release()
