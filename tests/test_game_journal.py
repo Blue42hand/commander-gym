@@ -90,6 +90,12 @@ class JournalTests(unittest.TestCase):
         row['schema_version'] = 999
         path.write_text(json.dumps(row) + '\n')
         self.assertIn('unsupported_schema', inspect_journal(self.root)['issues'])
+    def test_non_object_row_classified_as_corruption(self):
+        with self.writer(): pass
+        path = self.root / '000000.jsonl'
+        for malformed in ('null', '[]', '"text"', '{"payload":null}'):
+            path.write_text(malformed + '\n')
+            self.assertIn('invalid_row_shape', inspect_journal(self.root)['issues'])
     def test_missing_segment_is_detected(self):
         with self.writer(segment_bytes=300) as w: self.native(w)
         (self.root / '000001.jsonl').rename(self.root / '000003.jsonl')
@@ -181,6 +187,27 @@ class JournalTests(unittest.TestCase):
         artifact = next(a for a in manifest['artifacts'] if a['role'] == 'canonical_raw_evidence')
         validate_raw_evidence_envelope(json.loads((self.root / artifact['path']).read_bytes()))
         self.assertTrue(artifact['artifact_id'].startswith('sha256:'))
+
+    def test_late_choice_prevents_canonical_completeness(self):
+        from commander_gym.evidence import build_raw_evidence_envelope
+        from tests.test_evidence import RawEvidenceTests
+        fixture = RawEvidenceTests()
+        with self.writer() as w:
+            self.native(w)
+            sink = RecorderSeatSink(w, 'a')
+            event = SeatProvenance('chooseAction', OBS, {'channel': 'action', 'actionId': 0})
+            sink.started(event)
+            sink.finished(event)
+            decision_id = inspect_journal(self.root)['rows'][-1]['payload']['decision_id']
+            record = replace(fixture.make_record(), game_id='g', decision_id=decision_id)
+            run = replace(fixture.make_run(), run_id='r', game_id='g', decision_ids=[decision_id])
+            w.raw_evidence(build_raw_evidence_envelope(run, [record], commander_gym_revision='synthetic'))
+            sink.started(event)
+            sink.finished(event)
+            w.finish({'kind': 'native_terminal'}, expected_sources={'native': 1, 'seat:a': 2}, gaps=[])
+        report = inspect_journal(self.root)
+        self.assertFalse(report['recording_complete'])
+        self.assertIn('canonical_training_coverage_mismatch', report['rows'][-1]['payload']['gaps'])
 
     def test_native_receipt_uses_merged_contract_and_preserves_supervisor(self):
         with self.writer() as w:

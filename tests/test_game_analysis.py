@@ -8,7 +8,8 @@ from commander_gym.game_journal import (
     PIN_KEYS, PrivateGameJournal, JournalError,
     discover_finalized_manifests, verify_finalized_manifest,
 )
-from commander_gym.game_analysis import claim_analysis, finish_analysis
+from commander_gym.game_analysis import (claim_analysis, finish_analysis, renew_analysis,
+    fail_analysis, prepare_notification, record_notification)
 
 class GameAnalysisTests(unittest.TestCase):
     def setUp(self):
@@ -50,6 +51,13 @@ class GameAnalysisTests(unittest.TestCase):
         (self.game / 'analysis/1.0.0/report.json').unlink()
         with self.assertRaisesRegex(JournalError, 'missing or changed'):
             claim_analysis(self.game, '1.0.0')
+    def test_one_corrupt_run_does_not_stop_other_discovery(self):
+        bad = self.runs / 'bad'
+        with PrivateGameJournal(bad, 'bad', {key: None for key in PIN_KEYS}) as w:
+            w.finish({'kind': 'operator_stop'}, expected_sources={}, gaps=['partial'])
+        (bad / '000000.jsonl').write_text('null\n')
+        discovered = discover_finalized_manifests(self.runs)
+        self.assertEqual([r['run_id'] for r in discovered], ['run'])
     def test_manifest_tamper_and_artifact_tamper_fail_discovery(self):
         manifest = json.loads((self.game / 'manifest.json').read_text())
         manifest['outcome'] = {'kind': 'native_terminal'}
@@ -57,6 +65,72 @@ class GameAnalysisTests(unittest.TestCase):
         with self.assertRaisesRegex(JournalError, 'does not match'):
             verify_finalized_manifest(self.game)
         self.assertEqual(discover_finalized_manifests(self.runs), [])
+    def test_worker_renewal_failure_and_immediate_resume(self):
+        claim = claim_analysis(self.game, '1.0.0', worker_id='worker-a')
+        with self.assertRaises(JournalError):
+            renew_analysis(self.game, '1.0.0', claim['claim_id'], 'worker-b')
+        renewed = renew_analysis(self.game, '1.0.0', claim['claim_id'], 'worker-a', lease_seconds=7200)
+        self.assertGreater(renewed['lease_expires_at'], claim['lease_expires_at'])
+        failed = fail_analysis(self.game, '1.0.0', claim['claim_id'], 'worker-a', 'source_unavailable')
+        self.assertEqual(failed['status'], 'failed')
+        resumed = claim_analysis(self.game, '1.0.0', worker_id='worker-b')
+        self.assertEqual(resumed['claim_status'], 'claimed')
+        self.assertTrue(resumed['resuming'])
+        self.assertEqual(resumed['worker_id'], 'worker-b')
+    def test_notification_uncertain_delivery_never_auto_retries(self):
+        claim = claim_analysis(self.game, '1.0.0')
+        finish_analysis(self.game, '1.0.0', claim['claim_id'], self.report(claim))
+        first = prepare_notification(self.game, '1.0.0', 'worker-a')
+        self.assertTrue(first['send_allowed'])
+        second = prepare_notification(self.game, '1.0.0', 'worker-b')
+        self.assertFalse(second['send_allowed'])
+        self.assertEqual(second['status'], 'uncertain')
+        record_notification(self.game, '1.0.0', first['delivery_id'], outcome='delivered',
+                            delivery_receipt={'message_id': 'synthetic-confirmation'})
+        self.assertFalse(prepare_notification(self.game, '1.0.0', 'worker-a')['send_allowed'])
+    def test_definite_not_sent_can_retry_and_retains_observed_receipt(self):
+        claim = claim_analysis(self.game, '1.0.0')
+        finish_analysis(self.game, '1.0.0', claim['claim_id'], self.report(claim))
+        first = prepare_notification(self.game, '1.0.0', 'worker-a')
+        row = record_notification(self.game, '1.0.0', first['delivery_id'], outcome='not_sent',
+                                  delivery_receipt={'result': 'synthetic-no-send'})
+        self.assertEqual(row['receipt']['result'], 'synthetic-no-send')
+        retry = prepare_notification(self.game, '1.0.0', 'worker-a')
+        self.assertTrue(retry['send_allowed'])
+        self.assertNotIn('receipt', retry)
+        self.assertEqual(retry['attempts'][0]['receipt']['result'], 'synthetic-no-send')
+    def test_notification_and_failure_metadata_reject_credentials_before_mutation(self):
+        secret = 'sk-proj-' + 'syntheticcredential123456789'
+        claim = claim_analysis(self.game, '1.0.0', worker_id='worker-a')
+        with self.assertRaisesRegex(JournalError, 'forbidden'):
+            fail_analysis(self.game, '1.0.0', claim['claim_id'], 'worker-a', secret)
+        finish_analysis(self.game, '1.0.0', claim['claim_id'], self.report(claim))
+        ledger = self.game / 'analysis/1.0.0/review.json'
+        before = ledger.read_bytes()
+        with self.assertRaisesRegex(JournalError, 'forbidden'):
+            prepare_notification(self.game, '1.0.0', secret)
+        self.assertEqual(ledger.read_bytes(), before)
+    def test_private_directory_creation_syncs_parent(self):
+        from commander_gym.game_journal import _private_dir
+        fresh = self.runs / 'fresh'
+        with patch('commander_gym.game_journal._sync_dir') as sync:
+            _private_dir(fresh, create=True)
+            sync.assert_called_once_with(self.runs)
+    def test_manifest_shape_damage_does_not_stop_other_runs(self):
+        bad = self.runs / 'bad'
+        with PrivateGameJournal(bad, 'bad', {key: None for key in PIN_KEYS}) as w:
+            w.finish({'kind': 'operator_stop'}, expected_sources={}, gaps=['partial'])
+        for malformed in ('null', '[]', '{"artifacts":[null]}'):
+            (bad / 'manifest.json').write_text(malformed + '\n')
+            self.assertEqual([r['run_id'] for r in discover_finalized_manifests(self.runs)], ['run'])
+    def test_finalized_manifest_is_immutable_and_revision_needs_new_identity(self):
+        from commander_gym.game_journal import publish_finalized_manifest
+        original = (self.game / 'manifest.json').read_bytes()
+        changed = json.loads(original)
+        changed['artifact_hash'] = 'changed'
+        (self.game / 'manifest.json').write_text(json.dumps(changed))
+        with self.assertRaisesRegex(JournalError, 'immutable'):
+            publish_finalized_manifest(self.game)
     def test_report_secret_and_path_escape_rejected(self):
         with self.assertRaises(JournalError): claim_analysis(self.game, '../elsewhere')
         claim = claim_analysis(self.game, '1.0.0')

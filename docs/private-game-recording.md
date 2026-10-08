@@ -113,10 +113,13 @@ all hashes, journal membership and outcome before a review claim. `publish_final
 recovers a crash after terminal fsync but before manifest publication, without altering raw data.
 
 For analysis version `1.0.0`, call `claim_analysis(run_directory, '1.0.0')` from `game_analysis.py`.
-The deduplication key is `(run_id, artifact_hash, analysis_version)`. The lock/atomic private
+The deduplication key is `(run_id, artifact_hash, analysis_version)`. Pass an explicit stable `worker_id` identifying the task/worker. The lock/atomic private
 ledger `analysis/1.0.0/review.json` yields `claimed`, `busy`, or `already_completed`. A claimed
 run has a unique `claim_id` and one-hour renewable-by-resumption lease. Expired work can be
-claimed again; an obsolete worker cannot complete a newer claim. The helper makes no calls,
+claimed again; an obsolete worker cannot complete a newer claim. `renew_analysis` extends
+only the same live owned claim; `fail_analysis` stores a stable failure code and releases
+the lease for explicit resumption. Raw exception messages are not stored. A failed/stale
+claim is resumed by `claim_analysis`, with a fresh claim ID and explicit worker ownership. The helper makes no calls,
 starts no games and sends no data outside the local directory.
 
 Create the report with the three identity fields, explicit evidence references, coverage
@@ -124,7 +127,20 @@ limits, observations/recommendations, and analysis version. Call `finish_analysi
 fsyncs and verifies `analysis/1.0.0/report.json` before atomically marking `review.json`
 completed with `report_sha256`. Completed claims reverify the report. A different report at
 an existing version requires a new version. A crash after report write but before completion
-can resume with identical report content. Scheduling and analysis content are parent-owned.
+can resume with identical report content. `prepare_notification` durably reserves one delivery attempt before any external send.
+Its default state is `uncertain`, so a crash after reservation cannot cause an automatic
+second send. Only the first reservation returns `send_allowed=true`. `record_notification`
+records a verified delivery receipt, affirmative `not_sent` evidence, or `uncertain` status.
+Only affirmative `not_sent` permits another reservation; `delivered` or `uncertain` never
+automatically retry. These helpers do not send notifications themselves. Scheduling,
+actual delivery and analysis content are parent-owned.
+
+Finalized manifests/artifacts are immutable. Publication is idempotent only for identical
+bytes; it refuses a changed finalized artifact. A correction uses a fresh run/revision
+identity and a new private directory, with an explicit `RunRecord.metadata.supersedes`
+reference to the old run/artifact hash. Preserve both records. This intentionally avoids
+silently revising `artifact_hash` under the same stable finalized manifest; the review
+ledger does not guess supersession or mark skipped legacy games analyzed.
 
 ## Durability, limits and retention
 

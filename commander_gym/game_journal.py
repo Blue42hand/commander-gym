@@ -59,6 +59,8 @@ def _private_dir(path: Path, *, create: bool = False) -> None:
         path.mkdir(mode=0o700, parents=False, exist_ok=True)
     if path.is_symlink() or not path.is_dir() or path.stat().st_mode & 0o077:
         raise JournalError("journal directory must be private (0700) and not a symlink")
+    if create:
+        _sync_dir(path.parent)
 
 
 def _sync_dir(path: Path) -> None:
@@ -84,6 +86,14 @@ def _atomic_private(path: Path, data: bytes) -> None:
             temporary.unlink()  # only our never-published temporary, never history
 
 
+def _immutable_private(path: Path, data: bytes) -> None:
+    if path.exists():
+        if path.is_symlink() or path.read_bytes() != data:
+            raise JournalError("finalized artifact is immutable; use a new revision identity")
+        return
+    _atomic_private(path, data)
+
+
 def inspect_journal(directory: Path) -> dict[str, Any]:
     """Verify a consistent prefix. Call after closing the writer for final evidence.
 
@@ -107,6 +117,10 @@ def inspect_journal(directory: Path) -> dict[str, Any]:
                     break
                 try:
                     row = json.loads(line)
+                    if not isinstance(row, dict) or not isinstance(row.get("payload"), dict):
+                        raise JournalError("invalid_row_shape")
+                    if not isinstance(row.get("kind"), str) or not isinstance(row.get("run_id"), str):
+                        raise JournalError("invalid_row_shape")
                     digest = row.pop("sha256")
                     if type(row["schema_version"]) is not int or row["schema_version"] != VERSION:
                         raise JournalError("unsupported_schema")
@@ -288,6 +302,11 @@ class PrivateGameJournal:
             if not report["integrity_ok"]:
                 raise JournalError("cannot seal a damaged journal")
             missing_pins = report["rows"][0]["payload"]["unavailable_pins"]
+            callbacks = [row["payload"]["decision_id"] for row in report["rows"]
+                         if row["kind"] == "seat_callback"]
+            envelopes = [row["payload"]["envelope"] for row in report["rows"]
+                         if row["kind"] == "raw_evidence"]
+            canonical_coverage = bool(envelopes) and envelopes[-1]["run"]["decision_ids"] == callbacks
             pending: set[tuple[str, str]] = set()
             for row in report["rows"]:
                 decision = row["payload"].get("decision_id")
@@ -303,6 +322,7 @@ class PrivateGameJournal:
                              ({"non_native_terminal"} if outcome.get("kind") != "native_terminal" else set()) |
                              ({"canonical_training_evidence_unavailable"} if not any(
                                  r["kind"] == "raw_evidence" for r in report["rows"]) else set()) |
+                             ({"canonical_training_coverage_mismatch"} if envelopes and not canonical_coverage else set()) |
                              ({"native_transitions_unavailable"} if not any(
                                  r["kind"] == "native_transition" for r in report["rows"]) else set()))
             root = self.append("terminal", {"outcome": dict(outcome), "gaps": missing,
@@ -384,7 +404,7 @@ class PrivateGameJournal:
                 # IDs never become file paths; projections are derived, not competing truth.
                 name = "seat-" + hashlib.sha256(seat.encode()).hexdigest() + ".projection.json"
                 data = _json(seat_projection(report, seat)) + b"\n"
-                _atomic_private(self.directory / name, data)
+                _immutable_private(self.directory / name, data)
                 artifacts.append({"path": name, "role": "derived_seat_projection", "seat_id": seat,
                                   "size_bytes": len(data), "artifact_id": artifact_id_for_bytes(data),
                                   "sha256": hashlib.sha256(data).hexdigest()})
@@ -392,7 +412,7 @@ class PrivateGameJournal:
                 if row["kind"] == "raw_evidence":
                     data = _json(row["payload"]["envelope"]) + b"\n"
                     name = "raw-evidence-" + hashlib.sha256(data).hexdigest() + ".json"
-                    _atomic_private(self.directory / name, data)
+                    _immutable_private(self.directory / name, data)
                     artifacts.append({"path": name, "role": "canonical_raw_evidence",
                                       "size_bytes": len(data), "artifact_id": artifact_id_for_bytes(data),
                                       "sha256": hashlib.sha256(data).hexdigest()})
@@ -407,7 +427,7 @@ class PrivateGameJournal:
                       "gaps": report["rows"][-1]["payload"]["gaps"],
                       "analysis": {"report_path_template": "analysis/{analysis_version}/report.json",
                                    "idempotency_fields": ["run_id", "artifact_hash", "analysis_version"]}}
-            _atomic_private(self.directory / "manifest.json", _json(result) + b"\n")
+            _immutable_private(self.directory / "manifest.json", _json(result) + b"\n")
             return result
 
     def close(self) -> None:
@@ -447,6 +467,11 @@ def verify_finalized_manifest(directory: Path) -> dict[str, Any]:
     if path.is_symlink() or path.stat().st_mode & 0o077:
         raise JournalError("manifest must be private and not a symlink")
     manifest = json.loads(path.read_bytes())
+    if not isinstance(manifest, dict) or not isinstance(manifest.get("artifacts"), list):
+        raise JournalError("invalid finalized manifest shape")
+    if any(not isinstance(a, dict) or not isinstance(a.get("path"), str)
+           or not isinstance(a.get("role"), str) for a in manifest["artifacts"]):
+        raise JournalError("invalid artifact descriptor shape")
     _safe(manifest)
     if (manifest.get("kind") != MANIFEST_KIND or type(manifest.get("schema_version")) is not int or
             manifest.get("schema_version") != VERSION or not report["closed"] or
