@@ -4,6 +4,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import re
 from pathlib import Path
 import socket
 import stat
@@ -22,6 +23,7 @@ class RecordingHealthReporter:
         self._stop_requested = False
         self._thread: threading.Thread | None = None
         self.last_error: str | None = None
+        self._last_successful_disposition: dict[str, Any] | None = None
 
     @classmethod
     def from_environment(cls, capture: NativeGameCapture | None, environment: Mapping[str, str]):
@@ -54,6 +56,9 @@ class RecordingHealthReporter:
             return response
 
     def build_report(self, status: dict[str, Any], *, now: float | None = None) -> dict[str, Any]:
+        return self._build_report(status, now=now)[0]
+
+    def _build_report(self, status: dict[str, Any], *, now: float | None = None):
         path = self.capture.root / '.native-health.json'
         if path.is_symlink() or path.stat().st_mode & 0o077:
             raise JournalError('native producer proof must be private')
@@ -84,7 +89,7 @@ class RecordingHealthReporter:
         drain = status.get('drainId', '')
         quiet = all(type(status.get(key)) is int and status[key] == 0
                     for key in ('activeGames', 'pendingActivities', 'inFlightAdmissions'))
-        return dict(protocol=1, op='recording', bootId=proof['bootId'], releaseId=proof['releaseId'],
+        report = dict(protocol=1, op='recording', bootId=proof['bootId'], releaseId=proof['releaseId'],
                     gymSha=proof['gymSha'], recordingSchemaVersion=1,
                     recoveryComplete=proof['recoveryComplete'], recordingHealthy=healthy,
                     producerCoverageComplete=coverage, pendingRecordWrites=pending,
@@ -92,7 +97,32 @@ class RecordingHealthReporter:
                     drainComplete=bool(drain and status.get('drainAcknowledged') is True and quiet and
                                        healthy and coverage and proof['recoveryComplete'] and pending == 0))
 
+        acknowledged = metrics.get('acknowledgedIncomplete', 0)
+        if type(acknowledged) is not int or acknowledged < 0:
+            raise JournalError('invalid acknowledged incomplete counter')
+        registry_sha256 = metrics.get('acknowledgedIncompleteRegistrySha256')
+        if ((acknowledged and registry_sha256 is None) or
+                (registry_sha256 is not None and
+                 (not isinstance(registry_sha256, str) or not re.fullmatch('[0-9a-f]{64}', registry_sha256)))):
+            raise JournalError('invalid acknowledged incomplete registry identity')
+        return report, dict(acknowledgedIncomplete=acknowledged, registrySha256=registry_sha256,
+                           nativePendingRecordWrites=proof['pendingRecordWrites'],
+                           livePendingRecordWrites=metrics['pendingRecordWrites'])
+
+    @property
+    def last_successful_disposition(self):
+        snapshot = self._last_successful_disposition
+        if self._stop_requested or snapshot is None:
+            return None
+        return {**snapshot, 'report': dict(snapshot['report'])}
+
+    @property
+    def last_successful_report(self):
+        snapshot = self.last_successful_disposition
+        return dict(snapshot['report']) if snapshot is not None else None
+
     def tick(self) -> None:
+        self._last_successful_disposition = None
         try:
             self.capture.scan()
             if self._stop_requested:
@@ -100,10 +130,15 @@ class RecordingHealthReporter:
             status = self.exchange({'protocol': 1, 'op': 'status'})
             if self._stop_requested:
                 return
-            report = self.build_report(status)
+            report, disposition = self._build_report(status)
             if self._stop_requested:
                 return
             self.exchange(report)
+            if self._stop_requested:
+                return
+            # One assignment publishes a coherent successful-report/count epoch;
+            # private host integration reads this snapshot once. Wire schema stays unchanged.
+            self._last_successful_disposition = dict(report=dict(report), **disposition, observedUnix=time.time())
             self.last_error = None
         except (OSError, ValueError, KeyError, TypeError) as error:
             # Absence of a valid heartbeat expires native admission; never invent zero counters.
@@ -122,6 +157,7 @@ class RecordingHealthReporter:
     def request_stop(self) -> None:
         """Only latch assignments transitively; safe in a Python signal handler."""
         self._stop_requested = True
+        self._last_successful_disposition = None
         self.capture.request_stop()
 
     def close(self) -> None:

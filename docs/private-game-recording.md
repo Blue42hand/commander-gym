@@ -265,7 +265,8 @@ this heartbeat. Native admission independently expires heartbeats after ten seco
 Pending writes conservatively include every unfinalized source, partial native tail,
 pending choice, and terminal awaiting verified manifest publication. An orphaned crash
 prefix stays outstanding even when the InMemory repository is empty; it needs explicit
-recovery or finalized-abort handling before drain can complete. The reporter never invents
+recovery, finalized-abort handling, or the separately verified root acknowledgement below
+before it can be excluded from live pending counts. The reporter never invents
 an outcome. Finalized artifact bytes and verified imported source/journal bytes are reported
 as durable evidence bytes, excluding analysis reports and filesystem allocation overhead.
 Drain acknowledgement additionally requires the current native drain ID and zero active
@@ -277,6 +278,77 @@ rotation and per-game cap with a terminal reserve. Both preserve existing histor
 storage exhaustion. Operators should monitor aggregate disk use and unsealed prefixes,
 and choose an archive/retention policy explicitly. There is no automatic historical
 rotation deletion, retention timer, public endpoint, deployment, or paid-call activation.
+
+## Explicit acknowledgement of preserved historical incomplete captures
+
+An optional `NativeGameCapture(..., acknowledged_incomplete_registry=Path(...))`
+argument accepts an external root-issued registry. There is no default path,
+environment skip list, automatic acknowledgement, or command that finalizes history.
+The service owner must explicitly authorize the classification, retain the original
+operator-stop receipt, and publish a byte-identical readable receipt copy outside
+all source directories. The registry and copy must be root-owned regular files in
+root-owned, non-writable-by-group/other ancestor directories. Files permit only
+0600 or 0640; the latter lets the recorder's group read the attestation.
+
+Registry schema 1 has exactly `schemaVersion`,
+`kind: commander-gym.acknowledged-incomplete-registry`, and `captures` (a list).
+Each capture has these fields:
+
+- `captureId` and `canonicalPath`: the exact immediate child of the configured
+  recording root. No alternate path or wildcard membership is accepted.
+- `classification: operator-stopped/incomplete` and `recordingComplete: false`.
+- `stopReceipt`: `path` and the SHA-256 of the original, byte-identical receipt copy.
+- `files`: the complete relative-file inventory. Every entry contains `size`,
+  `sha256`, `mtime_ns`, `device`, `inode`, `ctime_ns`, `uid`, and numeric POSIX `mode`.
+- `directories`: every relative directory (including `""` for the capture itself),
+  with `device`, `inode`, `ctime_ns`, `uid`, and numeric POSIX `mode`.
+- `gapMarkers`: all `native-gap-*.json` members mapped to their SHA-256. At least
+  one explicit preserved gap marker is required, and the mapping must match `files`.
+
+The receipt must bind `capture_id`, `classification: operator-stopped/incomplete`,
+`recording_complete: false`, `winner: null`, `source_files_unchanged: true`, and
+identical `files_before`/`files_after` maps of `size`, `sha256`, and `mtime_ns`.
+Those maps must equal the corresponding projection of the registry's full inventory.
+No bool-only acknowledgement can bypass inventory or receipt verification.
+
+Before importing any source, the recorder acquires exclusive ownership of both
+**existing** `.writer.lock` (Gym `flock`) and `.native-writer.lock` (whole-file POSIX
+`lockf`, interoperable with Java `FileChannel.tryLock`). It never creates or writes
+these locks. Gym ownership is acquired first, so a second recorder in the same
+process cannot open/close the native inode and accidentally release the first
+recorder's process-scoped POSIX lock. Native lock hashing uses `pread` on its held
+file descriptor; no separate descriptor is opened or closed for that inode.
+Ownership is retained until recorder close.
+
+Under both locks, all source hashes, inode identities, ownership, permissions,
+mtime/ctime, directory identities and exact membership must verify. Sources are
+regular, singly linked private 0600 files in same-owner private 0700 directories.
+Before every exclusion or health snapshot, trusted registry/receipt custody and
+all source metadata/membership are rechecked. New/replaced files or directories,
+active writer ownership, symlinks, changed bytes or restored-mtime tampering fail
+closed. Changed attestation requires an explicit new recorder activation; it is
+not silently reloaded. A failed configured acknowledgement blocks ordinary import
+and healthy readiness, preserving its source files for operator resolution.
+
+Only a verified, locked historical capture is excluded from live import and live
+`pendingRecordWrites`. It cannot create a journal, receive seat callbacks or publish
+`manifest.json`; `recording_complete` remains false and no winner, training coverage
+or exact replay is invented. Other unacknowledged orphan/live captures continue to
+block the existing gates. Private `operational_metrics()` reports
+`acknowledgedIncomplete` and `acknowledgedIncompleteRegistrySha256` separately;
+`health()` reports `acknowledged_incomplete`. Verified historical bytes remain in
+aggregate durable storage accounting.
+
+The native lifecycle heartbeat schema is unchanged. After a successful `recording`
+exchange, `RecordingHealthReporter.last_successful_disposition` exposes one coherent
+private snapshot: `report` (the actual validated wire report), `observedUnix`,
+`acknowledgedIncomplete`, `registrySha256`, `nativePendingRecordWrites`, and
+`livePendingRecordWrites`. It is absent before success, on a failed/new tick, and
+on stop. `last_successful_report` returns the report portion. A service-owned helper
+may publish this fresh aggregate metadata privately; it must independently retain
+boot/release/registry identity and freshness checks. Acknowledgement counts never
+enter native wire messages and do not replace producer coverage/recovery, admission,
+drain, backup or matched-release qualification gates.
 
 ## Finalized manifest / automated review contract (schema 1)
 
