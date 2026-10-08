@@ -24,6 +24,7 @@ from .bounded_provider_process import BoundedProcessClient
 from .deck_package import ArtifactRef
 from .delegated_autopass import DelegatedAutopassPilot
 from .game_server_bindings import GameServerBindingError, GameServerBindingRegistry
+from .game_journal import PrivateGameJournal, RecorderSeatSink
 from .game_server_openai_sidecar import (
     JsonlSeatProvenanceWriter,
     OpenAIGameServerSidecarConfig,
@@ -558,6 +559,7 @@ def build_binding_openai_game_server_sidecar(
     client: Any | None = None,
     provenance_sink: SeatProvenanceSink | None = None,
     component_resolver: PilotComponentResolver | None = None,
+    game_journal: PrivateGameJournal | None = None,
 ) -> GameServerSidecarServer:
     """Build the Binding-only OpenAI sidecar from one instance-supplied catalog.
 
@@ -626,10 +628,19 @@ def build_binding_openai_game_server_sidecar(
             if provenance_sink is None
             else lambda event, player_id=player_id: provenance_sink(player_id, event)
         )
+        recording = None if game_journal is None else RecorderSeatSink(game_journal, player_id)
+
+        def completed(event):
+            if recording is not None:
+                recording.finished(event)
+            if sink is not None:
+                sink(event)
+
         return registry.create_seat(
             player_id,
             profile_id,
-            provenance_sink=sink,
+            provenance_sink=completed if recording is not None else sink,
+            decision_start_sink=None if recording is None else recording.started,
         )
 
     return GameServerSidecarServer(

@@ -81,12 +81,14 @@ class GameServerSeatAdapter:
         player_id: Any,
         *,
         provenance_sink: ProvenanceSink | None = None,
+        decision_start_sink: ProvenanceSink | None = None,
     ) -> None:
         if player_id is None:
             raise GameServerSeatError("game-server seat requires player_id")
         self._pilot = pilot
         self._player_id = player_id
         self._provenance_sink = provenance_sink
+        self._decision_start_sink = decision_start_sink
         self._known_deck: dict[str, int] | None = None
         self._deck_archetype: str | None = None
 
@@ -333,6 +335,10 @@ class GameServerSeatAdapter:
     def _choose_with_failure_receipt(
         self, callback: str, observation: Mapping[str, Any]
     ) -> ArgentumActionChoice | ArgentumDecisionChoice:
+        if self._decision_start_sink is not None:
+            self._decision_start_sink(SeatProvenance(
+                callback=callback, observation=deepcopy(dict(observation)), choice={}
+            ))
         try:
             return choose_for_observation(self._pilot, observation)
         except OpenAIResponsesPilotError as exc:
