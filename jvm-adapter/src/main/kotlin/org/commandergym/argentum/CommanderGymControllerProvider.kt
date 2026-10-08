@@ -91,6 +91,7 @@ class CommanderGymControllerProvider(
             token = token,
             timeout = timeout,
             profileId = selected?.id,
+            gameSessionId = context.gameSessionId,
             expectedDeck = selected?.deckList,
             expectedCommander = selected?.commander,
             parameterize = { offered, params ->
@@ -155,6 +156,7 @@ class CommanderGymPlayerController(
         offered.action
     },
     private val http: HttpClient = HttpClient.newBuilder().connectTimeout(timeout).build(),
+    private val gameSessionId: String? = null,
 ) : AiPlayerController {
     private val base = endpoint.toString().trimEnd('/')
     private val bearer = token
@@ -284,6 +286,7 @@ class CommanderGymPlayerController(
     private fun JsonObjectBuilder.putIdentity() {
         put("playerId", playerId.value)
         profileId?.let { put("profileId", it) }
+        gameSessionId?.let { put("gameSessionId", it) }
     }
 
     private fun post(path: String, body: JsonObject): JsonObject {

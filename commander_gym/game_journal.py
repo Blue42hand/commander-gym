@@ -191,6 +191,7 @@ class PrivateGameJournal:
             fcntl.flock(self._fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             self.sequence, self.previous, self.sources = 0, ZERO, {}
             self.terminal, self.failed = False, False
+            self.pending_decisions: set[tuple[str, str]] = set()
             self.clock_id, self.origin = str(uuid.uuid4()), time.monotonic_ns()
             self.segment, self.used = 0, 0
             files = sorted(directory.glob("*.jsonl"))
@@ -205,6 +206,11 @@ class PrivateGameJournal:
                     raise JournalError("resume game or source contract mismatch")
                 self.sequence, self.previous = len(report["rows"]), report["root_sha256"]
                 self.sources = report["sources"]
+                for row in report["rows"]:
+                    if row['kind'] == 'decision_started':
+                        self.pending_decisions.add((row['seat_id'], row['payload']['decision_id']))
+                    elif row['kind'] == 'seat_callback':
+                        self.pending_decisions.discard((row['seat_id'], row['payload']['decision_id']))
                 self.segment = len(files) - 1
                 self.used = sum(path.stat().st_size for path in files)
                 self.append("resume", {"previous_clock_id": report["rows"][-1]["clock_id"]})
@@ -223,7 +229,8 @@ class PrivateGameJournal:
             if self._fd < 0 or self.terminal or self.failed:
                 raise JournalError("journal is closed or failed")
             if kind not in {"manifest", "resume", "native_transition", "native_replay",
-                            "seat_callback", "decision_started", "terminal", "coverage_gap", "raw_evidence"}:
+                            "seat_callback", "decision_started", "terminal", "coverage_gap", "raw_evidence",
+                            "native_source", "native_seat_observation", "runtime_context"}:
                 raise JournalError("unsupported event kind")
             _safe(payload)
             if (source is None) != (source_sequence is None):
@@ -245,6 +252,12 @@ class PrivateGameJournal:
                     raise JournalError("seat observation must have matching viewingPlayerId")
                 if not isinstance(payload.get("decision_id"), str) or not payload["decision_id"]:
                     raise JournalError("seat evidence requires decision_id")
+            elif kind == "native_seat_observation":
+                body = payload.get("native", {})
+                if (source != "native" or not isinstance(body, Mapping) or
+                        body.get("visibility") != "seat" or body.get("seatId") != seat_id or
+                        body.get("gameId") != self.game_id or not isinstance(seat_id, str)):
+                    raise JournalError("native seat evidence requires its own source seat identity")
             elif seat_id is not None:
                 raise JournalError("admin evidence must not be marked seat-visible")
             if kind == "native_transition":
@@ -289,6 +302,10 @@ class PrivateGameJournal:
             self.used += len(data)
             self.sequence += 1
             self.previous = digest
+            if kind == 'decision_started':
+                self.pending_decisions.add((seat_id, payload['decision_id']))
+            elif kind == 'seat_callback':
+                self.pending_decisions.discard((seat_id, payload['decision_id']))
             if source is not None:
                 self.sources[source] = source_sequence + 1
             self.terminal = kind == "terminal"
@@ -395,8 +412,13 @@ class PrivateGameJournal:
             if not report["closed"]:
                 raise JournalError("only a sealed intact journal can be published")
             artifacts = []
-            for path in sorted(self.directory.glob("*.jsonl")):
-                artifacts.append({"path": path.name, "role": "admin_journal", "size_bytes": path.stat().st_size,
+            for path in sorted(list(self.directory.glob("*.jsonl")) + list(self.directory.glob("native-*.ndjson")) +
+                               list(self.directory.glob("native-gap-*.json"))):
+                if path.is_symlink() or path.stat().st_mode & 0o077:
+                    raise JournalError("native artifact must be private and not a symlink")
+                role = ("admin_journal" if path.suffix == ".jsonl" else
+                        "admin_native_source" if path.suffix == '.ndjson' else "admin_capture_gap")
+                artifacts.append({"path": path.name, "role": role, "size_bytes": path.stat().st_size,
                                   "artifact_id": artifact_id_for_bytes(path.read_bytes()),
                                   "sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
             seats = sorted({row["seat_id"] for row in report["rows"] if row["seat_id"] is not None})
@@ -527,8 +549,9 @@ class RecorderSeatSink:
     The existing SeatProvenance observation/choice/model-I/O schema is preserved.
     No rationale is invented; provider metadata includes it only when supplied.
     """
-    def __init__(self, journal: PrivateGameJournal, seat_id: str) -> None:
+    def __init__(self, journal: PrivateGameJournal, seat_id: str, *, gym_revision: str | None = None) -> None:
         self.journal, self.seat_id = journal, seat_id
+        self.gym_revision = gym_revision
         self._pending = threading.local()
 
     def started(self, event: Any) -> None:
@@ -536,7 +559,8 @@ class RecorderSeatSink:
             raise JournalError("overlapping seat callback on the same worker")
         decision_id = str(uuid.uuid4())
         self.journal.append("decision_started", {"decision_id": decision_id,
-                            "callback": event.callback, "observation": event.observation},
+                            "callback": event.callback, "observation": event.observation,
+                            "gym_revision": self.gym_revision},
                             seat_id=self.seat_id)
         self._pending.decision_id = decision_id
 
@@ -548,6 +572,6 @@ class RecorderSeatSink:
         with self.journal._lock:
             self.journal.append("seat_callback", {"decision_id": decision_id,
                                 "callback": event.callback, "observation": event.observation,
-                                "choice": event.choice}, seat_id=self.seat_id,
+                                "choice": event.choice, "gym_revision": self.gym_revision}, seat_id=self.seat_id,
                                 source=source, source_sequence=self.journal.sources.get(source, 0))
         self._pending.decision_id = None

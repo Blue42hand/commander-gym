@@ -1,7 +1,8 @@
 # Private game capture and finalized analysis contract
 
-Status: capture/analysis code implemented; runtime native producer adoption and deployment
-are not complete. No production traces are fixtures. This change does not certify the
+Status: recorder/analysis foundation merged in #206. Opt-in native producer and
+automatic per-game import are implemented as coordinated engine/Gym changes; deployment
+is not complete. No production traces are fixtures. This change does not certify the
 historical supervised game or modify its `operator_stop` receipt.
 
 ## Placement and identity
@@ -26,12 +27,12 @@ storage. [ARCHITECTURE.md](../ARCHITECTURE.md) keeps Argentum authoritative.
 
 | Required evidence | Existing contracts / source | Implemented capture | Remaining production gap |
 |---|---|---|---|
-| Run/game/seat identity; engine/Gym/schema pins | `RunRecord`, `EngineProvenance`, `evidence.py` | Journal envelope joins run/game IDs; manifest pins/digest; canonical raw envelope validation | Launcher must supply exact immutable pins and game ID |
+| Run/game/seat identity; engine/Gym/schema pins | `RunRecord`, `EngineProvenance`, `evidence.py` | Journal envelope joins run/game IDs; manifest pins/digest; canonical raw envelope validation | Private launcher pins supply Gym/model/Binding/runtime configuration; native session ID and initialization supply engine/deck/RNG pins |
 | Deck → DeckKnowledge → Pilot → Binding lineage | `identity.py`, Binding catalog, `RunParticipant.binding` | Existing canonical raw-run-evidence envelope retained unchanged; no second identity schema | Native controller callbacks need join to canonical decision IDs/results |
-| Own observation, legal semantic options, selected native response | `SeatProvenance`, `DecisionRecord`, `StructuredDecisionRecord`, `pilot_records.py` | Durable start before pilot invocation; durable completion after choice; original schema copied | Human seat observations/legal menus need a native seat-safe capture hook |
+| Own observation, legal semantic options, selected native response | `SeatProvenance`, `DecisionRecord`, `StructuredDecisionRecord`, `pilot_records.py` | Durable start before pilot invocation; durable completion after choice; original schema copied | Native masked state/legal menus/mulligan/bottom offers and original browser submissions are captured when enabled; canonical semantic conversion remains unavailable |
 | Actual routing subsystem/model/skill | Existing choice `metadata`, `modelIo`, routing | Preserved verbatim subject to forbidden transport/credential fields | Every runtime producer must retain complete metadata |
 | Actual model response/rationale, usage/cost/retries/errors | Existing model-I/O/provider-call/budget receipts | Preserved when provided; rationale never synthesized; pending start survives crashes | In-flight provider attempt settling still belongs to existing budget ledger; capture alone cannot recover a lost response |
-| Native human + AI actions/events/results and ordering | Argentum `GameSession` / engine `ExecutionResult` | Versioned `native_transition` payload with producer sequence, native schema, action, events, result, before/after digests | Authoritative producer hook must feed these values; no such hook installed by this PR |
+| Native human + AI actions/events/results and ordering | Argentum `GameSession` / engine `ExecutionResult` | Versioned `native_transition` payload with producer sequence, native schema, action, events, result, before/after digests | Coordinated native GameSession producer supplies actual actions/results/events/state checkpoints; deployment must enable it |
 | RNG/deck/card pins and replay | Native `CompactReplay` v1–v4 | Admin-only verbatim compact replay ingestion, including setup seed and pinned definitions | Runtime must supply private native replay; observation-only capture cannot prove exact replay |
 | Native terminal vs supervisor classification | Gym #205 `GuiNativeTerminalWatch`, `RunTermination` | Reuses exact three-field receipt; run-local path binding; supervisor termination preserved separately | Orchestrator must set a fresh receipt path for its own session before launch; receipt has no game ID |
 | Input / target / provenance separation | Existing `raw-run-evidence`, `DatasetManifest`, `manifest_export.py` | Only validated canonical raw envelopes are dataset-compatible; callback journal is not a dataset | Missing semantic identity/result evidence blocks conversion, rather than inventing it |
@@ -92,6 +93,89 @@ be universally classified as secret. Referee data stays in private journal files
 `seat_projection` contains only matching seat capture events; it excludes all admin rows and
 other seats. Masking itself stays native-owned and the submitted observation must identify the
 same viewing/perspective seat. No UI/public endpoint is added.
+
+## Automatic native and callback capture (opt-in)
+
+The coordinated Argentum producer writes `native-000000.ndjson` under
+`<runs-root>/<native-game-session-id>/`. Set JVM properties `game.recording.root`
+and `game.recording.engine-revision` to the already-private runs root and the actual
+40-character engine commit. Each row has a versioned exact UTF-8 JSON body, SHA-256,
+previous hash, game ID, sequence, engine revision, UTC and process monotonic clock.
+Admin rows preserve initialization setup/seed/compiled card pins, actual native actions,
+results/events, and complete state checkpoints. Before/effective-state hashes avoid
+repeating full states unnecessarily. Undo, yields, persistence restore and stall mutations
+pass through the native state checkpoint hook; they are preserved even when compact replay
+rolls back or truncates. Administrative stalls are explicitly distinguished from engine outcomes.
+Seat rows preserve actual native masked updates and browser submission/result DTOs. No
+new state or legal-option logic exists in Gym, and no recorder data becomes pilot input.
+
+The Binding launcher enables `NativeGameCapture` only when both
+`COMMANDER_GYM_RECORDING_ROOT` and `COMMANDER_GYM_RECORDING_PINS` are configured. The
+latter names a private 0600 JSON file with all seven pin sections. `gym` must be the
+actual full Gym commit; model/Binding/config references must identify effective versions
+without credentials. Native setup supplies actual decks/compiled cards/config/RNG. A
+40-character native session ID is not required: the engine's UUID is passed as opaque
+`gameSessionId` routing metadata by the JVM adapter; it never enters pilot observations.
+Adapters are cached per game/seat/profile rather than across games sharing a seat ID.
+
+The local scanner incrementally imports verified native rows, preserving the exact source
+body and hashes. It finalizes games with human, AI or mixed seats, including games with no
+policy callback. A native terminal closes the native source after durable append. A human
+concession during an AI choice waits up to ten minutes for completion/model usage receipts;
+an unrecoverable pending choice is explicitly partial after that bound. Repository removal
+without a rules terminal is `session_closed`, with an explicit non-native-terminal coverage
+gap; it is never converted into a winner or a historical supervisor classification.
+
+A clean source prefix resumes under an exclusive native writer lock with a new clock epoch.
+Changed engine revisions remain explicit per native row and create a coverage gap. An
+uncertain/partial native tail is preserved and refused; optional capture failure cannot
+prevent native game restoration. Native errors emit class-only logs and private gap markers
+when the disk permits. `NativeGameCapture.health()` reports active/error/gap/waiting-game
+metadata without seat state. Operator monitoring must alert on this health and unsealed
+prefixes. Partial Gym tails likewise refuse automatic repair. A recorder restart preserves
+initial immutable pins, appends current runtime context, and records the actual Gym revision
+on each new AI callback; it does not rewrite historical context.
+
+Live game-server callbacks do not expose all `schemaHash`, `stateDigest` and native semantic
+identity fields required by `pilot_records.py`. The automatic recorder therefore declares
+`canonical_game_server_training_adapter_unavailable`; `ready_for_analysis` can be true while
+`recording_complete` remains false. Raw facts support local review, but canonical dataset
+promotion stays blocked. Exact replay remains unverified, including across restore/undo,
+server mutation and engine upgrades. The native source and gap markers are private admin
+artifacts included in the finalized manifest; source bodies are independently recheckable.
+
+## Native lifecycle recording proof (opt-in)
+
+With the coordinated native lifecycle enabled, Argentum publishes `.native-health.json`
+under the private runs root by atomic 0600 replace and directory fsync. It contains only
+boot/release/engine/Gym/schema pins, readiness, and aggregate connected producer counts.
+A missing writer, serialization/write failure, unsupported repository, or mismatched
+engine pin prevents healthy producer coverage. This release supports the native lifecycle's
+InMemory repository; it does not claim Redis recovery coverage.
+
+Set `COMMANDER_GYM_RECORDING_LIFECYCLE_SOCKET` to the existing private native Unix socket
+to enable `RecordingHealthReporter`. It sends protocol-1 `status` and `recording` requests
+every two seconds, never updater `drain` or `resume`. Socket parent and socket must already
+be private and owned by the recorder; the recorder changes no permissions or services.
+Producer proof must be less than five seconds old and match the exact native boot/release
+and Gym pin. No game IDs, seat state, prompts, credentials, or exception messages enter
+this heartbeat. Native admission independently expires heartbeats after ten seconds.
+
+Pending writes conservatively include every unfinalized source, partial native tail,
+pending choice, and terminal awaiting verified manifest publication. An orphaned crash
+prefix stays outstanding even when the InMemory repository is empty; it needs explicit
+recovery or finalized-abort handling before drain can complete. The reporter never invents
+an outcome. Finalized artifact bytes and verified imported source/journal bytes are reported
+as durable evidence bytes, excluding analysis reports and filesystem allocation overhead.
+Drain acknowledgement additionally requires the current native drain ID and zero active
+games, pending lobby activities, and in-flight admissions. Dataset conversion gaps are
+separate from producer health and do not misrepresent exact replay as verified.
+
+Native capture is bounded at 1 GiB per game and Gym uses its existing 16 MiB segment
+rotation and per-game cap with a terminal reserve. Both preserve existing history on
+storage exhaustion. Operators should monitor aggregate disk use and unsealed prefixes,
+and choose an archive/retention policy explicitly. There is no automatic historical
+rotation deletion, retention timer, public endpoint, deployment, or paid-call activation.
 
 ## Finalized manifest / automated review contract (schema 1)
 
