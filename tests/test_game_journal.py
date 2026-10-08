@@ -115,7 +115,7 @@ class JournalTests(unittest.TestCase):
         self.assertFalse(inspect_journal(self.root)['recording_complete'])
     def test_credentials_and_cross_seat_never_written(self):
         with self.writer() as w:
-            for value in ({'headers': {}}, {'api_key': 'private'}, {'reconnectToken': 'private'}):
+            for value in ({'headers': {}}, {'extra_headers': {}}, {'auth': 'private'}, {'api_key': 'private'}, {'reconnectToken': 'private'}):
                 with self.assertRaisesRegex(JournalError, 'forbidden'):
                     w.append('coverage_gap', value)
             with self.assertRaisesRegex(JournalError, 'matching'):

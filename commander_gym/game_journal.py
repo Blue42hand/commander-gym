@@ -26,7 +26,8 @@ ZERO = "0" * 64
 PIN_KEYS = ("engine", "gym", "models", "decks", "bindings", "config", "rng")
 FORBIDDEN = {"authorization", "headers", "rawheaders", "apikey", "password",
              "secret", "credentials", "reconnecttoken", "accesstoken",
-             "refreshtoken", "bearertoken", "sidecartoken", "token"}
+             "refreshtoken", "bearertoken", "sidecartoken", "token", "auth",
+             "sessiontoken", "clientsecret", "cookie", "cookies", "privatekey"}
 
 
 class JournalError(ValueError):
@@ -43,7 +44,7 @@ def _safe(value: Any) -> None:
     if isinstance(value, Mapping):
         for key, item in value.items():
             normalized = re.sub(r"[^a-z]", "", str(key).lower())
-            if normalized in FORBIDDEN or normalized.endswith("apikey"):
+            if normalized in FORBIDDEN or normalized.endswith(("apikey", "headers", "credentials")):
                 raise JournalError("credential or transport field is forbidden")
             _safe(item)
     elif isinstance(value, (list, tuple)):
