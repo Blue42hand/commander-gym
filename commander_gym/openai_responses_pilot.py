@@ -927,6 +927,7 @@ class OpenAIResponsesPilot:
     max_attempts: int = 2
     budget: OpenAIRunBudget | None = None
     retry_transient_server_errors: bool = False
+    uncapped_manual_recovery: bool = False
     allow_priority_delegation: bool = False
     allow_named_deferrals: bool = False
     require_nonempty_named_deferrals: bool = False
@@ -962,6 +963,8 @@ class OpenAIResponsesPilot:
             raise OpenAIResponsesPilotError("cache_friendly_history must be boolean")
         if type(self.retry_transient_server_errors) is not bool:
             raise OpenAIResponsesPilotError("retry_transient_server_errors must be boolean")
+        if type(self.uncapped_manual_recovery) is not bool:
+            raise OpenAIResponsesPilotError("uncapped_manual_recovery must be boolean")
         if self.strategy is not None:
             _require_string(self.strategy, "OpenAI pilot strategy")
         if type(self.max_attempts) is not int or self.max_attempts < 1:
@@ -1167,7 +1170,8 @@ class OpenAIResponsesPilot:
         validation_retries = 0
         recovery_deadline = (
             perf_counter() + _RECOVERY_CALLBACK_SECONDS
-            if self.retry_transient_server_errors and self.budget is not None else None
+            if self.uncapped_manual_recovery
+            or (self.retry_transient_server_errors and self.budget is not None) else None
         )
         for attempt in range(self.max_attempts):
             if validation_error is not None:
@@ -1240,7 +1244,8 @@ class OpenAIResponsesPilot:
                 # the existing total max_attempts ceiling. Budget rejection and
                 # non-server errors remain fail-closed; ambiguous attempts retain
                 # their reservation and their model-I/O receipt.
-                if (self.retry_transient_server_errors and self.budget is not None
+                if (self.retry_transient_server_errors
+                    and (self.budget is not None or self.uncapped_manual_recovery)
                     and _retryable_provider_status(exc)
                     and attempt + 1 < self.max_attempts
                     and recovery_deadline is not None

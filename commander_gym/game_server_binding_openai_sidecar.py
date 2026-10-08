@@ -15,7 +15,7 @@ declared component requires an explicit resolver and otherwise fails closed at s
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -172,6 +172,17 @@ class BindingOpenAIGameServerConfig:
     cache_friendly_history: bool = False
     prefix_guard: PrefixGuard | None = None
     human_gui_guard: HumanGuiSessionGuard | None = None
+    manual_uncapped: bool = False
+
+    def __post_init__(self) -> None:
+        if type(self.manual_uncapped) is not bool:
+            raise OpenAIGameServerSidecarConfigurationError("manual_uncapped must be boolean")
+        if self.manual_uncapped and any((self.budget, self.prefix_guard, self.human_gui_guard)):
+            raise OpenAIGameServerSidecarConfigurationError(
+                "manual uncapped service excludes experimental bounds"
+            )
+        if self.manual_uncapped and self.sidecar.model != "gpt-6-luna":
+            raise OpenAIGameServerSidecarConfigurationError("manual uncapped service requires gpt-6-luna")
 
 
 def binding_openai_game_server_config_from_environment(
@@ -180,6 +191,23 @@ def binding_openai_game_server_config_from_environment(
     """Load Binding-first sidecar configuration from an explicit environment."""
 
     sidecar = openai_game_server_sidecar_from_environment(environment)
+    manual_value = environment.get("COMMANDER_GYM_MANUAL_UNCAPPED", "false").lower()
+    if manual_value not in ("true", "false"):
+        raise OpenAIGameServerSidecarConfigurationError(
+            "COMMANDER_GYM_MANUAL_UNCAPPED must be true or false"
+        )
+    manual_uncapped = manual_value == "true"
+    if manual_uncapped and any(environment.get(name) for name in (
+        "COMMANDER_GYM_OPENAI_BUDGET_LEDGER", "COMMANDER_GYM_OPENAI_BUDGET_CAP_USD",
+        "COMMANDER_GYM_OPENAI_BUDGET_AUTHORIZED_MAX_USD", "COMMANDER_GYM_OPENAI_BUDGET_MAX_REQUESTS",
+        "COMMANDER_GYM_OPENAI_SESSION_CAP_USD", "COMMANDER_GYM_OPENAI_SESSION_MAX_REQUESTS",
+        "COMMANDER_GYM_PREFIX_TURN_LIMIT", "COMMANDER_GYM_PREFIX_DEADLINE_UNIX",
+        "COMMANDER_GYM_PREFIX_STOP_RECEIPT", "COMMANDER_GYM_HUMAN_GUI_DEADLINE_UNIX",
+        "COMMANDER_GYM_HUMAN_GUI_STOP_RECEIPT",
+    )):
+        raise OpenAIGameServerSidecarConfigurationError(
+            "manual uncapped service must not inherit experimental spending/session bounds"
+        )
     raw_catalog = environment.get("COMMANDER_GYM_BINDING_CATALOG", "").strip()
     if not raw_catalog:
         raise OpenAIGameServerSidecarConfigurationError(
@@ -263,6 +291,7 @@ def binding_openai_game_server_config_from_environment(
             else None
         ),
         cache_friendly_history=cache_value == "true",
+        manual_uncapped=manual_uncapped,
         prefix_guard=guard,
         human_gui_guard=gui_guard,
     )
@@ -329,6 +358,7 @@ class OpenAIBindingPilotComponentResolver:
     budget: OpenAIRunBudget | None = None
     cache_friendly_history: bool = False
     bounded_recovery_client: Any | None = None
+    manual_uncapped: bool = False
 
     def resolve(self, spec: PilotSubsystemSpec):
         key = spec.component_key()
@@ -373,8 +403,9 @@ class OpenAIBindingPilotComponentResolver:
         ):
             return ArtificialPlayerSubsystem(
                 OpenAIResponsesPilot(
-                    client=self.client,
+                    client=(self.bounded_recovery_client or self.client) if self.manual_uncapped else self.client,
                     model=self.config.model,
+                    uncapped_manual_recovery=self.manual_uncapped,
                     max_attempts=self.config.max_attempts,
                     budget=self.budget,
                     cache_friendly_history=self.cache_friendly_history,
@@ -387,8 +418,9 @@ class OpenAIBindingPilotComponentResolver:
             return ArtificialPlayerSubsystem(
                 DelegatedAutopassPilot(
                     OpenAIResponsesPilot(
-                        client=self.client,
+                        client=(self.bounded_recovery_client or self.client) if self.manual_uncapped else self.client,
                         model=self.config.model,
+                        uncapped_manual_recovery=self.manual_uncapped,
                         max_attempts=self.config.max_attempts,
                         budget=self.budget,
                         cache_friendly_history=self.cache_friendly_history,
@@ -403,8 +435,9 @@ class OpenAIBindingPilotComponentResolver:
             return ArtificialPlayerSubsystem(
                 DelegatedAutopassPilot(
                     OpenAIResponsesPilot(
-                        client=self.client,
+                        client=(self.bounded_recovery_client or self.client) if self.manual_uncapped else self.client,
                         model=self.config.model,
+                        uncapped_manual_recovery=self.manual_uncapped,
                         max_attempts=self.config.max_attempts,
                         budget=self.budget,
                         cache_friendly_history=self.cache_friendly_history,
@@ -422,8 +455,9 @@ class OpenAIBindingPilotComponentResolver:
             return ArtificialPlayerSubsystem(
                 DelegatedAutopassPilot(
                     OpenAIResponsesPilot(
-                        client=self.client,
+                        client=(self.bounded_recovery_client or self.client) if self.manual_uncapped else self.client,
                         model=self.config.model,
+                        uncapped_manual_recovery=self.manual_uncapped,
                         max_attempts=self.config.max_attempts,
                         budget=self.budget,
                         cache_friendly_history=self.cache_friendly_history,
@@ -442,8 +476,9 @@ class OpenAIBindingPilotComponentResolver:
             return ArtificialPlayerSubsystem(
                 DelegatedAutopassPilot(
                     OpenAIResponsesPilot(
-                        client=self.client,
+                        client=(self.bounded_recovery_client or self.client) if self.manual_uncapped else self.client,
                         model=self.config.model,
+                        uncapped_manual_recovery=self.manual_uncapped,
                         max_attempts=self.config.max_attempts,
                         budget=self.budget,
                         cache_friendly_history=self.cache_friendly_history,
@@ -463,8 +498,9 @@ class OpenAIBindingPilotComponentResolver:
             return ArtificialPlayerSubsystem(
                 DelegatedAutopassPilot(
                     OpenAIResponsesPilot(
-                        client=self.client,
+                        client=(self.bounded_recovery_client or self.client) if self.manual_uncapped else self.client,
                         model=self.config.model,
+                        uncapped_manual_recovery=self.manual_uncapped,
                         max_attempts=self.config.max_attempts,
                         budget=self.budget,
                         cache_friendly_history=self.cache_friendly_history,
@@ -486,8 +522,9 @@ class OpenAIBindingPilotComponentResolver:
             return ArtificialPlayerSubsystem(
                 DelegatedAutopassPilot(
                     OpenAIResponsesPilot(
-                        client=self.client,
+                        client=(self.bounded_recovery_client or self.client) if self.manual_uncapped else self.client,
                         model=self.config.model,
+                        uncapped_manual_recovery=self.manual_uncapped,
                         max_attempts=self.config.max_attempts,
                         budget=self.budget,
                         cache_friendly_history=self.cache_friendly_history,
@@ -511,13 +548,14 @@ class OpenAIBindingPilotComponentResolver:
                 _component_key(BUILTIN_FORGE_EXPLICIT_WAIT_COMPONENT_REF),
             }
         ):
-            if self.budget is None:
+            if self.budget is None and not self.manual_uncapped:
                 raise PilotContractError("bounded provider recovery requires a durable budget")
             return ArtificialPlayerSubsystem(
                 DelegatedAutopassPilot(
                     OpenAIResponsesPilot(
                         client=self.bounded_recovery_client or self.client,
                         model=self.config.model,
+                        uncapped_manual_recovery=self.manual_uncapped,
                         max_attempts=self.config.max_attempts,
                         budget=self.budget,
                         retry_transient_server_errors=True,
@@ -586,16 +624,17 @@ def build_binding_openai_game_server_sidecar(
     runtime_resolver = component_resolver
     if runtime_resolver is None:
         provider_client = client if client is not None else _default_openai_client(
-            config.sidecar, bounded=config.budget is not None,
+            config.sidecar, bounded=config.budget is not None or config.manual_uncapped,
         )
         runtime_resolver = OpenAIBindingPilotComponentResolver(
             config=config.sidecar,
             client=provider_client,
             budget=config.budget,
             cache_friendly_history=config.cache_friendly_history,
+            manual_uncapped=config.manual_uncapped,
             bounded_recovery_client=(
                 BoundedProcessClient(config.sidecar.api_key)
-                if client is None and config.budget is not None else None
+                if client is None and (config.budget is not None or config.manual_uncapped) else None
             ),
         )
 
@@ -623,7 +662,7 @@ def build_binding_openai_game_server_sidecar(
     except (BindingCatalogError, GameServerBindingError, PilotContractError) as exc:
         raise OpenAIGameServerSidecarConfigurationError(str(exc)) from exc
 
-    sidecar = config.sidecar.sidecar_config()
+    sidecar = replace(config.sidecar.sidecar_config(), require_manual_human_game=config.manual_uncapped)
 
     if game_journal is not None and game_capture is not None:
         raise GameServerBindingError("choose one game recording owner")
