@@ -137,6 +137,7 @@ class GameServerBindingRegistry:
         binding_id: str,
         *,
         provenance_sink: ProvenanceSink | None = None,
+        decision_start_sink: ProvenanceSink | None = None,
     ) -> GameServerSeatAdapter:
         if binding_id not in self._profiles:
             raise GameServerBindingError(f"unknown Binding profile {binding_id!r}")
@@ -148,6 +149,7 @@ class GameServerBindingRegistry:
             resolved.artificial_player,
             player_id,
             provenance_sink=provenance_sink,
+            decision_start_sink=decision_start_sink,
         )
         # The canonical Binding already owns the exact library composition. The
         # JVM edge checks Argentum's delivered list against the same profile.
