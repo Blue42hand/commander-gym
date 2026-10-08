@@ -62,7 +62,9 @@ Completed report ingestion does not itself trigger work, notifications or spendi
 
 `insufficient_evidence -> hypothesis -> reproduced -> implementation_validated -> measured -> adopted`.
 Any pre-adoption state may be rejected; adopted records may be rolled back.
-History is retained, including rejected/rolled-back records. No state implies a
+History is retained, including rejected/rolled-back records. Each transition freezes
+its evidence-assessment digests and independent-group count so later reports cannot
+retroactively change the basis of an earlier gate. No state implies a
 live deployment. New attempts after rejection use a new explicit family revision.
 
 - **Hypothesis:** falsifiable statement; decision/reliability metric, increase/decrease

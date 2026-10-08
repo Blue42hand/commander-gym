@@ -121,6 +121,10 @@ class ImprovementTests(unittest.TestCase):
         other = ImprovementLedger(Path(self.tmp.name) / 'private')
         self.assertEqual(2, other.get(self.cid)['revision'])
         self.assertEqual(2, len(other.history(self.cid)))
+        basis = other.history(self.cid)[-1]['evidence_basis']
+        self.ledger.ingest(source('run2', 'game2'), proposal())
+        self.assertEqual(basis, other.history(self.cid)[-1]['evidence_basis'])
+        self.assertEqual(1, other.history(self.cid)[-1]['independent_groups_at_transition'])
 
     def test_report_ingestion_verifies_hashes_and_leaves_source_unchanged(self):
         from commander_gym.game_journal import PIN_KEYS, PrivateGameJournal

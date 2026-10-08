@@ -183,7 +183,8 @@ class ImprovementLedger:
             if not db.execute('SELECT 1 FROM events WHERE candidate=?', (cid,)).fetchone():
                 self._append(db, dict(candidate_id=cid, schema_version=1, revision=1,
                     state='insufficient_evidence', category=proposal['category'], family_key=proposal['family_key'],
-                    actor='ingestion', timestamp=time.time(), details={}, gates={}))
+                    actor='ingestion', timestamp=time.time(), details={}, gates={},
+                    evidence_basis=[digest(payload)], independent_groups_at_transition=1))
         return cid
 
     def ingest_report(self, run_directory: Path, version: str, proposal, *, correlation_group: str):
@@ -292,7 +293,9 @@ class ImprovementLedger:
             gates = {**gates, target: details}
             record = {k: v for k, v in c.items() if k not in {'sources', 'independent_groups'}}
             record.update(revision=revision + 1, state=target, details=details, gates=gates,
-                          actor=actor, timestamp=time.time())
+                          actor=actor, timestamp=time.time(),
+                          evidence_basis=sorted(digest(s) for s in c['sources']),
+                          independent_groups_at_transition=c['independent_groups'])
             self._append(db, record)
             return record
 
