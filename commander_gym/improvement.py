@@ -231,6 +231,7 @@ class ImprovementLedger:
     def transition(self, cid, revision, target, details, *, actor, claim_token=None):
         _safe(details)
         require(isinstance(actor, str) and actor.strip(), 'actor required')
+        _safe(actor)
         with self.db() as db:
             c = self._get(db, cid)
             claim = db.execute('SELECT token, worker, expires FROM claims WHERE candidate=?', (cid,)).fetchone()
@@ -297,11 +298,12 @@ class ImprovementLedger:
 
     def claim(self, cid, worker, *, now=None, lease_seconds=3600):
         require(isinstance(worker, str) and worker.strip(), 'worker required')
+        _safe(worker)
         require(type(lease_seconds) is int and 1 <= lease_seconds <= 86400, 'invalid lease')
         now = time.time() if now is None else now
         with self.db() as db:
             c = self._get(db, cid)
-            if not STATES[c['state']]:
+            if c['state'] in {'adopted', 'rejected', 'rolled_back'}:
                 return {'status': 'terminal', 'state': c['state']}
             previous = db.execute('SELECT expires FROM claims WHERE candidate=?', (cid,)).fetchone()
             if previous and previous[0] > now:

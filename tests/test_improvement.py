@@ -96,6 +96,7 @@ class ImprovementTests(unittest.TestCase):
         self.ledger.ingest(source('run2', 'game2'), proposal())
         self.move('adopted', dict(approval_ref='user-approved', approved_by='noah'))
         self.assertEqual('adopted', self.ledger.get(self.cid)['state'])
+        self.assertEqual('terminal', self.ledger.claim(self.cid, 'hourly-worker')['status'])
 
     def test_win_rate_alone_and_failed_measurement_rejected(self):
         self.prepare()
