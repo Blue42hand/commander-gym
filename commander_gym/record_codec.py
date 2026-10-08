@@ -13,6 +13,15 @@ NATIVE_MAX_RECORD_BYTES = 64 * 1024 * 1024
 MAX_RECORD_BYTES = 4 * NATIVE_MAX_RECORD_BYTES
 COMPRESS_THRESHOLD = 4096
 
+class ScanCancelled(Exception):
+    """Cooperative stop, distinct from corrupt or incomplete evidence."""
+
+
+def check_cancelled(cancel=None):
+    if cancel is not None and cancel():
+        raise ScanCancelled()
+
+
 class RecordCodecError(ValueError):
     pass
 
@@ -28,11 +37,13 @@ def encode_record(logical: bytes, *, compress: bool = True) -> bytes:
     return physical if len(physical) < len(logical) else logical
 
 
-def decode_record(physical: bytes, *, max_bytes: int | None = None) -> bytes:
+def decode_record(physical: bytes, *, max_bytes: int | None = None, cancel=None) -> bytes:
     limit = MAX_RECORD_BYTES if max_bytes is None else max_bytes
     if len(physical) > limit or not physical.endswith(b"\n"):
         raise RecordCodecError("record_size_or_framing_limit")
+    check_cancelled(cancel)
     frame = json.loads(physical)
+    check_cancelled(cancel)
     if not isinstance(frame, dict) or "recordCodec" not in frame:
         return physical
     if (set(frame) != {"recordCodec", "encoding", "decodedBytes", "data"} or
@@ -42,10 +53,12 @@ def decode_record(physical: bytes, *, max_bytes: int | None = None) -> bytes:
         raise RecordCodecError("unsupported_record_frame")
     try:
         compressed = base64.b64decode(frame["data"], validate=True)
+        check_cancelled(cancel)
         if base64.b64encode(compressed).decode() != frame["data"] or len(compressed) < 18 or compressed[3] != 0:
             raise RecordCodecError("invalid_record_frame")
         decoder = zlib.decompressobj(31)
         logical = decoder.decompress(compressed, frame["decodedBytes"] + 1)
+        check_cancelled(cancel)
         if (len(logical) != frame["decodedBytes"] or not decoder.eof or decoder.unused_data or
                 decoder.unconsumed_tail or not logical.endswith(b"\n")):
             raise RecordCodecError("record_decode_length_or_checksum")
@@ -55,11 +68,25 @@ def decode_record(physical: bytes, *, max_bytes: int | None = None) -> bytes:
         raise RecordCodecError("invalid_record_frame") from error
 
 
-def physical_lines(stream, *, max_bytes: int | None = None):
+def physical_lines(stream, *, max_bytes: int | None = None, cancel=None):
     """Bound a physical line before parsing/decompression; preserve partial live tails."""
     limit = MAX_RECORD_BYTES if max_bytes is None else max_bytes
     while True:
-        physical = stream.readline(limit + 1)
+        check_cancelled(cancel)
+        if cancel is None:
+            physical = stream.readline(limit + 1)
+        else:
+            # Legacy physical records may be large; stop between bounded reads.
+            parts, size = [], 0
+            while True:
+                check_cancelled(cancel)
+                block = stream.readline(min(1024 * 1024, limit + 1 - size))
+                parts.append(block)
+                size += len(block)
+                if not block or block.endswith(b'\n') or size > limit:
+                    break
+            physical = b''.join(parts)
+        check_cancelled(cancel)
         if not physical:
             return
         if len(physical) > limit:
@@ -67,10 +94,11 @@ def physical_lines(stream, *, max_bytes: int | None = None):
         yield physical
 
 
-def file_identity(path):
+def file_identity(path, *, cancel=None):
     digest = hashlib.sha256()
     size = 0
     with path.open("rb") as stream:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            check_cancelled(cancel)
             digest.update(chunk); size += len(chunk)
     return size, digest.hexdigest()

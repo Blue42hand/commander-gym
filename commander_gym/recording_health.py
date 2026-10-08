@@ -19,6 +19,7 @@ class RecordingHealthReporter:
     def __init__(self, capture: NativeGameCapture, socket_path: Path) -> None:
         self.capture, self.socket_path = capture, socket_path
         self._stop = threading.Event()
+        self._stop_requested = False
         self._thread: threading.Thread | None = None
         self.last_error: str | None = None
 
@@ -94,8 +95,15 @@ class RecordingHealthReporter:
     def tick(self) -> None:
         try:
             self.capture.scan()
+            if self._stop_requested:
+                return
             status = self.exchange({'protocol': 1, 'op': 'status'})
-            self.exchange(self.build_report(status))
+            if self._stop_requested:
+                return
+            report = self.build_report(status)
+            if self._stop_requested:
+                return
+            self.exchange(report)
             self.last_error = None
         except (OSError, ValueError, KeyError, TypeError) as error:
             # Absence of a valid heartbeat expires native admission; never invent zero counters.
@@ -105,13 +113,21 @@ class RecordingHealthReporter:
         if self._thread is not None:
             raise JournalError('recording health reporter already started')
         def loop():
-            while not self._stop.is_set():
+            while not self._stop_requested:
                 self.tick()
                 self._stop.wait(2)
         self._thread = threading.Thread(target=loop, name='private-recording-health', daemon=True)
         self._thread.start()
 
+    def request_stop(self) -> None:
+        """Only latch assignments transitively; safe in a Python signal handler."""
+        self._stop_requested = True
+        self.capture.request_stop()
+
     def close(self) -> None:
-        self._stop.set()
+        self.request_stop()
+        self._stop.set()  # Ordinary cleanup wakes the reporting loop.
         if self._thread is not None:
             self._thread.join(timeout=5)
+            if self._thread.is_alive():
+                raise TimeoutError('recording health reporter did not stop within close deadline')
