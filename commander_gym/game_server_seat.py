@@ -56,6 +56,8 @@ class SeatProvenance:
     callback: str
     observation: Mapping[str, Any]
     choice: Mapping[str, Any]
+    decision_evidence: Mapping[str, Any] | None = None
+    lineage: Mapping[str, Any] | None = None
 
 
 ProvenanceSink = Callable[[SeatProvenance], None]
@@ -82,6 +84,7 @@ class GameServerSeatAdapter:
         *,
         provenance_sink: ProvenanceSink | None = None,
         decision_start_sink: ProvenanceSink | None = None,
+        recording_lineage: Mapping[str, Any] | None = None,
     ) -> None:
         if player_id is None:
             raise GameServerSeatError("game-server seat requires player_id")
@@ -89,6 +92,7 @@ class GameServerSeatAdapter:
         self._player_id = player_id
         self._provenance_sink = provenance_sink
         self._decision_start_sink = decision_start_sink
+        self._recording_lineage = deepcopy(recording_lineage)
         self._known_deck: dict[str, int] | None = None
         self._deck_archetype: str | None = None
 
@@ -125,6 +129,7 @@ class GameServerSeatAdapter:
         recent_game_log: Sequence[str] = (),
         *,
         native_payment_error: str | None = None,
+        decision_evidence: Mapping[str, Any] | None = None,
     ) -> NativeActionResponse | NativeDecisionResponse:
         observation = self._observation(
             state,
@@ -132,6 +137,12 @@ class GameServerSeatAdapter:
             pending_decision,
             recent_game_log,
         )
+        if decision_evidence is not None:
+            from .captured_choices import verified_observation
+            native = verified_observation(decision_evidence, self._player_id)
+            if pending_decision is not None or any(observation.get(key) != value for key, value in native.items()):
+                raise GameServerSeatError("native decision evidence does not match callback observation")
+            observation.update(schemaHash=decision_evidence['schemaHash'], stateDigest=decision_evidence['stateDigest'])
         if native_payment_error is not None:
             if not isinstance(native_payment_error, str) or not native_payment_error.strip():
                 raise GameServerSeatError("native payment error must be a non-empty string")
@@ -139,7 +150,7 @@ class GameServerSeatAdapter:
             if not isinstance(pending, Mapping) or pending.get("kind") != "SelectManaSourcesDecision":
                 raise GameServerSeatError("payment correction requires the current native mana decision")
             observation["nativePaymentError"] = native_payment_error
-        choice = self._choose_with_failure_receipt("chooseAction", observation)
+        choice = self._choose_with_failure_receipt("chooseAction", observation, decision_evidence)
 
         if isinstance(choice, ArgentumActionChoice):
             try:
@@ -161,6 +172,7 @@ class GameServerSeatAdapter:
                     "params": choice.params,
                     "metadata": choice.metadata,
                 },
+                decision_evidence,
             )
             return response
 
@@ -322,6 +334,7 @@ class GameServerSeatAdapter:
         callback: str,
         observation: Mapping[str, Any],
         choice: Mapping[str, Any],
+        decision_evidence: Mapping[str, Any] | None = None,
     ) -> None:
         if self._provenance_sink is not None:
             self._provenance_sink(
@@ -329,15 +342,18 @@ class GameServerSeatAdapter:
                     callback=callback,
                     observation=deepcopy(dict(observation)),
                     choice=deepcopy(dict(choice)),
+                    decision_evidence=deepcopy(decision_evidence),
+                    lineage=deepcopy(self._recording_lineage),
                 )
             )
 
     def _choose_with_failure_receipt(
-        self, callback: str, observation: Mapping[str, Any]
+        self, callback: str, observation: Mapping[str, Any], decision_evidence: Mapping[str, Any] | None = None
     ) -> ArgentumActionChoice | ArgentumDecisionChoice:
         if self._decision_start_sink is not None:
             self._decision_start_sink(SeatProvenance(
-                callback=callback, observation=deepcopy(dict(observation)), choice={}
+                callback=callback, observation=deepcopy(dict(observation)), choice={},
+                decision_evidence=deepcopy(decision_evidence), lineage=deepcopy(self._recording_lineage)
             ))
         try:
             return choose_for_observation(self._pilot, observation)

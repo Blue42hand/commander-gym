@@ -34,7 +34,8 @@ jobs:
       - uses: actions/checkout@v6
         with:
           repository: Blue42hand/argentum-engine
-          ref: 7461f52556364b4a9487c8599f03f949353692b7
+          # CI compile dependency for the opt-in recorded-controller interface; no service release pin.
+          ref: d40ba6dc6f03a98d264bfb87b12ef335e3fef2a5
           path: argentum-engine
       - uses: actions/setup-java@v5
         with:

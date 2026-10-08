@@ -95,12 +95,8 @@ class CommanderGymPlayerControllerParameterTest {
                 },
             )
 
-            val response = controller.chooseAction(
-                state = minimalState(playerId),
-                legalActions = listOf(legal),
-                pendingDecision = null,
-                recentGameLog = emptyList(),
-            )
+            val evidence = com.wingedsheep.gameserver.recording.aiSeatEvidence(minimalState(playerId), listOf(legal), playerId.value)
+            val response = controller.chooseRecordedAction(minimalState(playerId), listOf(legal), emptyList(), evidence)
 
             assertTrue(response is ActionResponse.SubmitAction)
             val submitted = (response as ActionResponse.SubmitAction).action as DeclareAttackers
@@ -108,6 +104,9 @@ class CommanderGymPlayerControllerParameterTest {
             assertEquals(mapOf(attacker to defender), submitted.attackers)
 
             val policyRequest = Json.parseToJsonElement(checkNotNull(requestBody)).jsonObject
+            assertEquals(evidence.correlationId, policyRequest["decisionEvidence"]!!.jsonObject["correlationId"]!!.jsonPrimitive.content)
+            assertEquals(evidence.observationBody, policyRequest["decisionEvidence"]!!.jsonObject["observationBody"]!!.jsonPrimitive.content)
+            assertTrue(!policyRequest["state"].toString().contains(evidence.correlationId))
             val policyAction = policyRequest["legalActions"]!!.jsonArray[0].jsonObject
             val semanticId = policyAction["semanticId"]!!.jsonPrimitive.content
             assertEquals(

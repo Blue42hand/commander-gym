@@ -157,7 +157,10 @@ class CommanderGymPlayerController(
     },
     private val http: HttpClient = HttpClient.newBuilder().connectTimeout(timeout).build(),
     private val gameSessionId: String? = null,
-) : AiPlayerController {
+) : com.wingedsheep.ai.RecordedAiPlayerController {
+    override fun chooseRecordedAction(state: ClientGameState, legalActions: List<LegalActionInfo>,
+                                      recentGameLog: List<String>, evidence: com.wingedsheep.ai.AiDecisionEvidence): ActionResponse =
+        chooseActionWithPaymentError(state, legalActions, null, recentGameLog, null, evidence)
     private val base = endpoint.toString().trimEnd('/')
     private val bearer = token
     private val requestTimeout = timeout
@@ -193,6 +196,7 @@ class CommanderGymPlayerController(
         pendingDecision: PendingDecision?,
         recentGameLog: List<String>,
         nativePaymentError: String?,
+        evidence: com.wingedsheep.ai.AiDecisionEvidence? = null,
     ): ActionResponse {
         if (nativePaymentError != null) {
             require(nativePaymentError.isNotBlank()) { "Native payment error must not be blank" }
@@ -223,6 +227,7 @@ class CommanderGymPlayerController(
             put("legalActions", policyActions)
             put("pendingDecision", policyDecision)
             put("recentGameLog", json.encodeToJsonElement(recentGameLog))
+            if (evidence != null) put("decisionEvidence", json.encodeToJsonElement(com.wingedsheep.ai.AiDecisionEvidence.serializer(), evidence))
             if (nativePaymentError != null) put("nativePaymentError", nativePaymentError)
         }
         val response = post("choose-action", body)

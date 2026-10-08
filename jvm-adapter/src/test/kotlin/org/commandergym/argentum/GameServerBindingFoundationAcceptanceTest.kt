@@ -224,6 +224,21 @@ class GameServerBindingFoundationAcceptanceTest {
             )
             controller.setDeckList(boundDeck.deckList, boundDeck.commander)
             assertEquals(true, controller.decideMulligan(MulliganInfo(emptyList(), 0, 0)))
+            val recordingSeat = EntityId.of("binding-foundation-ai")
+            val masked = com.wingedsheep.engine.view.ClientGameState(
+                viewingPlayerId = recordingSeat, cards = emptyMap(), zones = emptyList(), players = emptyList(),
+                currentPhase = com.wingedsheep.sdk.core.Phase.COMBAT,
+                currentStep = com.wingedsheep.sdk.core.Step.DECLARE_ATTACKERS,
+                activePlayerId = recordingSeat, priorityPlayerId = recordingSeat, turnNumber = 1,
+                isGameOver = false, winnerId = null, combat = null,
+            )
+            val offered = listOf(com.wingedsheep.engine.view.LegalActionInfo(
+                actionType = "PassPriority", description = "Synthetic pass",
+                action = com.wingedsheep.engine.core.PassPriority(recordingSeat)))
+            val decisionEvidence = com.wingedsheep.gameserver.recording.aiSeatEvidence(masked, offered, recordingSeat.value)
+            val recorded = (controller as com.wingedsheep.ai.RecordedAiPlayerController)
+                .chooseRecordedAction(masked, offered, emptyList(), decisionEvidence)
+            assertEquals(offered.single().action, (recorded as com.wingedsheep.ai.ActionResponse.SubmitAction).action)
 
             val resolved = awaitEvidence(Duration.ofSeconds(10)) {
                 it["event"] == "binding_seat_resolved" && it["profileId"] == expectedBindingId

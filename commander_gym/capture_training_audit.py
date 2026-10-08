@@ -21,9 +21,9 @@ def _present(value: Any) -> bool:
 def audit_capture_training(directory: Path) -> dict[str, Any]:
     """Verify the journal before inspecting callbacks; return no game/seat content.
 
-    Fields are availability evidence, not proof of native authorship. Schema 1
-    does not join a callback UUID to native application and a subsequent own-seat
-    result. Even a callback containing every field is therefore not convertible.
+    Fields are availability evidence, not proof of native authorship or application.
+    Bounded accepted-choice conversion performs separate native join validation.
+    This aggregate audit never certifies canonical run conversion.
     """
     report = inspect_journal(directory)
     counts: Counter[str] = Counter()
@@ -57,9 +57,8 @@ def audit_capture_training(directory: Path) -> dict[str, Any]:
             'callbacks': counts.pop('callbacks', 0), 'field_availability': dict(counts),
             'canonical_conversion_supported': False, 'exact_replay_verified': False,
             'implementation_blockers': [
-                'schema_1_callback_to_native_application_join_unavailable',
-                'schema_1_joined_native_own_seat_result_unavailable',
-                'capture_to_canonical_execution_trace_adapter_unimplemented'],
+                'canonical_full_run_conversion_unimplemented',
+                'bounded_accepted_choices_require_separate_native_join_validation'],
             'lineage_status': 'requires_per_decision_deck_and_binding_validation',
             'replay_status': 'requires_pinned_native_full_state_and_event_reexecution'}
 

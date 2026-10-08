@@ -290,7 +290,7 @@ class GameServerSidecarHandler(BaseHTTPRequestHandler):
         if callback == "chooseAction":
             self._require_keys(
                 request,
-                common | {"state", "legalActions", "pendingDecision", "recentGameLog", "nativePaymentError"},
+                common | {"state", "legalActions", "pendingDecision", "recentGameLog", "nativePaymentError", "decisionEvidence"},
             )
             if "nativePaymentError" in request and request["nativePaymentError"] is None:
                 raise ValueError("nativePaymentError must be a non-empty string")
@@ -300,6 +300,7 @@ class GameServerSidecarHandler(BaseHTTPRequestHandler):
                 request.get("pendingDecision"),
                 request.get("recentGameLog", ()),
                 native_payment_error=request.get("nativePaymentError"),
+                decision_evidence=request.get("decisionEvidence"),
             )
             if isinstance(result, NativeActionResponse):
                 return {
