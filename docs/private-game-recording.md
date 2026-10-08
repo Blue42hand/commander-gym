@@ -1,5 +1,35 @@
 # Private game capture and finalized analysis contract
 
+## Offline canonical conversion and replay qualification
+
+Against merged Gym `2a5b261c38e2623d71ad98e3b8da29fd596bcb17` and engine
+`54bd8c68bd6fd4c03f811d2a13a2ee4c6b1d3905`, callback action menus and structured
+decisions already retain native semantic IDs. Ordinary callback observations lack
+native `schemaHash` and own-seat `stateDigest`. The callback UUID is local to the
+recorder: it is not joined to the native applied/rejected action or subsequent own-seat
+result. Mulligan/bottom callback aliases are Gym-authored routing aids. These are
+missing producer evidence/fields; the capture-to-canonical execution-trace adapter is
+also unimplemented. Existing `pilot_records.py` conversion requires that evidence,
+plus validated per-decision deck/Binding lineage. Timestamp or action similarity must
+not substitute for an execution join, and admin state hashes cannot substitute for
+own-seat observation digests.
+
+Run `python -m commander_gym.capture_training_audit <private-game-directory>` offline
+to verify a sealed journal and inspect aggregate callback field availability. It emits
+no observation, seat identity, model content or admin state, performs no network calls,
+and never promotes records. Availability does not prove native authorship. An incomplete
+or corrupt journal is reported as unverified before callback fields are examined.
+
+Exact replay is a separate native verification task and remains unverified. Initialization
+seed/setup/compiled pins, ordered native actions, full states/events and native digests
+can support a conservative straight-line subset verifier. It must reexecute with the
+pinned engine and compare full serialized state, events and terminal outcome. Existing
+`ReplayReconstructor.EXACT` uses sparse position fingerprints and alone is insufficient.
+Explicit yield operations, undo targets and CompactReplay version/truncation metadata
+are absent from the journal. Until supplied, reject resumed sources, unexplained checkpoint
+mutations, engine changes, gaps and administrative stalls rather than certify them.
+This audit adds no replay verifier, producer contract changes or service release pins.
+
 Status: recorder/analysis foundation merged in #206. Opt-in native producer and
 automatic per-game import are implemented as coordinated engine/Gym changes; deployment
 is not complete. No production traces are fixtures. This change does not certify the
