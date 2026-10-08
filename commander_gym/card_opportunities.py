@@ -295,7 +295,8 @@ def frame_from_decision(decision, *, evidence_ref):
 
 
 def _pointer(value, pointer):
-    if not isinstance(pointer, str) or not pointer.startswith('/'):
+    if (not isinstance(pointer, str) or not pointer.startswith('/') or
+            re.search(r'~(?![01])', pointer)):
         raise CardOpportunityError('evidence pointer must be an absolute JSON pointer')
     try:
         for part in pointer[1:].split('/'):
@@ -345,7 +346,9 @@ def analyze_artifact(layout, source_artifact_id, *, annotation_artifact_ids=(), 
             allowed = [f'/decisions/{i}/input/observation/', f'/decisions/{i}/input/legal_actions/',
                        f'/decisions/{i}/target/chosen_action_id']
         for pointer in p['evidence_pointers']:
-            if not isinstance(pointer, str) or not any(pointer.startswith(prefix) for prefix in allowed):
+            if not isinstance(pointer, str) or not any(
+                    pointer.startswith(prefix) if prefix.endswith('/') else pointer == prefix
+                    for prefix in allowed):
                 raise CardOpportunityError('usefulness evidence violates basis boundary')
             _pointer(envelope, pointer)
         frame = frames[i]

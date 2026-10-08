@@ -196,6 +196,17 @@ class CardOpportunityTests(unittest.TestCase):
             c=self.card(analyze_artifact(layout,source,annotation_artifact_ids=[oid],generator_revision='b'*40))
             self.assertEqual(1,c['usefulness']['observed_effect']['helpful'])
             self.assertEqual(1,c['usefulness']['ex_ante_choice']['unknown'])
+            from commander_gym.storage import LocalArtifactStore
+            import json
+            blobs=LocalArtifactStore(layout)
+            raw=json.loads(blobs.read_bytes(source))
+            raw['decisions'][0]['target']['chosen_action_id_future_result']={'winner':'a'}
+            future_source=blobs.put_bytes(json.dumps(raw).encode()).artifact_id
+            future=replace(annotation,annotation_id='future-sibling',source_evidence_artifact_id=future_source,payload={**payload,
+                'evidence_pointers':['/decisions/0/target/chosen_action_id_future_result/winner']})
+            fid=store.write(future).artifact.artifact_id
+            with self.assertRaisesRegex(CardOpportunityError,'boundary'):
+                analyze_artifact(layout,future_source,annotation_artifact_ids=[fid],generator_revision='b'*40)
 
     def test_public_board_changes_split_windows_hidden_identities_do_not(self):
         base=dict(viewingPlayerId='a',turnNumber=1,currentPhase='MAIN',currentStep='MAIN',
@@ -208,3 +219,9 @@ class CardOpportunityTests(unittest.TestCase):
         public['zones'].append({'zoneId':{'ownerId':'b','zoneType':'BATTLEFIELD'},'isVisible':True,'cardIds':['creature']})
         self.assertNotEqual(callback(state=base)['window_key'],callback(state=public)['window_key'])
         self.assertNotIn('Public Creature',str(report(callback(state=public))))
+
+    def test_usefulness_leaf_boundary_and_json_pointer_escaping(self):
+        from commander_gym.card_opportunities import _pointer
+        with self.assertRaises(CardOpportunityError):
+            _pointer({'x~2': 1}, '/x~2')
+        self.assertEqual(1,_pointer({'x/y':1}, '/x~1y'))
