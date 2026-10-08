@@ -20,8 +20,9 @@ def proposal(category='model_judgment'):
 
 def source(run='run1', group='game1'):
     return dict(run_id=run, artifact_hash=HASH, analysis_version='1.0.0',
-                report_sha256=HASH, correlation_group=group,
-                finding_ids=['f1'], evidence_refs=[{'pointer': '/findings/0'}])
+                report_sha256=HASH, correlation_group=group, discovery_artifact_ids=['sha256:' + HASH],
+                finding_ids=['f1'], evidence_refs=[{'path': 'synthetic.json', 'pointer': '/findings/0'}],
+                finding_qualification={'f1': {'confidence': 'medium', 'strategic_evidence_complete': True}})
 
 
 def hypothesis():
@@ -133,9 +134,11 @@ class ImprovementTests(unittest.TestCase):
         with PrivateGameJournal(game, 'synthetic-run', {k: None for k in PIN_KEYS}, game_id='synthetic') as j:
             j.finish({'kind': 'operator_stop'}, expected_sources={}, gaps=['partial'])
         claim = claim_analysis(game, '1.0.0')
-        report = {k: claim[k] for k in ('run_id', 'artifact_hash', 'analysis_version')}
-        report['findings'] = [dict(finding_id='f1', category='infrastructure_failure',
-                                  evidence_refs=[dict(path='000000.jsonl', line=1)])]
+        from commander_gym.game_journal import verify_finalized_manifest
+        from commander_gym.analysis_report import recorder_profile_from_skill
+        from tests._analysis_report_fixture import skill_report
+        manifest = verify_finalized_manifest(game)
+        report = recorder_profile_from_skill(skill_report(manifest), manifest)
         finish_analysis(game, '1.0.0', claim['claim_id'], report)
         before = {str(p.relative_to(game)): p.read_bytes() for p in game.rglob('*') if p.is_file()}
         cid = self.ledger.ingest_report(game, '1.0.0', proposal('infrastructure_failure'), correlation_group='synthetic')
@@ -157,3 +160,39 @@ class ImprovementTests(unittest.TestCase):
         with self.assertRaisesRegex(ImprovementError, 'fixture mismatch'):
             self.move('measured', dict(baseline_commit='d'*40, commit='c'*40, verification_artifact='sha256:' + HASH,
                 held_out_passed=True, regressions=[], metrics=[]))
+
+    def test_discovery_group_cannot_be_held_out(self):
+        data = hypothesis()
+        data['held_out_fixtures'][0]['group'] = 'game1'
+        with self.assertRaisesRegex(ImprovementError, 'discovery evidence'):
+            self.move('hypothesis', data)
+
+    def test_later_discovery_evidence_invalidates_next_qualification(self):
+        self.move('hypothesis', hypothesis())
+        self.ledger.ingest(source('new-run', 'held'), proposal())
+        with self.assertRaisesRegex(ImprovementError, 'discovery evidence'):
+            self.move('reproduced', {})
+        self.assertEqual('hypothesis', self.ledger.get(self.cid)['state'])
+
+    def test_incomplete_strategic_evidence_stays_unvalidated(self):
+        incomplete = source('partial-run', 'partial-group')
+        incomplete['finding_qualification']['f1']['strategic_evidence_complete'] = False
+        self.ledger.ingest(incomplete, proposal())
+        self.move('hypothesis', hypothesis())
+        with self.assertRaisesRegex(ImprovementError, 'insufficient'):
+            self.move('reproduced', {})
+
+    def test_ledger_intake_rejects_imprecise_evidence_refs(self):
+        for refs in ([{}], ['anything'], [{'path': 'synthetic.json'}], [{'pointer': '/row'}]):
+            data = source('new')
+            data['evidence_refs'] = refs
+            with self.assertRaises(ImprovementError):
+                self.ledger.ingest(data, proposal())
+
+    def test_discovery_artifact_cannot_be_held_out_under_another_group(self):
+        data = hypothesis()
+        discovery = source('new-source', 'another-group')
+        discovery['discovery_artifact_ids'] = [data['held_out_fixtures'][0]['artifact_id']]
+        self.ledger.ingest(discovery, proposal())
+        with self.assertRaisesRegex(ImprovementError, 'discovery evidence'):
+            self.move('hypothesis', data)

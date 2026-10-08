@@ -27,12 +27,14 @@ for the source game/derivation family, including reruns sharing the same scenari
 A fingerprint is an adjudicator assertion; the tool cannot infer causal equivalence
 or certify statistical independence. Review fingerprints before promotion.
 
-The finding adapter expects `finding_id`, `category`, and nonempty `evidence_refs`
-in each report finding. Those names are an explicit adapter profile, not inferred
-from prose. Unsupported/missing fields block ingestion rather than fabricate links.
-It accepts the recorder's string `artifact_hash` identity. The analysis skill's
-conceptual hash object must be mapped to the recorder identity before report
-completion. This seam needs parent/recorder review before automation wiring.
+The adapter requires the complete explicit
+[analysis-report profile v1](analysis-report-profile.md), including structured
+source+precise-location references and all finding, uncertainty, coverage and
+outcome-separation fields. The profile maps the skill's hash object losslessly to
+the recorder's scalar identity plus algorithm/value/scope/basis provenance. Saved
+reports are never silently normalized. Report and receipt files must be private
+regular files; recorder completion alone does not certify report completeness.
+Parent/recorder review against actual producer output remains a merge gate.
 
 A proposal selects `finding_ids` and requires `category`, `family_key`, `confidence`
 (low/medium/high), `severity` (informational/low/medium/high/critical),
@@ -70,7 +72,9 @@ live deployment. New attempts after rejection use a new explicit family revision
 - **Hypothesis:** falsifiable statement; decision/reliability metric, increase/decrease
   direction and positive minimum delta; exact baseline commit; bounded scope and
   experiment; frozen baseline and held-out fixture artifact IDs with seat-safe
-  visibility and disjoint source/derivation groups; regression and rollback plans.
+  visibility and disjoint source/derivation groups; held-out groups/digests also exclude
+  candidate discovery evidence (all verified per-artifact digests, not merely the
+  aggregate run hash), rechecked at every later gate; regression and rollback plans.
 - **Reproduced:** content-addressed repro receipt, deterministic offline command,
   observed failing baseline, tests-before-fix attestation or explicit reason infeasible.
 - **Implementation validated:** PR, exact commit, independent approving reviewer,
@@ -78,7 +82,8 @@ live deployment. New attempts after rejection use a new explicit family revision
 - **Measured:** exact baseline and changed commits, verification artifact, the same
   frozen fixture sets, numeric before/after values with nonzero denominator, all
   acceptance thresholds met, held-out pass and no regressions. Strategic candidates
-  additionally require a shadow qualification artifact.
+  additionally require a shadow qualification artifact and complete, non-low-confidence
+  time-local observation/action/legal-alternative/comparison evidence.
 - **Adopted:** explicit approval actor/reference. Model-judgment and primer changes
   require at least two independent source groups and no low-confidence assessments.
   This is a minimum guard, not proof that two games suffice; reviewers must assess

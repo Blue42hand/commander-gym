@@ -14,15 +14,15 @@ import math
 import os
 from pathlib import Path
 import sqlite3
+import stat
 import time
 import uuid
 
 from .game_journal import _json, _private_dir, _safe, verify_finalized_manifest
 from .storage import parse_artifact_id
+from .analysis_report import (CATEGORIES, AnalysisReportError, evidence_refs,
+                              validate_report, finding_qualification)
 
-CATEGORIES = {'model_judgment', 'observation_failure', 'action_or_schema_failure',
-              'native_rules_candidate', 'primer_weakness_candidate',
-              'recording_or_integrity_failure', 'infrastructure_failure', 'insufficient_evidence'}
 STRATEGIC = {'model_judgment', 'primer_weakness_candidate'}
 STATES = {'insufficient_evidence': {'hypothesis', 'rejected'},
           'hypothesis': {'reproduced', 'rejected'},
@@ -55,6 +55,23 @@ def artifact(value):
         parse_artifact_id(value)
     except ValueError as exc:
         raise ImprovementError('invalid artifact reference') from exc
+
+
+def private_file_bytes(path):
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    with os.fdopen(fd, 'rb') as handle:
+        mode = os.fstat(handle.fileno()).st_mode
+        require(stat.S_ISREG(mode) and not mode & 0o077, 'report/receipt must be private regular files')
+        return handle.read()
+
+
+def assert_held_out_disjoint(candidate, hypothesis):
+    groups = {f['group'] for f in hypothesis['held_out_fixtures']}
+    artifacts = {f['artifact_id'] for f in hypothesis['held_out_fixtures']}
+    require(not groups & {s['correlation_group'] for s in candidate['sources']} and
+            not artifacts & ({'sha256:' + s['artifact_hash'] for s in candidate['sources']} |
+                             {a for s in candidate['sources'] for a in s.get('discovery_artifact_ids', [])}),
+            'held-out fixtures overlap candidate discovery evidence')
 
 
 def validate_hypothesis(d):
@@ -159,7 +176,14 @@ class ImprovementLedger:
         for field in ('artifact_hash', 'report_sha256'):
             artifact('sha256:' + str(source.get(field)))
         strings(source.get('finding_ids'), 'source finding_ids')
-        require(isinstance(source.get('evidence_refs'), list) and source['evidence_refs'], 'evidence references required')
+        require(isinstance(source.get('discovery_artifact_ids'), list) and source['discovery_artifact_ids'],
+                'verified discovery artifact IDs required')
+        for source_artifact in source['discovery_artifact_ids']:
+            artifact(source_artifact)
+        try:
+            evidence_refs(source.get('evidence_refs'))
+        except AnalysisReportError as exc:
+            raise ImprovementError(str(exc)) from exc
         require(proposal.get('category') in CATEGORIES, 'unknown category')
         require(isinstance(proposal.get('family_key'), str) and proposal['family_key'].strip(), 'explicit dedupe family required')
         strings(proposal.get('finding_ids'), 'finding_ids')
@@ -198,32 +222,33 @@ class ImprovementLedger:
             _private_dir(path)
         review_path, report_path = base / 'review.json', base / 'report.json'
         require(not review_path.is_symlink() and not report_path.is_symlink(), 'symlinked report')
-        receipt = json.loads(review_path.read_bytes())
-        data = report_path.read_bytes()
+        receipt = json.loads(private_file_bytes(review_path))
+        data = private_file_bytes(report_path)
         report = json.loads(data)
         report_hash = hashlib.sha256(data).hexdigest()
         require(receipt.get('status') == 'completed' and receipt.get('report_sha256') == report_hash,
                 'analysis is incomplete or report changed')
         for field, value in dict(run_id=manifest['run_id'], artifact_hash=manifest['artifact_hash'], analysis_version=version).items():
             require(receipt.get(field) == value and report.get(field) == value, 'report identity mismatch')
-        findings = report.get('findings', [])
-        require(isinstance(findings, list), 'invalid findings')
-        indexed = {f.get('finding_id'): f for f in findings if isinstance(f, dict)}
-        require(None not in indexed and len(indexed) == len(findings), 'findings require unique finding_id')
+        try:
+            indexed = validate_report(report, manifest, version)
+        except AnalysisReportError as exc:
+            raise ImprovementError(str(exc)) from exc
         refs = []
         for fid in proposal['finding_ids']:
             require(fid in indexed, 'finding missing from completed report')
-            require(indexed[fid].get('category') == proposal['category'], 'finding category mismatch')
-            evidence = indexed[fid].get('evidence_refs')
-            require(isinstance(evidence, list) and evidence, 'finding lacks precise evidence_refs')
-            refs.append(dict(finding_id=fid, report_pointer='/findings/' + str(findings.index(indexed[fid])),
-                             evidence_refs=evidence))
+            require(indexed[fid]['category'] == proposal['category'], 'finding category mismatch')
+            refs.extend(indexed[fid]['evidence_refs'])
         verify_finalized_manifest(run_directory)
-        require(report_path.read_bytes() == data and json.loads(review_path.read_bytes()) == receipt,
+        require(private_file_bytes(report_path) == data and json.loads(private_file_bytes(review_path)) == receipt,
                 'report changed during ingestion')
         return self.ingest(dict(run_id=manifest['run_id'], artifact_hash=manifest['artifact_hash'],
             analysis_version=version, report_sha256=report_hash, correlation_group=correlation_group,
-            finding_ids=list(indexed), evidence_refs=refs), proposal)
+            finding_ids=list(indexed), evidence_refs=refs,
+            report_profile=report['report_profile'], artifact_hash_provenance=report['artifact_hash_provenance'],
+            discovery_artifact_ids=[a['artifact_id'] for a in manifest['artifacts']],
+            finding_qualification={fid: finding_qualification(indexed[fid], report=report) for fid in proposal['finding_ids']},
+            report_pointers={fid: '/findings/' + str(report['findings'].index(indexed[fid])) for fid in proposal['finding_ids']}), proposal)
 
     def _append(self, db, record):
         db.execute('INSERT INTO events VALUES (?,?,?)',
@@ -242,8 +267,15 @@ class ImprovementLedger:
             require(c['revision'] == revision, 'stale candidate revision')
             require(target in STATES[c['state']], 'invalid state transition')
             gates = c['gates']
+            if target not in {'rejected', 'rolled_back'} and 'hypothesis' in gates:
+                assert_held_out_disjoint(c, gates['hypothesis'])
+            if c['category'] in STRATEGIC and target in {'reproduced', 'implementation_validated', 'measured', 'adopted'}:
+                require(all(s.get('finding_qualification') and all(
+                    q.get('strategic_evidence_complete') is True for q in s['finding_qualification'].values())
+                    for s in c['sources']), 'strategic decision evidence is insufficient for validation')
             if target == 'hypothesis':
                 validate_hypothesis(details)
+                assert_held_out_disjoint(c, details)
             elif target == 'reproduced':
                 artifact(details.get('repro_artifact'))
                 require(details.get('offline') is True and details.get('baseline_failed') is True
