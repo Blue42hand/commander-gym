@@ -16,6 +16,10 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
+from collections.abc import Sequence
+from itertools import islice
+import gzip
+from .record_codec import encode_record, decode_record, physical_lines, file_identity
 
 from .evidence import validate_raw_evidence_envelope
 from .storage import artifact_id_for_bytes
@@ -94,29 +98,22 @@ def _immutable_private(path: Path, data: bytes) -> None:
     _atomic_private(path, data)
 
 
-def inspect_journal(directory: Path) -> dict[str, Any]:
-    """Verify a consistent prefix. Call after closing the writer for final evidence.
-
-    Hashes detect accidental alteration, not an attacker rewriting the whole chain.
-    Preserve the final root separately to establish a trusted integrity anchor.
-    """
-    _private_dir(directory)
+def _iter_journal_rows(directory: Path):
     previous, sequence, run_id = ZERO, 0, None
-    rows, issues, sources = [], [], {}
+    sources = {}
     terminal = False
     files = sorted(directory.glob("*.jsonl"))
     for index, path in enumerate(files):
         if path.name != f"{index:06d}.jsonl":
-            issues.append("missing_segment")
+            raise JournalError("missing_segment")
         if path.is_symlink() or path.stat().st_mode & 0o077:
             raise JournalError("journal segment must be private and not a symlink")
         with path.open("rb") as handle:
-            for line in handle:
-                if not line.endswith(b"\n"):
-                    issues.append("partial_tail")
-                    break
+            for physical in physical_lines(handle):
+                if not physical.endswith(b"\n"):
+                    raise JournalError("partial_tail")
                 try:
-                    row = json.loads(line)
+                    row = json.loads(decode_record(physical))
                     if not isinstance(row, dict) or not isinstance(row.get("payload"), dict):
                         raise JournalError("invalid_row_shape")
                     if not isinstance(row.get("kind"), str) or not isinstance(row.get("run_id"), str):
@@ -143,23 +140,82 @@ def inspect_journal(directory: Path) -> dict[str, Any]:
                     terminal = row["kind"] == "terminal"
                     run_id, previous = row["run_id"], digest
                     row["sha256"] = digest
-                    rows.append(row)
+                    yield row
                     sequence += 1
                 except (ValueError, KeyError, TypeError) as exc:
-                    issues.append(str(exc) if isinstance(exc, JournalError) else "invalid_row")
-                    break
-        if issues:
-            break
-    if not rows:
-        issues.append("empty_journal")
-    if not terminal:
-        issues.append("missing_terminal")
-    return {"schema_version": VERSION, "run_id": run_id, "rows": rows,
-            "issues": issues, "root_sha256": previous, "sources": sources,
-            "integrity_ok": not any(i != "missing_terminal" for i in issues),
-            "closed": terminal and not issues,
-            "recording_complete": terminal and not issues and
-            rows[-1]["payload"].get("recording_complete") is True}
+                    raise JournalError(str(exc) if isinstance(exc, JournalError) else "invalid_row") from exc
+
+
+class JournalRows(Sequence):
+    """Verified-prefix disk view. Iteration retains one decoded row, never history."""
+    def __init__(self, directory, count, root, first, last):
+        self.directory, self.count, self.root = directory, count, root
+        self.first, self.last = first, last
+    def __len__(self):
+        return self.count
+    def __iter__(self):
+        last = None
+        count = 0
+        for row in islice(_iter_journal_rows(self.directory), self.count):
+            count += 1; last = row
+            yield row
+        if count != self.count or (last is not None and last['sha256'] != self.root):
+            raise JournalError('journal prefix changed during read')
+    def __getitem__(self, index):
+        if isinstance(index, slice):
+            return RowSlice(self, range(*index.indices(self.count)))
+        if index < 0: index += self.count
+        if not 0 <= index < self.count: raise IndexError(index)
+        return next(islice(iter(self), index, index + 1))
+    def __eq__(self, other):
+        return isinstance(other, Sequence) and len(self) == len(other) and all(a == b for a, b in zip(self, other))
+
+
+class RowSlice(Sequence):
+    """Lazy indexed view, including reverse slices, without history materialization."""
+    def __init__(self, rows, indexes): self.rows, self.indexes = rows, indexes
+    def __len__(self): return len(self.indexes)
+    def __iter__(self):
+        if self.indexes.step > 0:
+            yield from islice(iter(self.rows), self.indexes.start, self.indexes.stop, self.indexes.step)
+        else:
+            for index in self.indexes: yield self.rows[index]
+    def __getitem__(self, index):
+        if isinstance(index, slice): return RowSlice(self.rows, self.indexes[index])
+        return self.rows[self.indexes[index]]
+    def __eq__(self, other):
+        return isinstance(other, Sequence) and len(self) == len(other) and all(a == b for a, b in zip(self, other))
+
+
+def inspect_journal(directory: Path) -> dict[str, Any]:
+    """Stream-verify a prefix; rows are a reiterable disk-backed Sequence.
+
+    Hashes detect alteration, not an attacker rewriting the chain. Preserve the root
+    separately. First/last metadata and one bounded row remain resident.
+    """
+    _private_dir(directory)
+    first = last = None
+    previous, sequence, run_id = ZERO, 0, None
+    issues, sources = [], {}
+    try:
+        for row in _iter_journal_rows(directory):
+            first = row if first is None else first
+            last = row
+            run_id, previous = row['run_id'], row['sha256']
+            sequence += 1
+            if row.get('source') is not None:
+                sources[row['source']] = row['source_sequence'] + 1
+    except (ValueError, KeyError, TypeError) as error:
+        issues.append(str(error) if isinstance(error, JournalError) else 'invalid_row')
+    terminal = last is not None and last['kind'] == 'terminal'
+    if first is None: issues.append('empty_journal')
+    if not terminal: issues.append('missing_terminal')
+    return {'schema_version': VERSION, 'run_id': run_id,
+            'rows': JournalRows(directory, sequence, previous, first, last),
+            'issues': issues, 'root_sha256': previous, 'sources': sources,
+            'integrity_ok': not any(i != 'missing_terminal' for i in issues),
+            'closed': terminal and not issues,
+            'recording_complete': terminal and not issues and last['payload'].get('recording_complete') is True}
 
 
 class PrivateGameJournal:
@@ -172,7 +228,8 @@ class PrivateGameJournal:
                  game_id: str | None = None, required_sources: tuple[str, ...] = ("native",),
                  segment_bytes: int = 16 * 1024 * 1024,
                  max_bytes: int = 1024 * 1024 * 1024,
-                 terminal_reserve: int = 64 * 1024) -> None:
+                 terminal_reserve: int = 64 * 1024,
+                 compress_records: bool = True) -> None:
         if not isinstance(run_id, str) or not run_id:
             raise JournalError("run_id is required")
         if set(pins) != set(PIN_KEYS):
@@ -185,6 +242,7 @@ class PrivateGameJournal:
         self.game_id, self.required_sources = game_id, required_sources
         self.segment_bytes, self.max_bytes = segment_bytes, max_bytes
         self.reserve = terminal_reserve
+        self.compress_records = compress_records
         self._lock = threading.RLock()
         self._fd = os.open(directory / ".writer.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
         try:
@@ -275,7 +333,7 @@ class PrivateGameJournal:
                    "source": source, "source_sequence": source_sequence,
                    "payload": dict(payload), "previous_sha256": self.previous}
             digest = hashlib.sha256(_json(row)).hexdigest()
-            data = _json({**row, "sha256": digest}) + b"\n"
+            data = encode_record(_json({**row, "sha256": digest}) + b"\n", compress=self.compress_records)
             limit = self.max_bytes if kind == "terminal" else self.max_bytes - self.reserve
             if self.used + len(data) > limit:
                 raise JournalError("storage limit reached; stop collection and seal partial journal")
@@ -319,29 +377,35 @@ class PrivateGameJournal:
             if not report["integrity_ok"]:
                 raise JournalError("cannot seal a damaged journal")
             missing_pins = report["rows"][0]["payload"]["unavailable_pins"]
-            callbacks = [row["payload"]["decision_id"] for row in report["rows"]
-                         if row["kind"] == "seat_callback"]
-            envelopes = [row["payload"]["envelope"] for row in report["rows"]
-                         if row["kind"] == "raw_evidence"]
-            canonical_coverage = bool(envelopes) and envelopes[-1]["run"]["decision_ids"] == callbacks
+            callback_digest, callback_count = hashlib.sha256(), 0
+            envelopes = None
             pending: set[tuple[str, str]] = set()
-            for row in report["rows"]:
-                decision = row["payload"].get("decision_id")
-                if row["kind"] == "decision_started":
-                    pending.add((row["seat_id"], decision))
-                elif row["kind"] == "seat_callback":
-                    pending.discard((row["seat_id"], decision))
+            has_transitions = False
+            for row in report['rows']:
+                decision = row['payload'].get('decision_id')
+                if row['kind'] == 'seat_callback':
+                    callback_digest.update(_json(decision) + b'\n'); callback_count += 1
+                    pending.discard((row['seat_id'], decision))
+                elif row['kind'] == 'decision_started':
+                    pending.add((row['seat_id'], decision))
+                elif row['kind'] == 'raw_evidence':
+                    envelopes = row['payload']['envelope']
+                has_transitions |= row['kind'] == 'native_transition'
+            canonical_coverage = False
+            if envelopes is not None:
+                ids = envelopes['run']['decision_ids']
+                digest = hashlib.sha256()
+                for decision in ids: digest.update(_json(decision) + b'\n')
+                canonical_coverage = len(ids) == callback_count and digest.digest() == callback_digest.digest()
             missing = sorted(set(gaps) | {"pin:" + k for k in missing_pins} |
                              ({"game_id_unavailable"} if self.game_id is None else set()) |
                              ({"required_sources"} if not set(self.required_sources) <= set(expected_sources) else set()) |
                              ({"source_counts"} if dict(expected_sources) != self.sources else set()) |
                              ({"pending_decisions"} if pending else set()) |
                              ({"non_native_terminal"} if outcome.get("kind") != "native_terminal" else set()) |
-                             ({"canonical_training_evidence_unavailable"} if not any(
-                                 r["kind"] == "raw_evidence" for r in report["rows"]) else set()) |
+                             ({"canonical_training_evidence_unavailable"} if envelopes is None else set()) |
                              ({"canonical_training_coverage_mismatch"} if envelopes and not canonical_coverage else set()) |
-                             ({"native_transitions_unavailable"} if not any(
-                                 r["kind"] == "native_transition" for r in report["rows"]) else set()))
+                             ({"native_transitions_unavailable"} if not has_transitions else set()))
             root = self.append("terminal", {"outcome": dict(outcome), "gaps": missing,
                                            "expected_sources": dict(expected_sources),
                                            "observed_sources": dict(self.sources),
@@ -373,8 +437,9 @@ class PrivateGameJournal:
         rows = inspect_journal(self.directory)["rows"]
         if any(row["kind"] == "raw_evidence" for row in rows):
             raise JournalError("canonical raw evidence already attached")
-        ids = [row["payload"]["decision_id"] for row in rows if row["kind"] == "seat_callback"]
-        if run["decision_ids"] != ids:
+        captured = (row['payload']['decision_id'] for row in rows if row['kind'] == 'seat_callback')
+        from itertools import zip_longest
+        if any(a != b for a, b in zip_longest(run['decision_ids'], captured, fillvalue=object())):
             raise JournalError("canonical decision IDs must match captured callbacks in order")
         return self.append("raw_evidence", {"envelope": dict(envelope)})
 
@@ -408,6 +473,11 @@ class PrivateGameJournal:
         relative to this canonical game directory, never URLs or upload targets.
         """
         with self._lock:
+            if (self.directory / 'manifest.json').exists():
+                try:
+                    return verify_finalized_manifest(self.directory)
+                except (OSError, ValueError, KeyError, TypeError) as error:
+                    raise JournalError('finalized artifact is immutable; saved manifest failed verification') from error
             report = inspect_journal(self.directory)
             if not report["closed"]:
                 raise JournalError("only a sealed intact journal can be published")
@@ -419,17 +489,19 @@ class PrivateGameJournal:
                 role = ("admin_journal" if path.suffix == ".jsonl" else
                         "admin_native_source" if path.suffix == '.ndjson' else "admin_capture_gap")
                 artifacts.append({"path": path.name, "role": role, "size_bytes": path.stat().st_size,
-                                  "artifact_id": artifact_id_for_bytes(path.read_bytes()),
-                                  "sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
+                                  "artifact_id": "sha256:" + file_identity(path)[1],
+                                  "sha256": file_identity(path)[1]})
             seats = sorted({row["seat_id"] for row in report["rows"] if row["seat_id"] is not None})
             for seat in seats:
                 # IDs never become file paths; projections are derived, not competing truth.
-                name = "seat-" + hashlib.sha256(seat.encode()).hexdigest() + ".projection.json"
-                data = _json(seat_projection(report, seat)) + b"\n"
-                _immutable_private(self.directory / name, data)
-                artifacts.append({"path": name, "role": "derived_seat_projection", "seat_id": seat,
-                                  "size_bytes": len(data), "artifact_id": artifact_id_for_bytes(data),
-                                  "sha256": hashlib.sha256(data).hexdigest()})
+                legacy_name = "seat-" + hashlib.sha256(seat.encode()).hexdigest() + ".projection.json"
+                name = legacy_name if (self.directory / legacy_name).exists() else legacy_name + '.gz'
+                path = self.directory / name
+                _immutable_stream(path, projection_chunks(report, seat) if name == legacy_name else gzip_chunks(projection_chunks(report, seat)))
+                size, digest = file_identity(path)
+                artifacts.append({'path': name, 'role': 'derived_seat_projection', 'seat_id': seat,
+                                  'size_bytes': size, 'artifact_id': 'sha256:' + digest, 'sha256': digest,
+                                  **({'encoding': 'gzip-json-array-v1'} if name.endswith('.gz') else {})})
             for row in report["rows"]:
                 if row["kind"] == "raw_evidence":
                     data = _json(row["payload"]["envelope"]) + b"\n"
@@ -465,6 +537,51 @@ class PrivateGameJournal:
         self.close()  # no invented terminal on crashes or exceptions
 
 
+def gzip_chunks(chunks):
+    import zlib
+    compressor = zlib.compressobj(6, zlib.DEFLATED, 31)
+    for chunk in chunks:
+        encoded = compressor.compress(chunk)
+        if encoded: yield encoded
+    yield compressor.flush()
+
+
+def projection_chunks(report, seat_id):
+    if not report['integrity_ok']: raise JournalError('cannot project damaged journal')
+    yield b'['
+    first = True
+    for row in report['rows']:
+        if row['visibility'] != 'seat' or row['seat_id'] != seat_id: continue
+        if not first: yield b','
+        first = False
+        yield _json({'schema_version': VERSION, 'run_id': row['run_id'],
+                     'sequence': row['sequence'], 'kind': row['kind'],
+                     'recorded_at': row['recorded_at'], 'payload': row['payload']})
+    yield b']\n'
+
+
+def _immutable_stream(path, chunks):
+    """Publish a new artifact only after its entire verified input is consumed."""
+    if path.exists():
+        if path.is_symlink() or path.stat().st_mode & 0o077: raise JournalError('artifact must be private')
+        with path.open('rb') as prior:
+            for chunk in chunks:
+                if prior.read(len(chunk)) != chunk: raise JournalError('finalized artifact is immutable')
+            if prior.read(1): raise JournalError('finalized artifact is immutable')
+        return
+    temporary = path.parent / ('.pending-' + str(uuid.uuid4()))
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        with os.fdopen(fd, 'wb') as stream:
+            for chunk in chunks: stream.write(chunk)
+            stream.flush(); os.fsync(stream.fileno())
+        # Link is exclusive: never overwrite an independently published artifact.
+        os.link(temporary, path, follow_symlinks=False)
+        _sync_dir(path.parent)
+    finally:
+        temporary.unlink(missing_ok=True)  # only this invocation's unpublished scratch
+
+
 def seat_projection(report: Mapping[str, Any], seat_id: str) -> list[dict[str, Any]]:
     """Offline training projection; admin/referee payloads never enter this output."""
     if not report["integrity_ok"]:
@@ -488,7 +605,11 @@ def verify_finalized_manifest(directory: Path) -> dict[str, Any]:
     path = directory / "manifest.json"
     if path.is_symlink() or path.stat().st_mode & 0o077:
         raise JournalError("manifest must be private and not a symlink")
-    manifest = json.loads(path.read_bytes())
+    with path.open('rb') as stream:
+        encoded_manifest = stream.read(8 * 1024 * 1024 + 1)
+    if len(encoded_manifest) > 8 * 1024 * 1024:
+        raise JournalError('manifest metadata size limit')
+    manifest = json.loads(encoded_manifest)
     if not isinstance(manifest, dict) or not isinstance(manifest.get("artifacts"), list):
         raise JournalError("invalid finalized manifest shape")
     if any(not isinstance(a, dict) or not isinstance(a.get("path"), str)
@@ -517,10 +638,9 @@ def verify_finalized_manifest(directory: Path) -> dict[str, Any]:
         path = directory / name
         if path.is_symlink() or path.stat().st_mode & 0o077:
             raise JournalError("artifact must be private and not a symlink")
-        data = path.read_bytes()
-        if (hashlib.sha256(data).hexdigest() != artifact["sha256"] or
-                artifact_id_for_bytes(data) != artifact["artifact_id"] or
-                len(data) != artifact["size_bytes"]):
+        size, digest = file_identity(path)
+        if (digest != artifact['sha256'] or 'sha256:' + digest != artifact['artifact_id'] or
+                size != artifact['size_bytes']):
             raise JournalError("finalized artifact hash or size mismatch")
     if hashlib.sha256(_json(artifacts)).hexdigest() != manifest["artifact_hash"]:
         raise JournalError("manifest artifact hash mismatch")
@@ -579,3 +699,48 @@ class RecorderSeatSink:
                                 "lineage": getattr(event, 'lineage', None)}, seat_id=self.seat_id,
                                 source=source, source_sequence=self.journal.sources.get(source, 0))
         self._pending.decision_id = None
+
+
+def iter_projection_artifact(path: Path):
+    """Read legacy or gzip JSON-array projections one bounded object at a time."""
+    from .record_codec import MAX_RECORD_BYTES, RecordCodecError
+    if path.is_symlink() or path.stat().st_mode & 0o077:
+        raise JournalError('projection must be private')
+    opener = gzip.open if path.name.endswith('.gz') else Path.open
+    with opener(path, 'rt', encoding='utf-8', errors='strict') as stream:
+        buffer, eof = '', False
+        decoder = json.JSONDecoder()
+        def fill():
+            nonlocal buffer, eof
+            part = stream.read(65536)
+            eof = not part
+            buffer += part
+            if len(buffer.encode('utf-8')) > MAX_RECORD_BYTES:
+                raise RecordCodecError('projection_record_size_limit')
+        fill()
+        buffer = buffer.lstrip()
+        if not buffer.startswith('['): raise JournalError('invalid projection array')
+        buffer = buffer[1:]
+        first = True
+        while True:
+            buffer = buffer.lstrip()
+            while not buffer and not eof:
+                fill(); buffer = buffer.lstrip()
+            if buffer.startswith(']'):
+                buffer = buffer[1:]
+                while not eof: fill()
+                if buffer.strip(): raise JournalError('projection trailing data')
+                return
+            if not first:
+                if not buffer.startswith(','): raise JournalError('invalid projection separator')
+                buffer = buffer[1:].lstrip()
+            while True:
+                try: row, end = decoder.raw_decode(buffer); break
+                except json.JSONDecodeError as error:
+                    if eof: raise JournalError('partial projection') from error
+                    fill()
+            if not isinstance(row, dict): raise JournalError('invalid projection row')
+            _safe(row)
+            buffer = buffer[end:]
+            first = False
+            yield row

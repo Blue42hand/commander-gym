@@ -5,7 +5,12 @@ identity; their states/events are never copied to pilot observations or targets.
 """
 from __future__ import annotations
 
-from collections import Counter, defaultdict
+from collections import Counter
+from collections.abc import Sequence
+from itertools import zip_longest, islice
+import sqlite3
+import tempfile
+from .record_codec import encode_record, decode_record
 import argparse
 import hashlib
 import json
@@ -40,7 +45,7 @@ def verified_observation(context: Mapping[str, Any], seat: str) -> dict[str, Any
     return observation
 
 
-def accepted_choice_records(directory: Path) -> tuple[list[Any], dict[str, int]]:
+def accepted_choice_records(directory: Path) -> tuple[Sequence[Any], dict[str, int]]:
     """Return existing DecisionRecord objects and aggregate exclusion reasons.
 
     A closed verified capture is required. A record does not imply complete game
@@ -52,23 +57,61 @@ def accepted_choice_records(directory: Path) -> tuple[list[Any], dict[str, int]]
     from .native_game_capture import NativeCursor, read_native_source
     cursor = NativeCursor()
     source = read_native_source(directory, cursor)
-    imported = [row['payload']['source_body'] for row in report['rows'] if row.get('source') == 'native']
+    imported = (row['payload']['source_body'] for row in report['rows'] if row.get('source') == 'native')
     if (not cursor.terminal or cursor.offset != (directory / 'native-000000.ndjson').stat().st_size or
-            imported != [row['source_body'] for row in source]):
+            any(a != (b['source_body'] if isinstance(b, dict) else None)
+                for a, b in zip_longest(imported, source))):
         raise JournalError('native source differs from sealed journal or is incomplete')
-    callbacks: dict[str, list[Any]] = defaultdict(list)
-    starts: dict[str, list[Any]] = defaultdict(list)
-    inputs: dict[str, list[Any]] = defaultdict(list)
-    results: dict[str, list[Any]] = defaultdict(list)
-    dispositions: set[str] = set()
-    players = None
-    revisions: set[str] = set()
-    previous = None
+    diagnostics = {}
+    return ChoiceRecords(directory, report, diagnostics), diagnostics
+
+
+class ChoiceRecords(Sequence):
+    """Indexed-reader compatibility; CLI conversion streams one choice at a time."""
+    def __init__(self, directory, report, diagnostics):
+        self.directory, self.report, self.diagnostics = directory, report, diagnostics
+    def __iter__(self):
+        self.diagnostics.clear()
+        with tempfile.TemporaryDirectory(prefix='private-choice-index-') as temporary:
+            path = Path(temporary) / 'joins.sqlite'
+            descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600); os.close(descriptor)
+            database = sqlite3.connect(path)
+            try:
+                database.execute('PRAGMA cache_size=-2048')
+                database.execute('PRAGMA temp_store=FILE')
+                database.execute('CREATE TABLE joins(category TEXT, cid TEXT, ordinal INTEGER, body BLOB)')
+                database.execute('CREATE INDEX joins_key ON joins(category,cid)')
+                yield from _joined_choices(self.directory, self.report, self.diagnostics, database)
+            finally: database.close()
+    def __len__(self): return sum(1 for _ in self)
+    def __getitem__(self, index):
+        if index < 0: index += len(self)
+        if index < 0: raise IndexError(index)
+        try: return next(islice(iter(self), index, index + 1))
+        except StopIteration: raise IndexError(index) from None
+    def __eq__(self, other):
+        sentinel = object()
+        return isinstance(other, Sequence) and all(a == b for a, b in zip_longest(self, other, fillvalue=sentinel))
+
+
+def _joined_choices(directory, report, diagnostics, database):
+    def count(category, cid):
+        return database.execute('SELECT COUNT(*) FROM joins WHERE category=? AND cid=?', (category, cid)).fetchone()[0]
+    def load(category, cid):
+        n = count(category, cid)
+        if n != 1: return [None] * min(n, 2)
+        blob = database.execute('SELECT body FROM joins WHERE category=? AND cid=?', (category, cid)).fetchone()[0]
+        return [json.loads(decode_record(blob))]
+    def add(category, cid, value, ordinal):
+        if not isinstance(cid, str): raise JournalError('invalid_correlation_identity')
+        database.execute('INSERT INTO joins VALUES(?,?,?,?)', (category, cid, ordinal, encode_record(_json(value) + b'\n')))
+    players, previous = None, None
+    revisions = set()
     unsupported_source = False
     for row in report['rows']:
         payload = row['payload']
         if row['kind'] in {'decision_started', 'seat_callback'}:
-            (starts if row['kind'] == 'decision_started' else callbacks)[payload['decision_id']].append(row)
+            add('starts' if row['kind'] == 'decision_started' else 'callbacks', payload['decision_id'], row, row['sequence'])
         if row.get('source') != 'native':
             continue
         exact = payload['source_body']
@@ -90,18 +133,27 @@ def accepted_choice_records(directory: Path) -> tuple[list[Any], dict[str, int]]
                 raise JournalError('native decision evidence must be seat-visible')
             cid = native['correlationId']
             if body['kind'] == 'ai_decision_input':
-                inputs[cid].append((body, payload['source_sha256']))
+                add('inputs', cid, (body, payload['source_sha256']), row['sequence'])
             elif body['kind'] == 'ai_decision_result':
-                results[cid].append((body, payload['source_sha256'], previous))
+                add('results', cid, (body, payload['source_sha256'], previous), row['sequence'])
             else:
-                dispositions.add(cid)
-        previous = body
-    diagnostics: Counter[str] = Counter()
-    records = []
+                add('dispositions', cid, None, row['sequence'])
+        previous = {'kind': body['kind']}
+        if body['kind'] == 'native_transition':
+            previous['payload'] = {'action': native['action'], 'administrativeStall': native.get('administrativeStall'),
+                                   'result': {'error': native['result'].get('error')}}
+    database.commit()
     if unsupported_source or len(revisions) != 1 or players is None or list(directory.glob('native-gap-*.json')):
-        return [], {'unsupported_or_incomplete_native_source': len(callbacks)}
+        diagnostics['unsupported_or_incomplete_native_source'] = database.execute(
+            "SELECT COUNT(DISTINCT cid) FROM joins WHERE category='callbacks'").fetchone()[0]
+        return
     seats = {player['playerId']: (index, player) for index, player in enumerate(players)}
-    for cid, completed in callbacks.items():
+    for (cid,) in database.execute("SELECT cid FROM joins WHERE category='callbacks' GROUP BY cid ORDER BY MIN(ordinal), cid"):
+        completed = load('callbacks', cid)
+        starts = {cid: load('starts', cid)}
+        inputs = {cid: load('inputs', cid)}
+        results = {cid: load('results', cid)}
+        dispositions = {cid} if count('dispositions', cid) else set()
         try:
             if (len(completed) != 1 or len(starts[cid]) != 1 or len(inputs[cid]) != 1 or
                     len(results[cid]) != 1 or cid in dispositions):
@@ -173,10 +225,11 @@ def accepted_choice_records(directory: Path) -> tuple[list[Any], dict[str, int]]
             record.metadata['timing']['submission_elapsed_ms'] = None
             if not timing:
                 record.metadata['timing']['pilot_elapsed_ms'] = None
-            records.append(record)
+            yield record
         except (ValueError, KeyError, TypeError, IndexError) as error:
-            diagnostics[str(error) if isinstance(error, JournalError) else 'invalid_choice_evidence'] += 1
-    return records, dict(diagnostics)
+            key = str(error) if isinstance(error, JournalError) else 'invalid_choice_evidence'
+            diagnostics[key] = diagnostics.get(key, 0) + 1
+
 
 
 def main() -> None:
@@ -188,14 +241,22 @@ def main() -> None:
     _private_dir(args.output.parent)
     if args.output.parent.resolve() == args.directory.resolve():
         raise JournalError('derived JSONL must not enter the source journal segment directory')
-    fd = os.open(args.output, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-    with os.fdopen(fd, 'wb') as stream:
-        for record in records:
-            stream.write(_json(record.to_dict()) + b'\n')
-        stream.flush()
-        os.fsync(stream.fileno())
-    _sync_dir(args.output.parent)
-    print(json.dumps({'accepted_records': len(records), 'diagnostics': diagnostics,
+    # Publish only a fully converted, fsynced export; cleanup owns this scratch file only.
+    fd, temporary = tempfile.mkstemp(prefix='.accepted-choices-', dir=args.output.parent)
+    temporary = Path(temporary)
+    accepted_count = 0
+    try:
+        with os.fdopen(fd, 'wb') as stream:
+            for record in records:
+                accepted_count += 1
+                stream.write(_json(record.to_dict()) + b'\n')
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.link(temporary, args.output, follow_symlinks=False)
+        _sync_dir(args.output.parent)
+    finally:
+        temporary.unlink()
+    print(json.dumps({'accepted_records': accepted_count, 'diagnostics': diagnostics,
                       'run_readiness_certified': False, 'exact_replay_verified': False}, sort_keys=True))
 
 

@@ -111,7 +111,7 @@ class JournalTests(unittest.TestCase):
         path.write_bytes(path.read_bytes().replace(b'PassPriority', b'FakePriority'))
         self.assertIn('hash_mismatch', inspect_journal(self.root)['issues'])
     def test_limits_preserve_old_data_and_allow_partial_seal(self):
-        with self.writer(max_bytes=6000, terminal_reserve=1500) as w:
+        with self.writer(max_bytes=6000, terminal_reserve=1500, compress_records=False) as w:
             self.native(w)
             before = (self.root / '000000.jsonl').read_bytes()
             with self.assertRaisesRegex(JournalError, 'storage limit'):
