@@ -311,7 +311,8 @@ def _pointer(value, pointer):
     return value
 
 
-def analyze_artifact(layout, source_artifact_id, *, annotation_artifact_ids=(), generator_revision):
+def analyze_artifact(layout, source_artifact_id, *, annotation_artifact_ids=(), generator_revision,
+                     readiness_annotation_artifact_ids=(), readiness_requirements=None):
     """Join existing immutable AnnotationStore artifacts to the exact raw source blob.
 
     card_usefulness.v1 payload: card_definition_id, basis, label, rationale,
@@ -375,6 +376,12 @@ def analyze_artifact(layout, source_artifact_id, *, annotation_artifact_ids=(), 
                 window.setdefault('usefulness_annotations', {})[basis] = entries
                 card['usefulness'][basis]['unknown'] -= 1
                 card['usefulness'][basis][label] += 1
+    if readiness_requirements is not None:
+        from .card_readiness import analyze_readiness_artifact
+        report['upstream_readiness'] = analyze_readiness_artifact(layout, source_artifact_id,
+            annotation_artifact_ids=readiness_annotation_artifact_ids, **readiness_requirements)
+    elif readiness_annotation_artifact_ids:
+        raise CardOpportunityError('readiness annotations require explicit current requirements')
     return report
 
 
