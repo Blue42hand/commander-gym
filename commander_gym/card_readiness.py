@@ -62,6 +62,10 @@ def _assess_readiness(envelope, annotations, *, implementation_revision,
         frame = frame_from_decision(decision, evidence_ref={})
         if card_id not in {c['identity'] for c in frame['cards']}:
             raise CardOpportunityError('readiness card is not visible to acting seat')
+        if envelope['producer'].get('revision') != pins['dependency_revision']:
+            raise CardOpportunityError('source Gym dependency revision does not match')
+        if envelope['qualification']['diagnostic_only']:
+            entry['blockers'].append('diagnostic_only_source')
         if envelope['run']['engine'].get('revision') != pins['implementation_revision']:
             raise CardOpportunityError('source engine revision does not match implementation')
         facts = p.get('facts', [])
@@ -87,6 +91,18 @@ def _assess_readiness(envelope, annotations, *, implementation_revision,
                 _pointer(envelope, pointer)
             if stage == 'ability' and not isinstance(fact.get('ability'), str):
                 raise CardOpportunityError('ability evidence requires an explicit scope')
+            if stage == 'played':
+                selected = frame['selected']
+                identities = {c['identity'] for c in frame['cards']
+                              if c['instance_id'] == selected['play_instance_id']}
+                if selected['status'] != 'known' or card_id not in identities:
+                    raise CardOpportunityError('played claim must join the selected visible play action')
+            if stage in {'played', 'resolved', 'ability'}:
+                # Canonical outcomes preserve result observations, not a card-scoped
+                # native acceptance/resolution event contract. Keep claims inspectable
+                # without manufacturing execution proof from a changed state digest.
+                if 'native_execution_join_unavailable' not in entry['blockers']:
+                    entry['blockers'].append('native_execution_join_unavailable')
             entry['facts'][stage].append(dict(fact))
         confirmations = p.get('human_confirmation', [])
         if not isinstance(confirmations, list) or any(s not in HUMAN_SCOPES for s in confirmations):

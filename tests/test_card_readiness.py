@@ -12,18 +12,28 @@ from tests.test_annotations import AnnotationTests
 
 class ReadinessTests(unittest.TestCase):
     def assess(self, *, facts=None, scopes=None, human=True, regression=False,
-               stale=False, gates=None, source_mismatch=False):
+               stale=False, gates=None, source_mismatch=False, pass_choice=False,
+               dependency_revision=None, termination=None):
         fixture = AnnotationTests()
-        record = replace(fixture.make_record(), observation=dict(type='Game',
+        from commander_gym.records import ActionRecord
+        record = replace(fixture.make_record(),
+            legal_actions=[ActionRecord('cast',dict(kind='CastSpell',sourceEntityId='c',affordable=True))],
+            chosen_action_id='cast', observation=dict(type='Game',
             schemaHash='argentum-schema-v9', perspectivePlayerId='a', stateDigest='s',
             zones=[dict(ownerId='a', zoneType='HAND', hidden=False,
                 cards=[dict(entityId='c', cardDefinitionId='def')])]))
+        if pass_choice:
+            record = replace(record, legal_actions=fixture.make_record().legal_actions,
+                             chosen_action_id='pass')
         run = replace(fixture.make_run(), engine=replace(fixture.make_run().engine, revision='a'*40))
+        if termination is not None:
+            run = replace(run, termination=termination)
+        dep = dependency_revision or 'b'*40
         with tempfile.TemporaryDirectory() as tmp:
             layout = StorageLayout.create(Path(tmp)); layout.ensure_directories()
             source = RawEvidenceStore(layout).write(run, [record], commander_gym_revision='b'*40).artifact.artifact_id
             payload = dict(card_definition_id='def', implementation_revision='c'*40 if stale else 'a'*40,
-                dependency_revision='b'*40, requirements_revision='d'*40, facts=facts or [],
+                dependency_revision=dep, requirements_revision='d'*40, facts=facts or [],
                 human_confirmation=list(HUMAN_SCOPES) if scopes is None else scopes,
                 uses_only_existing_primitives=True, human_validated_abilities=['draw'], confirmation_reference='private explicit confirmation message', regression=regression,
                 gates=[dict(name=g, passed=True, reference='exact test/review/CI result') for g in BASE_GATES] if gates is None else gates)
@@ -35,7 +45,7 @@ class ReadinessTests(unittest.TestCase):
             from commander_gym.card_opportunities import analyze_artifact
             return analyze_artifact(layout, source, generator_revision='b'*40,
                 readiness_annotation_artifact_ids=[aid, aid], readiness_requirements=dict(
-                implementation_revision='a'*40, dependency_revision='b'*40,
+                implementation_revision='a'*40, dependency_revision=dep,
                 requirements_revision='d'*40, required_abilities=['draw'], required_gates=[]))['upstream_readiness']
 
     def facts(self):
@@ -58,7 +68,8 @@ class ReadinessTests(unittest.TestCase):
 
     def test_exact_scoped_confirmations_and_gates_propose_only(self):
         result = self.assess(facts=self.facts())
-        self.assertTrue(result['cards'][0]['eligible_for_batch_proposal'])
+        self.assertFalse(result['cards'][0]['eligible_for_batch_proposal'])
+        self.assertIn('native_execution_join_unavailable', result['cards'][0]['blockers'])
         self.assertEqual(1, len(result['annotation_artifact_ids']))
 
     def test_revision_change_invalidates_prior_qualification(self):
@@ -77,3 +88,16 @@ class ReadinessTests(unittest.TestCase):
     def test_annotations_from_another_raw_source_are_rejected(self):
         with self.assertRaises(CardOpportunityError):
             self.assess(facts=self.facts(), source_mismatch=True)
+
+    def test_outcome_digest_cannot_qualify_pass_as_card_play(self):
+        with self.assertRaises(CardOpportunityError):
+            self.assess(facts=self.facts(), pass_choice=True)
+
+    def test_caller_and_annotation_cannot_repin_unchanged_dependency_source(self):
+        with self.assertRaises(CardOpportunityError):
+            self.assess(facts=self.facts(), dependency_revision='e'*40)
+
+    def test_diagnostic_only_source_stays_blocked(self):
+        from commander_gym.run_records import RunTermination
+        result = self.assess(facts=self.facts(), termination=RunTermination(status='stopped',reason='operator_stop'))
+        self.assertIn('diagnostic_only_source', result['cards'][0]['blockers'])
