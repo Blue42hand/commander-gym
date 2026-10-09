@@ -130,12 +130,15 @@ def validate_profile(profile: Mapping[str, Any]) -> dict:
                 and authority['registryUid'] == 0, 'production_runtime_paths')
     ingress = profile["ingress"]
     require(type(ingress) is dict and set(ingress) == {"origins", "backend", "sidecar", "lanAddress", "lanSubnet", "hostLocalTrusted"}, "ingress_fields")
-    require(type(ingress["origins"]) is list and len(ingress["origins"]) == 2 and len(set(ingress["origins"])) == 2, "exact_shared_origins")
+    require(type(ingress["origins"]) is list and len(ingress["origins"]) in (1, 2) and len(set(ingress["origins"])) == len(ingress["origins"]), "exact_tailnet_or_shared_origins")
     from urllib.parse import urlsplit
     for origin in ingress["origins"]:
         uri = urlsplit(origin)
         require(uri.scheme == "https" and uri.hostname and not uri.username and not uri.password
                 and uri.path == "" and not uri.query and not uri.fragment and "*" not in origin, "https_origin_required")
+    if len(ingress["origins"]) == 1:
+        uri = urlsplit(ingress["origins"][0])
+        require(not uri.port and uri.hostname.endswith(".ts.net"), "tailnet_only_origin")
     require(ingress["backend"] == "127.0.0.1:18080" and ingress["sidecar"] == "127.0.0.1:8083" and ingress["hostLocalTrusted"] is True, "private_listeners")
     import ipaddress
     try:
@@ -155,6 +158,9 @@ def validate_profile(profile: Mapping[str, Any]) -> dict:
     require(policy == {"providerReaders": ["sidecar"], "tokenReaders": ["native", "sidecar"],
                        "providerSource": "existing-private-env", "delivery": "systemd-credentials",
                        "valueInManifest": False}, "credential_policy")
+    if profile['purpose'] == 'native-manual-play':
+        from .manual_runtime_config import validate_config_contract
+        validate_config_contract(profile)
     # A secret-shaped extra field anywhere in metadata is never accepted.
     return dict(profile)
 

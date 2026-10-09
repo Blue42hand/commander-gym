@@ -89,6 +89,17 @@ upstream. LAN192.168.0.178:8443 gains HTTPS with exact192.168.0.0/24 access; exi
 LAN8180 redirects there. A separately approved IP-SAN certificate/private LAN CA and
 client trust are prerequisites, so LAN transport/trust changes need explicit approval.
 Both addresses share the same default-Engine/manual-Luna GUI and native backend.
+
+The initial Tailscale-only proposal selects a single exact HTTPS Origin,
+`https://tolaria.taila3c720.ts.net`. Its renderer keeps loopback8180 behind
+the existing Tailscale Serve and redirects every LAN192.168.0.178:8180 request
+with308 to that tailnet HTTPS address. LAN serves no game/API/WebSocket traffic;
+there is no8443 listener, private CA, LAN certificate or DNS/trust change.
+Clients must have Tailscale access. The sealed one-Origin profile excludes the
+LAN certificate from selected/precredential configuration, while rollback
+still preserves every original target including any pre-existing certificate.
+No ingress change is applied by rendering. Native and sidecar stay loopback-only;
+private API/admin/recording paths are denied and caller identity headers stripped.
 No per-game TLS gate, extra proxy capability, nftables redesign, Funnel, WAN/router
 forwarding, public provider/recording/admin route or account authentication is added.
 Origins are exact browser cross-site checks; host-local processes are explicitly

@@ -212,3 +212,14 @@ class ManualRuntimeProfileTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TailnetOnlyProfileTests(unittest.TestCase):
+    def test_single_tailnet_origin_validates_without_lan_certificate(self):
+        with TemporaryDirectory() as tmp:
+            profile = fixture_profile(Path(tmp))
+            profile['ingress']['origins'] = ['https://tolaria.taila3c720.ts.net']
+            validate_profile(profile)
+            for bad in ['https://192.168.0.178:8443', 'https://example.test', 'http://tolaria.taila3c720.ts.net']:
+                profile['ingress']['origins'] = [bad]
+                with self.assertRaises(ManualRuntimeError): validate_profile(profile)
