@@ -23,11 +23,22 @@ def main():
     commander_gym.__path__.append(str(Path(paths[0]) / 'commander_gym'))
     # Only native journal/lifecycle/IPC access; no provider environment inherited.
     os.environ.clear(); os.environ.update({'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8'})
+    # Reuse the exact existing owner-published disposition-health format. Root
+    # attestation sealed this unchanged helper; no context loader or key is called.
+    from commander_gym.manual_runtime_profile import protected_bytes
+    import hashlib
+    import importlib.util
+    artifact = runtime.profile['artifacts']['legacyNative']
+    helper = Path(artifact['root']) / 'service_activation.py'
+    require(hashlib.sha256(protected_bytes(helper, uid=0)).hexdigest() == artifact['files']['service_activation.py'], 'disposition_helper_changed')
+    spec = importlib.util.spec_from_file_location('manual_disposition_helper', helper)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
     from commander_gym.manual_runtime_recorder import run_recorder
     stop = [False]
     def stopping(signum, frame): stop[0] = True
     signal.signal(signal.SIGTERM, stopping); signal.signal(signal.SIGINT, stopping)
-    run_recorder(runtime, sidecar_gid=gid, stopping=lambda: stop[0])
+    run_recorder(runtime, sidecar_gid=gid, stopping=lambda: stop[0], disposition_publisher=module.publish_disposition_health)
     return 0
 
 

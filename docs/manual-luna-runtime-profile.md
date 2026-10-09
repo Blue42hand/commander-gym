@@ -35,7 +35,8 @@ before any service effects or systemd credential materialization. A root-owned
 boot-specific attestation is required by fixed service launchers. On cold boot the
 preflight takes the same rollout lock; when promotion already holds that lock,
 preflight fully rechecks the existing attested bundle without reacquiring it.
-Sidecar launch additionally checks its own sealed byte/dependency/catalog closure,
+Root also verifies selected installed configuration and nonsecret profile context
+before attesting, preventing stale credential-context materialization. Sidecar launch additionally checks its own sealed byte/dependency/catalog closure,
 interpreter/stdlib and installed SDK metadata before reading credential copies.
 
 Only the private sidecar unit receives the existing `openai.env`. Native and sidecar
@@ -47,7 +48,8 @@ to the proxy as credentials, preserving the root-only configuration directory.
 
 The existing `NativeGameCapture` is composed with the merged `RecorderBridge` and
 `RecordingHealthReporter`; reporter.tick owns scanning. There is no second capture
-scanner/finalizer in the provider sidecar. Bridge starts before reporter; cleanup
+scanner/finalizer in the provider sidecar. The recorder reuses the unchanged
+sealed native helper to publish its existing disposition-health metadata. Bridge starts before reporter; cleanup
 stops reporter, bridge and capture in that order, attempting every close even if an
 earlier close fails. IPC directory is native-UID-owned0750 with commander-prod group,
 native.sock0600 and sidecar.sock0660. Actual peer UIDs must differ in deployment.

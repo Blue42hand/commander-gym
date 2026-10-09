@@ -344,12 +344,21 @@ class ProtectedRuntimeHost:
             return result
         finally: os.close(fd)
 
+    def _verify_selected_files(self, profile):
+        expected = {**profile['artifacts']['config']['files'],
+                    'profile.json': hashlib.sha256(canonical(profile)).hexdigest()}
+        for name, destination in TARGETS.items():
+            require(name in expected, 'selected_config_incomplete')
+            raw = protected_bytes(destination, uid=0, max_bytes=4*1024*1024)
+            require(hashlib.sha256(raw).hexdigest() == expected[name], 'selected_config_changed')
+
     def _attest_precredential(self, snapshot):
         require(snapshot.kind == 'manual-luna-v1', 'manual_preflight_only')
         profile, receipt, approval = load_bundle(snapshot.runtime_id)
         runtime = precredential_validate(profile, receipt, approval,
             previous_id=approval['previousRuntimeId'], sequence=approval['sequence'], now=receipt['observedUnix'])
         require(runtime.runtime_id == snapshot.runtime_id, 'precredential_identity')
+        self._verify_selected_files(profile)
         _directory(GATE.parent)
         atomic_root(GATE, canonical({'runtimeId': snapshot.runtime_id, 'sequence': snapshot.sequence,
                                     'bootId': Path('/proc/sys/kernel/random/boot_id').read_text().strip()}), mode=0o644)
@@ -373,6 +382,7 @@ class ProtectedRuntimeHost:
         runtime = precredential_validate(profile, receipt, approval,
             previous_id=approval['previousRuntimeId'], sequence=approval['sequence'], now=receipt['observedUnix'])
         require(runtime.runtime_id == snapshot.runtime_id, 'precredential_identity')
+        self._verify_selected_files(profile)
 
     def preflight_current(self):
         self._locked(); self.assert_no_unfinished_transaction()

@@ -99,6 +99,16 @@ class ManualRuntimeHostTests(unittest.TestCase):
         self.assertEqual(selector['sequence'],2)
         self.assertEqual(selector['runtimeId'],self.snapshot.runtime_id)
 
+    def test_selected_profile_and_config_are_checked_before_root_attestation(self):
+        target=self.root/'profile.json'
+        target.write_bytes(b'qa wrong selected context')
+        with patch.object(host_module,'TARGETS',{'profile.json':target}), patch.object(host_module,'protected_bytes',side_effect=lambda path,**kw:path.read_bytes()):
+            with self.assertRaisesRegex(ManualRuntimeError,'selected_config_changed'):
+                self.host._verify_selected_files(self.profile)
+        target.write_bytes(canonical(self.profile))
+        with patch.object(host_module,'TARGETS',{'profile.json':target}), patch.object(host_module,'protected_bytes',side_effect=lambda path,**kw:path.read_bytes()):
+            self.host._verify_selected_files(self.profile)
+
     def test_failed_candidate_without_lifecycle_is_held_before_stopping_anything(self):
         self.host.pending={'candidate':object(), 'previous':self.snapshot}
         self.host.current=Mock(return_value=self.snapshot)

@@ -7,7 +7,7 @@ from .manual_runtime_profile import require
 
 
 def run_recorder(runtime, *, sidecar_gid: int, stopping, capture_factory=None,
-                 reporter_factory=None, bridge_factory=None, registry_factory=None, sleep=time.sleep):
+                 reporter_factory=None, bridge_factory=None, registry_factory=None, disposition_publisher=None, sleep=time.sleep):
     from .native_game_capture import NativeGameCapture
     from .recording_health import RecordingHealthReporter
     from .recorder_bridge import RecorderBridge, recording_registry
@@ -30,7 +30,11 @@ def run_recorder(runtime, *, sidecar_gid: int, stopping, capture_factory=None,
         bridge.start()
         # Reporter.tick already scans; no additional capture scanner thread.
         reporter.start()
-        while not stopping(): sleep(0.2)
+        while not stopping():
+            if disposition_publisher is not None:
+                disposition_publisher({'releaseId': runtime.runtime_id, 'gymSha': profile['gymSha'],
+                                       'socketPath': profile['paths']['lifecycleSocket']}, reporter)
+            sleep(0.2)
     finally:
         # A failed earlier close must not let later writers outlive the recorder.
         failure = None
