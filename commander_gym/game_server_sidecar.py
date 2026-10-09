@@ -53,6 +53,7 @@ class GameServerSidecarConfig:
     token: str
     bind_host: str = "127.0.0.1"
     port: int = 8083
+    require_manual_human_game: bool = False
 
     def __post_init__(self) -> None:
         if not self.token or not self.token.strip():
@@ -61,6 +62,8 @@ class GameServerSidecarConfig:
             raise GameServerSidecarConfigurationError("sidecar must bind to a loopback address")
         if not (1 <= self.port <= 65535):
             raise GameServerSidecarConfigurationError("sidecar port must be between 1 and 65535")
+        if type(self.require_manual_human_game) is not bool:
+            raise GameServerSidecarConfigurationError("manual game admission must be boolean")
 
 
 class GameServerSidecarServer(ThreadingHTTPServer):
@@ -235,6 +238,9 @@ class GameServerSidecarHandler(BaseHTTPRequestHandler):
             return
         try:
             request = self._read_json()
+            if self.server.sidecar_config.require_manual_human_game:  # type: ignore[attr-defined]
+                if request.get("manualHumanGame") is not True or not request.get("gameSessionId") or not request.get("profileId"):
+                    raise ValueError("manual service requires native human-game admission and an explicit Binding")
             player_id = request.get("playerId")
             if not isinstance(player_id, str) or not player_id:
                 raise ValueError("callback requires playerId")
@@ -287,6 +293,8 @@ class GameServerSidecarHandler(BaseHTTPRequestHandler):
         if "snapshot" in request:
             raise ValueError("trusted runtime snapshot is forbidden at the policy boundary")
         common = {"playerId", "profileId", "gameSessionId"}
+        if self.server.sidecar_config.require_manual_human_game:  # type: ignore[attr-defined]
+            common.add("manualHumanGame")
         if callback == "chooseAction":
             self._require_keys(
                 request,

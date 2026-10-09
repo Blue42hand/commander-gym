@@ -122,6 +122,7 @@ def main() -> int:
     parser.add_argument("--evidence", type=Path, required=True)
     parser.add_argument("--catalog", type=Path)
     parser.add_argument("--instance-root", type=Path)
+    parser.add_argument("--manual-service", action="store_true")
     args = parser.parse_args()
 
     root = args.root.resolve()
@@ -140,6 +141,7 @@ def main() -> int:
         ),
         catalog_path=catalog,
         instance_root=instance_root,
+        manual_uncapped=args.manual_service,
     )
     server = build_binding_openai_game_server_sidecar(config, client=NoModelClient())
 

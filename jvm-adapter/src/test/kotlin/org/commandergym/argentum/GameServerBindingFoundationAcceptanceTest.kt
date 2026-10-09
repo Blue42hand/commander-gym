@@ -82,6 +82,7 @@ class GameServerBindingFoundationAcceptanceTest {
             "--token", token,
             "--root", instanceRoot.toAbsolutePath().toString(),
             "--evidence", evidenceFile.toAbsolutePath().toString(),
+            "--manual-service",
         )
         if (realInstanceRoot != null) {
             args += listOf(
@@ -108,7 +109,9 @@ class GameServerBindingFoundationAcceptanceTest {
                 "--server.port=$serverPort",
                 "--spring.main.banner-mode=off",
                 "--game.ai.enabled=true",
-                "--game.ai.mode=commander-gym",
+                "--game.ai.mode=engine",
+                "--commander-gym.enabled=true",
+                "--commander-gym.manual-only=true",
                 "--game.ai.thinking-delay-ms=0",
                 "--commander-gym.sidecar.url=http://127.0.0.1:$sidecarPort",
                 "--commander-gym.sidecar.token=$token",
@@ -145,8 +148,10 @@ class GameServerBindingFoundationAcceptanceTest {
 
             client.send(GetAiControllerCatalog())
             val preLobbyCatalog = awaitCatalog(client, lobbyId = null)
+            assertEquals(1, preLobbyCatalog.options.count { it.spec == AiControllerSpec("engine") })
+            assertEquals(0, preLobbyCatalog.options.count { it.spec == AiControllerSpec("commander-gym") })
             val advertised = preLobbyCatalog.options.single { it.spec == expectedSpec }
-            assertEquals(if (realInstanceRoot == null) "Synthetic Binding A" else "Krenko — Argentum Native — Foundation OpenAI", advertised.displayName)
+            assertEquals("Luna — " + if (realInstanceRoot == null) "Synthetic Binding A" else "Krenko — Argentum Native — Foundation OpenAI", advertised.displayName)
             assertEquals(expectedDeckLabel, advertised.deck?.label)
             if (realInstanceRoot != null) {
                 assertEquals(4, preLobbyCatalog.options.count { it.spec.profileId?.endsWith("-foundation-openai") == true })
@@ -219,6 +224,7 @@ class GameServerBindingFoundationAcceptanceTest {
                     playerId = EntityId.of("binding-foundation-ai"),
                     gameSessionId = "binding-foundation-smoke",
                     profileId = expectedBindingId,
+                    isManualHumanGame = { true },
                     snapshot = { null },
                 )
             )
@@ -254,6 +260,7 @@ class GameServerBindingFoundationAcceptanceTest {
                         playerId = EntityId.of("binding-foundation-talrand-ai"),
                         gameSessionId = "binding-foundation-smoke",
                         profileId = "talrand-foundation-openai",
+                        isManualHumanGame = { true },
                         snapshot = { null },
                     )
                 )

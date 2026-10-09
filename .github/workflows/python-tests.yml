@@ -31,11 +31,12 @@ jobs:
       - uses: actions/checkout@v6
         with:
           path: commander-gym
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/checkout@v6
         with:
           repository: Blue42hand/argentum-engine
           # CI compile dependency for the opt-in recorded-controller interface; no service release pin.
-          ref: 07a0ea3928e1d2368e9c13d6d3dda25a5fbd1d62
+          ref: 3c258a4f89146c21db9fe20457e7274b8d7f56be
           path: argentum-engine
       - uses: actions/setup-java@v5
         with:
@@ -46,6 +47,16 @@ jobs:
           python-version: '3.12'
       - uses: gradle/actions/setup-gradle@v4
       - name: Compile and test pinned Argentum integration seam
-        run: ./argentum-engine/gradlew -p commander-gym/jvm-adapter test
+        run: ./argentum-engine/gradlew -p commander-gym/jvm-adapter test jar
         env:
           ARGENTUM_ENGINE_DIR: ${{ github.workspace }}/argentum-engine
+      - name: Package and inspect matched server adapter
+        run: |
+          ./argentum-engine/gradlew -p argentum-engine :game-server:bootJar \
+            -PaiControllerAdapterJar="$GITHUB_WORKSPACE/commander-gym/jvm-adapter/build/libs/commander-gym-argentum-adapter.jar"
+          python commander-gym/scripts/qualify_manual_luna_release.py \
+            --server-jar "$(find argentum-engine/game-server/build/libs -name '*.jar' ! -name '*-plain.jar' | head -1)" \
+            --adapter-jar commander-gym/jvm-adapter/build/libs/commander-gym-argentum-adapter.jar \
+            --native-sha "$(git -C argentum-engine rev-parse HEAD)" \
+            --gym-sha "$(git -C commander-gym rev-parse HEAD)" \
+            --output manual-luna-release.json

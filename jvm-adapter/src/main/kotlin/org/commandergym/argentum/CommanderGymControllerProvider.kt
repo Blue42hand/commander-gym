@@ -46,8 +46,10 @@ class CommanderGymControllerProvider(
     private val token: String,
     private val timeout: Duration = Duration.ofSeconds(30),
     private val http: HttpClient = HttpClient.newBuilder().connectTimeout(timeout).build(),
+    private val requireHumanParticipant: Boolean = false,
 ) : AiControllerProvider {
     override val mode: String = "commander-gym"
+    override val supportsDefaultController: Boolean get() = !requireHumanParticipant
     private val base: String
     private val profileConfigs: Map<String, BindingProfileConfig>
     override val profiles: List<AiControllerProfile>
@@ -68,7 +70,7 @@ class CommanderGymControllerProvider(
         profiles = loaded.map { profile ->
             AiControllerProfile(
                 id = profile.id,
-                displayName = profile.displayName,
+                displayName = if (requireHumanParticipant) "Luna — ${profile.displayName}" else profile.displayName,
                 description = profile.description,
                 deckSpec = AiDeckSpec.Fixed(
                     deckList = profile.deckList,
@@ -80,6 +82,9 @@ class CommanderGymControllerProvider(
     }
 
     override fun create(context: AiControllerContext): AiPlayerController {
+        require(context.profileId != null || supportsDefaultController) {
+            "Commander Gym manual service requires an explicit Binding profile"
+        }
         val selected = context.profileId?.let { profileId ->
             requireNotNull(profileConfigs[profileId]) {
                 "Unknown Commander Gym Binding profile '$profileId'"
@@ -102,6 +107,13 @@ class CommanderGymControllerProvider(
                 }
             },
             http = http,
+            beforeCallback = {
+                require(!requireHumanParticipant ||
+                    (context.gameSessionId != null && context.isManualHumanGame())) {
+                    "Commander Gym manual service requires a native game with a human participant"
+                }
+            },
+            manualHumanGame = requireHumanParticipant,
         )
         // Only the native edge can obtain the trusted snapshot. It never crosses HTTP.
     }
@@ -157,6 +169,8 @@ class CommanderGymPlayerController(
     },
     private val http: HttpClient = HttpClient.newBuilder().connectTimeout(timeout).build(),
     private val gameSessionId: String? = null,
+    private val beforeCallback: () -> Unit = {},
+    private val manualHumanGame: Boolean = false,
 ) : com.wingedsheep.ai.RecordedAiPlayerController {
     override fun chooseRecordedAction(state: ClientGameState, legalActions: List<LegalActionInfo>,
                                       recentGameLog: List<String>, evidence: com.wingedsheep.ai.AiDecisionEvidence): ActionResponse =
@@ -292,9 +306,11 @@ class CommanderGymPlayerController(
         put("playerId", playerId.value)
         profileId?.let { put("profileId", it) }
         gameSessionId?.let { put("gameSessionId", it) }
+        if (manualHumanGame) put("manualHumanGame", true)
     }
 
     private fun post(path: String, body: JsonObject): JsonObject {
+        beforeCallback()
         val request = HttpRequest.newBuilder(URI.create("$base/v1/$path"))
             .timeout(requestTimeout)
             .header("Authorization", "Bearer $bearer")

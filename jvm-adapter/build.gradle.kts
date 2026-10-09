@@ -35,6 +35,21 @@ dependencies {
 kotlin { jvmToolchain(21) }
 tasks.test { useJUnitPlatform() }
 
+val nativeCheckout = file(providers.environmentVariable("ARGENTUM_ENGINE_DIR").orElse("../argentum-engine").get())
+val nativeRevision = providers.exec {
+    workingDir(nativeCheckout)
+    commandLine("git", "rev-parse", "HEAD")
+}.standardOutput.asText.map { it.trim() }
+val gymRevision = providers.exec {
+    workingDir(projectDir)
+    commandLine("git", "rev-parse", "HEAD")
+}.standardOutput.asText.map { it.trim() }
+tasks.jar {
+    inputs.property("nativeRevision", nativeRevision)
+    inputs.property("gymRevision", gymRevision)
+    manifest.attributes("Argentum-Revision" to nativeRevision.get(), "Commander-Gym-Revision" to gymRevision.get())
+}
+
 tasks.register<JavaExec>("runLocalGuiServer") {
     group = "application"
     description = "Run the normal Argentum game server with the Commander Gym provider loaded"
