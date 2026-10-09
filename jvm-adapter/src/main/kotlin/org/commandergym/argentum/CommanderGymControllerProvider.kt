@@ -28,6 +28,7 @@ import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.time.Duration
+import java.util.UUID
 
 private const val POLICY_SCHEMA_SCOPE = "commander-gym-game-server-policy-v1"
 
@@ -47,6 +48,7 @@ class CommanderGymControllerProvider(
     private val timeout: Duration = Duration.ofSeconds(30),
     private val http: HttpClient = HttpClient.newBuilder().connectTimeout(timeout).build(),
     private val requireHumanParticipant: Boolean = false,
+    private val recorder: RecorderCallbackClient? = null,
 ) : AiControllerProvider {
     override val mode: String = "commander-gym"
     override val supportsDefaultController: Boolean get() = !requireHumanParticipant
@@ -114,6 +116,7 @@ class CommanderGymControllerProvider(
                 }
             },
             manualHumanGame = requireHumanParticipant,
+            recorder = recorder,
         )
         // Only the native edge can obtain the trusted snapshot. It never crosses HTTP.
     }
@@ -171,6 +174,7 @@ class CommanderGymPlayerController(
     private val gameSessionId: String? = null,
     private val beforeCallback: () -> Unit = {},
     private val manualHumanGame: Boolean = false,
+    private val recorder: RecorderCallbackClient? = null,
 ) : com.wingedsheep.ai.RecordedAiPlayerController {
     override fun chooseRecordedAction(state: ClientGameState, legalActions: List<LegalActionInfo>,
                                       recentGameLog: List<String>, evidence: com.wingedsheep.ai.AiDecisionEvidence): ActionResponse =
@@ -311,13 +315,43 @@ class CommanderGymPlayerController(
 
     private fun post(path: String, body: JsonObject): JsonObject {
         beforeCallback()
-        val request = HttpRequest.newBuilder(URI.create("$base/v1/$path"))
+        val callbackId = if (recorder == null) null else UUID.randomUUID().toString()
+        val envelope = callbackId?.let { id ->
+            require(manualHumanGame && gameSessionId != null && profileId != null) { "Recorder requires native manual Binding game" }
+            buildJsonObject {
+                put("protocol", 1)
+                put("callbackId", id)
+                put("gameId", gameSessionId)
+                put("seatId", playerId.value)
+                put("bindingId", profileId)
+                put("callback", when (path) {
+                    "choose-action" -> "chooseAction"
+                    "decide-mulligan" -> "decideMulligan"
+                    "choose-bottom-cards" -> "chooseBottomCards"
+                    else -> error("Unsupported recorded callback")
+                })
+            }
+        }
+        if (envelope != null) recorder!!.exchange(buildJsonObject {
+            envelope.forEach { (key, value) -> put(key, value) }
+            put("op", "register")
+            put("request", body)
+        })
+        val builder = HttpRequest.newBuilder(URI.create("$base/v1/$path"))
             .timeout(requestTimeout)
             .header("Authorization", "Bearer $bearer")
             .header("Content-Type", "application/json")
             .POST(HttpRequest.BodyPublishers.ofString(json.encodeToString(body)))
-            .build()
-        val response = http.send(request, HttpResponse.BodyHandlers.ofString())
+
+        if (callbackId != null) builder.header("X-Commander-Gym-Callback-Id", callbackId)
+        val response = try {
+            http.send(builder.build(), HttpResponse.BodyHandlers.ofString())
+        } finally {
+            if (envelope != null) recorder!!.exchange(buildJsonObject {
+                envelope.forEach { (key, value) -> put(key, value) }
+                put("op", "closed")
+            })
+        }
         require(response.statusCode() == 200) {
             val detail = runCatching {
                 json.parseToJsonElement(response.body()).jsonObject["detail"]

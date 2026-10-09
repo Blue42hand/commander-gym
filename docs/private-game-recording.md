@@ -155,6 +155,11 @@ sections; never substitute guessed versions. Pin config is credential-free exact
 configuration or canonical digest/reference, not environment dumps. Provide `game_id` and
 `required_sources=('native', 'seat:<seat-id>', ...)` for every human and AI seat.
 
+A protected shared manual runtime can use the [private recorder bridge](manual-luna-recorder-bridge.md)
+to send authenticated native registration and sidecar start/finish receipts to its existing
+sole recorder. The provider process then receives no journal filesystem access and starts
+no capture/finalizer/health thread. Existing recording completeness/replay limitations remain.
+
 The Binding sidecar builder accepts `game_journal=`. It wires `RecorderSeatSink` start and
 completion callbacks while preserving the existing legacy provenance sink. This option is
 not activated in deployment/launchers by this PR. Alternative orchestration can pass

@@ -13,6 +13,7 @@ profile-aware factory resolves the selected profile to the correct seat adapter.
 from __future__ import annotations
 
 import hmac
+from contextlib import nullcontext
 import json
 import threading
 from dataclasses import dataclass
@@ -79,12 +80,14 @@ class GameServerSidecarServer(ThreadingHTTPServer):
         profiles: Sequence[Mapping[str, Any]] = (),
         profile_seat_factory: ProfileSeatFactory | None = None,
         game_profile_seat_factory: GameProfileSeatFactory | None = None,
+        callback_context: Callable[..., Any] | None = None,
     ) -> None:
         self.sidecar_config = config
         self.seats = dict(seats or {})
         self._seat_factory = seat_factory
         self._profile_seat_factory = profile_seat_factory
         self._game_profile_seat_factory = game_profile_seat_factory
+        self.callback_context = callback_context
         self._profile_seats: dict[tuple[str | None, str, str], GameServerSeatAdapter] = {}
         self._profiles = self._validate_profiles(profiles)
         if self._profiles and self._profile_seat_factory is None:
@@ -253,7 +256,10 @@ class GameServerSidecarHandler(BaseHTTPRequestHandler):
             if game_id is not None and (not isinstance(game_id, str) or not game_id):
                 raise ValueError("gameSessionId must be a non-empty string")
             adapter = self.server.resolve_seat(player_id, profile_id, game_id)  # type: ignore[attr-defined]
-            response = self._invoke(callback, adapter, request)
+            context = self.server.callback_context  # type: ignore[attr-defined]
+            with (nullcontext() if context is None else context(
+                    request, callback, self.headers.get("X-Commander-Gym-Callback-Id"))):
+                response = self._invoke(callback, adapter, request)
         except UnknownProfileError:
             self._write(404, {"error": "unknown_profile"})
             return

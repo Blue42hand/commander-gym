@@ -24,6 +24,10 @@ jobs:
         run: python -m pip install -r requirements-catalog-mcp.txt
       - name: Run unit tests
         run: python -m unittest discover -s tests -v
+      - name: Qualify isolated recorder peer separation
+        run: sudo --preserve-env=PYTHONPATH "$(command -v python)" -m unittest discover -s tests -p test_recorder_bridge_linux.py -v
+        env:
+          PYTHONPATH: ${{ github.workspace }}:${{ github.workspace }}/tests
 
   jvm-adapter:
     runs-on: ubuntu-latest
