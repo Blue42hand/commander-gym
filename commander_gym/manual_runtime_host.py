@@ -50,6 +50,14 @@ TARGETS = {
 }
 
 
+def selected_targets(profile):
+    # Keep TARGETS complete for rollback custody; the sealed one-Origin mode
+    # does not install or require a LAN certificate.
+    tailnet_only = len(profile["ingress"]["origins"]) == 1
+    return {name: path for name, path in TARGETS.items()
+            if not (tailnet_only and name == "lan-server.crt")}
+
+
 def root_json(path: Path) -> dict:
     return decode(protected_bytes(path, uid=0, max_bytes=4 * 1024 * 1024))
 
@@ -240,9 +248,10 @@ class ProtectedRuntimeHost:
     def _select_files(self, runtime):
         profile = runtime.profile
         artifact = profile['artifacts']['config']
-        require((set(TARGETS) - {'profile.json'}).issubset(artifact['files']), 'service_config_incomplete')
+        targets = selected_targets(profile)
+        require((set(targets) - {'profile.json'}).issubset(artifact['files']), 'service_config_incomplete')
         source = Path(artifact['root'])
-        for name, destination in TARGETS.items():
+        for name, destination in targets.items():
             if not destination.parent.exists():
                 _directory(destination.parent.parent); destination.parent.mkdir(mode=0o755)
             raw = runtime.profile_bytes if name == 'profile.json' else protected_bytes(source / name, uid=0, max_bytes=1024*1024)
@@ -347,7 +356,7 @@ class ProtectedRuntimeHost:
     def _verify_selected_files(self, profile):
         expected = {**profile['artifacts']['config']['files'],
                     'profile.json': hashlib.sha256(canonical(profile)).hexdigest()}
-        for name, destination in TARGETS.items():
+        for name, destination in selected_targets(profile).items():
             require(name in expected, 'selected_config_incomplete')
             raw = protected_bytes(destination, uid=0, max_bytes=4*1024*1024)
             require(hashlib.sha256(raw).hexdigest() == expected[name], 'selected_config_changed')

@@ -21,7 +21,7 @@ API_MAP = '''map "$request_method:$uri" $argentum_api_allowed {
 '''
 
 
-def shared_https_nginx(*, frontend_root: str, tailnet_origin: str, lan_address: str, lan_subnet: str) -> str:
+def shared_https_nginx(*, frontend_root: str, tailnet_origin: str, lan_address: str, lan_subnet: str, tailnet_only: bool = False) -> str:
     # Inputs are exact proposed metadata, never request/user strings in nginx.
     from urllib.parse import urlsplit
     import ipaddress
@@ -35,7 +35,9 @@ def shared_https_nginx(*, frontend_root: str, tailnet_origin: str, lan_address: 
     maps = '''map $http_upgrade $argentum_connection_upgrade { default upgrade; '' close; }
 log_format argentum_metadata '$time_iso8601 $request_method $status $body_bytes_sent $request_time';
 '''
-    for name, origin in (('tailnet', tailnet_origin), ('lan', lan_origin)):
+    require(type(tailnet_only) is bool, 'ingress_mode')
+    origins = [('tailnet', tailnet_origin)] if tailnet_only else [('tailnet', tailnet_origin), ('lan', lan_origin)]
+    for name, origin in origins:
         maps += f'map $http_origin $argentum_{name}_origin_allowed {{ default 0; "{origin}" 1; }}\n'
     maps += API_MAP
     def server(listeners: str, origin: str, allow: str, tls: str = ''):
@@ -94,15 +96,18 @@ log_format argentum_metadata '$time_iso8601 $request_method $status $body_bytes_
     server_name _;
     access_log off;
     error_log /dev/null crit;
-    return 308 {lan_origin}$request_uri;
+    return 308 {tailnet_origin if tailnet_only else lan_origin}$request_uri;
 }}
 '''
+    if tailnet_only:
+        return maps
     maps += server(f'listen {address}:8443 ssl;', 'lan', f'allow {subnet};',
                    'ssl_certificate /run/credentials/argentum-web.service/lan-server.crt;\n    ssl_certificate_key /run/credentials/argentum-web.service/lan-server.key;\n    ssl_protocols TLSv1.2 TLSv1.3;')
     return maps
 
 
-def service_units(*, launcher_root: str, dependency_root: str, python_relative: str) -> dict[str, str]:
+def service_units(*, launcher_root: str, dependency_root: str, python_relative: str, tailnet_only: bool = False) -> dict[str, str]:
+    require(type(tailnet_only) is bool, 'ingress_mode')
     for role, root in (('launcher', launcher_root), ('dependencies', dependency_root)):
         require(re.fullmatch('/srv/argentum-luna/artifacts/' + role + '/[0-9a-f]{64}', root), 'sealed_unit_layout')
     require(re.fullmatch(r'[A-Za-z0-9_./-]+', python_relative) and '..' not in Path(python_relative).parts, 'interpreter_path')
@@ -195,6 +200,8 @@ LoadCredential=lan-server.key:/etc/argentum-luna/lan-server.key
 SendSIGKILL=no
 ''',
     }
+    if tailnet_only:
+        result['units/argentum-web.conf'] = '[Service]\nSendSIGKILL=no\n'
     for operation, unit in (('update', 'argentum-updater'), ('admit', 'argentum-admission'), ('source', 'argentum-source-feeder')):
         result['units/' + unit + '.conf'] = f'''[Service]
 ExecStart=
@@ -202,3 +209,23 @@ ExecStart={dispatch} {operation}
 ReadWritePaths=/etc/argentum-luna /var/lib/argentum-updater/manual-runtime /run/argentum-luna-runtime
 '''
     return result
+
+
+def validate_config_contract(profile: dict) -> None:
+    """Bind all installed proposal bytes to the sealed ingress and runtime roots."""
+    ingress, artifacts = profile['ingress'], profile['artifacts']
+    tailnet_only = len(ingress['origins']) == 1
+    lan_origin = 'https://' + ingress['lanAddress'] + ':8443'
+    tailnet = [origin for origin in ingress['origins'] if origin != lan_origin]
+    require(len(tailnet) == 1 and (tailnet_only or lan_origin in ingress['origins']), 'config_origin_mode')
+    expected = service_units(launcher_root=artifacts['launcher']['root'],
+        dependency_root=artifacts['dependencies']['root'], python_relative='python/bin/python3.12',
+        tailnet_only=tailnet_only)
+    expected['nginx.conf'] = shared_https_nginx(frontend_root=artifacts['frontend']['root'],
+        tailnet_origin=tailnet[0], lan_address=ingress['lanAddress'], lan_subnet=ingress['lanSubnet'],
+        tailnet_only=tailnet_only)
+    import hashlib
+    files = artifacts['config']['files']
+    require(set(files) == set(expected) | (set() if tailnet_only else {'lan-server.crt'}), 'config_mode_files')
+    for name, text in expected.items():
+        require(files[name] == hashlib.sha256(text.encode()).hexdigest(), 'config_profile_mismatch')

@@ -124,3 +124,21 @@ class ManualRuntimeHostTests(unittest.TestCase):
         with patch.object(host_module,'atomic_root') as write:
             with self.assertRaises(OSError):self.host.select(runtime)
         write.assert_not_called(); self.host._reload.assert_not_called()
+
+    def test_tailnet_only_selects_and_attests_without_certificate_but_banks_all_targets(self):
+        self.profile['ingress']['origins'] = ['https://tolaria.taila3c720.ts.net']
+        targets = {'profile.json':self.root/'profile.json', 'lan-server.crt':self.root/'lan-server.crt',
+                   'nginx.conf':self.root/'nginx.conf'}
+        self.profile['artifacts']['config']['files'] = {'nginx.conf':hashlib.sha256(b'tailnet-qa').hexdigest()}
+        source=Path(self.profile['artifacts']['config']['root']); (source/'nginx.conf').write_bytes(b'tailnet-qa')
+        runtime=ValidatedRuntime(canonical(self.profile),digest(self.profile),2)
+        with patch.object(host_module,'TARGETS',targets), patch.object(host_module,'protected_bytes',side_effect=lambda path,**kw:path.read_bytes()), patch.object(host_module,'atomic_root',side_effect=lambda path,raw,**kw:path.write_bytes(raw)):
+            self.host._select_files(runtime)
+            self.host._verify_selected_files(self.profile)
+            self.assertFalse(targets['lan-server.crt'].exists())
+            self.assertIn('lan-server.crt',host_module.TARGETS)
+        self.profile['ingress']['origins'].append('https://192.168.0.178:8443')
+        runtime=ValidatedRuntime(canonical(self.profile),digest(self.profile),2)
+        with patch.object(host_module,'TARGETS',targets):
+            with self.assertRaisesRegex(ManualRuntimeError,'service_config_incomplete'):
+                self.host._select_files(runtime)
