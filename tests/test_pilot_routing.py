@@ -54,6 +54,69 @@ class CountingPilot:
 
 
 class RoutingPilotTests(unittest.TestCase):
+    def test_opt_in_unaffordable_exile_land_pass_uses_native_certificates(self):
+        passed = {
+            **pass_action(), "actionType": "PassPriority", "isAffordable": True,
+            "isManaAbility": False,
+            "action": {"type": "PassPriority", "playerId": "player-1"},
+        }
+        land = {
+            "actionId": 1, "semanticId": "native-exile-land", "kind": "PlayLand",
+            "actionType": "PlayLand", "affordable": False,
+            "isAffordable": False, "isManaAbility": False,
+            "isDecisionOption": False, "sourceZone": "EXILE",
+            "parameterSpec": {"allowedFields": {}},
+            "action": {"type": "PlayLand", "playerId": "player-1",
+                       "cardId": "exiled-land", "asBackFace": False},
+        }
+        current = observation(passed)
+        current["state"] = {
+            "priorityPlayerId": "player-1",
+            "zones": [{"zoneId": {"ownerId": "player-1", "zoneType": "Exile"},
+                       "cardIds": ["exiled-land"]}],
+        }
+        current["legalActions"] = [passed, land]
+        qualified = AllUnaffordablePassHandler(version="2", allow_unaffordable_cycling=True)
+        candidate = AllUnaffordablePassHandler(
+            version="3", allow_unaffordable_cycling=True,
+            allow_unaffordable_exile_land=True,
+        )
+        self.assertIsNone(qualified.choose(current))
+        self.assertEqual(candidate.choose(current).action_id, 0)
+        for field, value in (
+            ("affordable", True), ("affordable", None),
+            ("isAffordable", True), ("isAffordable", None),
+            ("isManaAbility", True), ("sourceZone", "HAND"),
+            ("parameterSpec", {"allowedFields": {"asBackFace": "BOOLEAN"}}),
+            ("action", {**land["action"], "asBackFace": True}),
+            ("action", {**land["action"], "cardId": "other"}),
+            ("action", {**land["action"], "extra": "unknown"}),
+        ):
+            with self.subTest(field=field, value=value):
+                changed = {**land, field: value}
+                self.assertIsNone(candidate.choose({**current, "legalActions": [passed, changed]}))
+        for changed_zones in (
+            [],
+            [{"zoneId": {"ownerId": "player-1", "zoneType": "Hand"},
+              "cardIds": ["exiled-land"]}],
+            [{"zoneId": {"ownerId": "player-1", "zoneType": "Exile"},
+              "cardIds": ["exiled-land", "exiled-land"]}],
+        ):
+            with self.subTest(zones=changed_zones):
+                self.assertIsNone(candidate.choose({
+                    **current, "state": {**current["state"], "zones": changed_zones},
+                }))
+        affordable_mana = {
+            "actionId": 2, "semanticId": "native-mana", "kind": "ActivateAbility",
+            "actionType": "ActivateAbility", "affordable": True,
+            "isAffordable": True, "isManaAbility": True,
+            "isDecisionOption": False,
+            "action": {"type": "ActivateAbility", "playerId": "player-1"},
+        }
+        self.assertIsNone(candidate.choose({
+            **current, "legalActions": [passed, land, affordable_mana],
+        }))
+
     def test_all_unaffordable_pass_requires_complete_native_false_certificates(self):
         passed = {
             **pass_action(), "actionType": "PassPriority", "isAffordable": True,
