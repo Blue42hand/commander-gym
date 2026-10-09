@@ -80,6 +80,11 @@ Do not add it to the native, proxy, frontend or shell launcher environment. If t
 existing source uses another format, the operator must supply its format/path
 before choosing the loading command; no path or contents were inspected here.
 
+For a protected runtime with an existing sole recorder, use the
+[manual Luna recorder connection](manual-luna-recorder-bridge.md): replace the sidecar
+recording-root/pins variables above with its private recorder socket/UID variables,
+and add the native registration socket property. Never start two finalizers.
+
 Native recording remains enabled through its existing private runtime setup
 (`-Dgame.recording.root=<private root>`, matching release/engine metadata). Keep
 the Gym `engine`, `gym`, `models`, `decks`, `bindings`, `config`, and `rng` pins exact.

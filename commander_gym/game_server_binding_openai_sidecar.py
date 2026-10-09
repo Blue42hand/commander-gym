@@ -600,7 +600,7 @@ def build_binding_openai_game_server_sidecar(
     provenance_sink: SeatProvenanceSink | None = None,
     component_resolver: PilotComponentResolver | None = None,
     game_journal: PrivateGameJournal | None = None,
-    game_capture: NativeGameCapture | None = None,
+    game_capture: Any | None = None,
 ) -> GameServerSidecarServer:
     """Build the Binding-only OpenAI sidecar from one instance-supplied catalog.
 
@@ -697,6 +697,7 @@ def build_binding_openai_game_server_sidecar(
         sidecar,
         profiles=registry.profile_payloads(),
         profile_seat_factory=profile_seat_factory,
+        callback_context=getattr(game_capture, "callback_context", None),
         game_profile_seat_factory=(None if game_capture is None else
             lambda game_id, player_id, profile_id: profile_seat_factory(player_id, profile_id, game_id)),
     )
@@ -706,9 +707,19 @@ def main() -> int:
     """Run the Binding-first OpenAI game-server policy sidecar until interrupted."""
 
     config = binding_openai_game_server_config_from_environment(os.environ)
-    capture = NativeGameCapture.from_environment(os.environ)
-    reporter = RecordingHealthReporter.from_environment(capture, os.environ)
-    server = build_binding_openai_game_server_sidecar(config, game_capture=capture)
+    remote_path = os.environ.get("COMMANDER_GYM_RECORDER_SOCKET")
+    if remote_path:
+        if any(os.environ.get(key) for key in ("COMMANDER_GYM_RECORDING_ROOT", "COMMANDER_GYM_RECORDING_PINS",
+                                              "COMMANDER_GYM_RECORDING_LIFECYCLE_SOCKET")):
+            raise OpenAIGameServerSidecarConfigurationError("remote recording cannot own native capture or health")
+        from .recorder_bridge import RemoteCaptureSink
+        remote = RemoteCaptureSink(Path(remote_path), recorder_uid=int(os.environ["COMMANDER_GYM_RECORDER_UID"]))
+        capture, reporter = None, None
+    else:
+        remote = None
+        capture = NativeGameCapture.from_environment(os.environ)
+        reporter = RecordingHealthReporter.from_environment(capture, os.environ)
+    server = build_binding_openai_game_server_sidecar(config, game_capture=remote or capture)
     if capture is not None:
         capture.start()
     if reporter is not None:

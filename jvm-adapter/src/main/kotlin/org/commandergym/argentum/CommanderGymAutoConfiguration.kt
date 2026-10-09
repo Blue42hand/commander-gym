@@ -10,6 +10,7 @@ import org.springframework.context.annotation.ConfigurationCondition.Configurati
 import org.springframework.core.env.Environment
 import java.net.URI
 import java.time.Duration
+import java.nio.file.Path
 
 /** Enables per-seat Gym profiles alongside Engine AI, or the legacy server-wide mode. */
 @AutoConfiguration
@@ -24,6 +25,7 @@ class CommanderGymAutoConfiguration {
         return CommanderGymControllerProvider(
             URI.create(endpoint), token, Duration.ofMillis(timeout),
             requireHumanParticipant = environment.getProperty("commander-gym.manual-only", Boolean::class.java, false),
+            recorder = environment.getProperty("commander-gym.recorder.socket")?.let { RecorderCallbackClient(Path.of(it)) },
         )
     }
 }

@@ -375,5 +375,5 @@ class GameServerSeatAdapter:
                         "retryCount": validation_retries,
                         "modelIo": model_io,
                     },
-                })
+                }, decision_evidence)
             raise
