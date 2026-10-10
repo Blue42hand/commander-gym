@@ -41,15 +41,16 @@ def credential(directory: Path, name: str, *, uid: int, limit: int,
     fds = []
     links = []
     flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC
+    directory_flags = getattr(os, 'O_PATH', os.O_RDONLY) | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_DIRECTORY
     try:
-        fd = os.open('/', flags | os.O_DIRECTORY)
+        fd = os.open('/', directory_flags)
         fds.append(fd)
         info = os.fstat(fd)
         require(info.st_uid == 0 and info.st_gid == 0 and info.st_mode & 0o022 == 0,
                 'credential_ancestor_custody')
         for part in directory.parts[1:]:
             parent = fd
-            fd = os.open(part, flags | os.O_DIRECTORY, dir_fd=parent)
+            fd = os.open(part, directory_flags, dir_fd=parent)
             fds.append(fd)
             info = os.fstat(fd)
             require(stat.S_ISDIR(info.st_mode) and info.st_uid in ((0,) if role else (0, uid))

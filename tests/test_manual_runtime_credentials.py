@@ -2,6 +2,7 @@
 import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
+import shutil
 import unittest
 from unittest.mock import patch
 
@@ -75,7 +76,7 @@ class CredentialTests(unittest.TestCase):
 
     def test_descriptor_replacement_and_mode_change_during_read(self):
         original = os.read
-        for mutation in ('replace', 'mode', 'parent'):
+        for mutation in ('replace', 'mode', 'parent', 'ancestor-replace'):
             self.file.write_bytes(b'fake credential only')
             self.file.chmod(0o600)
             done = False
@@ -91,8 +92,13 @@ class CredentialTests(unittest.TestCase):
                         replacement.replace(self.file)
                     elif mutation == 'mode':
                         self.file.chmod(0o644)
-                    else:
+                    elif mutation == 'parent':
                         self.directory.chmod(0o755)
+                    else:
+                        moved = self.directory.with_name(self.directory.name + '-moved')
+                        self.directory.rename(moved)
+                        self.directory.mkdir(mode=0o700)
+                        self.addCleanup(shutil.rmtree, moved)
                 return raw
             with self.subTest(mutation=mutation), patch('os.read', racing_read):
                 with self.assertRaisesRegex(ManualRuntimeError, 'credential_(changed|directory_changed)'):

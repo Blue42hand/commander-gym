@@ -124,11 +124,15 @@ def probe(role, scenario):
     except (ManualRuntimeError, OSError) as error:
         if scenario == 'valid':
             metadata = {}
-            for label, path in (('directory', directory), ('copy', directory / 'profile.json')):
+            for label, path in (('run', Path('/run')), ('credentialsRoot', Path('/run/credentials')),
+                                ('directory', directory), ('copy', directory / 'profile.json')):
                 try:
                     info = path.stat()
-                    metadata[label] = {'uid': info.st_uid, 'gid': info.st_gid, 'mode': oct(info.st_mode & 0o7777),
-                                       'readonly': bool(os.statvfs(path).f_flag & os.ST_RDONLY)}
+                    metadata[label] = {'uid': info.st_uid, 'gid': info.st_gid, 'mode': oct(info.st_mode & 0o7777)}
+                    try:
+                        metadata[label]['readonly'] = bool(os.statvfs(path).f_flag & os.ST_RDONLY)
+                    except OSError:
+                        metadata[label]['readonly'] = None
                 except OSError:
                     metadata[label] = {'accessible': False}
             print(json.dumps({'result': 'unexpected-hold', 'code': str(error) if isinstance(error, ManualRuntimeError) else type(error).__name__, 'metadata': metadata}), flush=True)
