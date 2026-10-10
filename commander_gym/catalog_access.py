@@ -104,6 +104,62 @@ class CatalogAccess:
         return {'snapshot_id': snapshot_id, 'engine_coverage': evidence,
                 'selection_required': True}
 
+    def coverage_status(self, snapshot_id: str, coverage_id: str | None = None,
+                        expected_engine_sha: str | None = None,
+                        expected_gym_sha: str | None = None) -> dict[str, Any]:
+        """Compare caller pins; never infer the host's current deployment."""
+        from .engine_coverage import HEX_SHA
+        for pin in (expected_engine_sha, expected_gym_sha):
+            if pin is not None and (not isinstance(pin, str) or not HEX_SHA.fullmatch(pin)):
+                raise CatalogError('expected revision must be a full lowercase commit SHA')
+        status = self.catalog_status(snapshot_id)
+        available = self.list_engine_coverage(snapshot_id)
+        result = {'snapshot_id': snapshot_id, 'catalog_is_current': status['is_current'],
+                  'available_coverage': available['engine_coverage'],
+                  'availability': 'available' if available['engine_coverage'] else 'unavailable',
+                  'selection_required': coverage_id is None, 'selected_evidence': None,
+                  'engine_pin_match': None, 'gym_pin_match': None,
+                  'freshness': 'unknown', 'current_deployed_support': 'unknown',
+                  'tested_card_behavior': 'unknown', 'upstream_presence': 'unknown'}
+        if coverage_id is not None:
+            payload = load_evidence(self.root, coverage_id, self._catalog(snapshot_id))
+            result['selected_evidence'] = metadata(coverage_id, payload)
+            gym_sha = payload.get('commander_gym', {}).get('commit')
+            result['engine_pin_match'] = (None if expected_engine_sha is None else
+                                          payload['engine_sha'] == expected_engine_sha)
+            result['gym_pin_match'] = (None if expected_gym_sha is None or gym_sha is None else
+                                       gym_sha == expected_gym_sha)
+            if not status['is_current'] or False in (result['engine_pin_match'], result['gym_pin_match']):
+                result['freshness'] = 'stale_for_requested_context'
+            elif result['engine_pin_match'] is True and result['gym_pin_match'] is True:
+                result['freshness'] = 'matches_requested_pins'
+        return result
+
+    def get_deck_coverage(self, snapshot_id: str, oracle_ids: list[str],
+                          coverage_id: str | None = None) -> dict[str, Any]:
+        """Aggregate caller-supplied slots without accessing or retaining decks."""
+        if (not isinstance(oracle_ids, list) or not 1 <= len(oracle_ids) <= 1000 or
+                any(not isinstance(key, str) or not 1 <= len(key) <= 128 for key in oracle_ids)):
+            raise CatalogError('supply between 1 and 1000 bounded Oracle-ID slots')
+        catalog = self._catalog(snapshot_id)
+        payload = None if coverage_id is None else load_evidence(self.root, coverage_id, catalog)
+        counts = {'present': 0, 'absent': 0, 'unknown': 0}
+        legality = {'legal': 0, 'not_legal': 0, 'unknown': 0}
+        for key in oracle_ids:
+            card = lookup(catalog, key, coverage_id, payload)
+            counts[card['registry_presence']] += 1
+            legal = card['scryfall_commander_legal']
+            legality['unknown' if legal is None else 'legal' if legal else 'not_legal'] += 1
+        return {'snapshot_id': snapshot_id, 'coverage_id': coverage_id,
+                'total_slots': len(oracle_ids), 'registry_slots': counts,
+                'scryfall_commander_legality_slots': legality,
+                'registered_slot_percent': 100 * counts['present'] / len(oracle_ids),
+                'evidence': None if payload is None else metadata(coverage_id, payload),
+                'tested_card_behavior': 'unknown', 'upstream_presence': 'unknown',
+                'current_deployed_support': 'unknown',
+                'note': 'Counts cover submitted slots, including duplicates. This is registry coverage, '
+                        'not deck legality, gameplay testing, or current deployment certification.'}
+
     def get_card(self, snapshot_id: str, *, oracle_id: str | None = None,
                  printing_id: str | None = None) -> dict[str, Any] | None:
         return self._catalog(snapshot_id).get_card(oracle_id=oracle_id, printing_id=printing_id)
