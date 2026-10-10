@@ -122,7 +122,17 @@ def probe(role, scenario):
                           'readonly': bool(os.statvfs(directory).f_flag & os.ST_RDONLY)}), flush=True)
         time.sleep(30)  # Parent probes denied UIDs inside this service mount.
     except (ManualRuntimeError, OSError) as error:
-        assert scenario != 'valid'
+        if scenario == 'valid':
+            metadata = {}
+            for label, path in (('directory', directory), ('copy', directory / 'profile.json')):
+                try:
+                    info = path.stat()
+                    metadata[label] = {'uid': info.st_uid, 'gid': info.st_gid, 'mode': oct(info.st_mode & 0o7777),
+                                       'readonly': bool(os.statvfs(path).f_flag & os.ST_RDONLY)}
+                except OSError:
+                    metadata[label] = {'accessible': False}
+            print(json.dumps({'result': 'unexpected-hold', 'code': str(error) if isinstance(error, ManualRuntimeError) else type(error).__name__, 'metadata': metadata}), flush=True)
+            raise AssertionError('valid fixture held') from None
         assert not observed, 'secret reader reached before service guard'
         print(json.dumps({'result': 'held', 'role': role, 'code': type(error).__name__}), flush=True)
 
@@ -196,16 +206,42 @@ class SystemdCredentialTests(unittest.TestCase):
                 self.assertEqual((0, 0, '0o440', '0o550', True),
                                  (report['copyUid'], report['copyGid'], report['copyMode'], report['directoryMode'], report['readonly']))
                 pid = self.ctl('show', '-p', 'MainPID', '--value', UNITS[role]).stdout.strip()
+                names = ['profile.json'] + (['openai.env', 'commander-gym.sidecar.token'] if role == 'sidecar'
+                                           else ['commander-gym.sidecar.token'] if role == 'native' else [])
                 for uid in (10003, 10001 if role == 'sidecar' else 10002):
-                    # Even given the exact service mount, a different UID cannot
-                    # raw-open the copy (independent of Python role rejection).
-                    command = ['nsenter', '-t', pid, '-m', 'setpriv', '--reuid', str(uid), '--regid', str(uid), '--clear-groups',
-                               '/usr/bin/python3', '-c',
-                               "import os,sys;\ntry: os.open(sys.argv[1],os.O_RDONLY)\nexcept PermissionError: sys.exit(0)\nelse: sys.exit(1)",
-                               '/run/credentials/' + UNITS[role] + '/profile.json']
-                    result = subprocess.run(command, capture_output=True, text=True, timeout=10)
-                    self.assertEqual(0, result.returncode, result.stderr)
+                    for name in names:
+                        # Given the exact service mount, another UID still cannot
+                        # raw-open any copy, including each actual secret copy.
+                        command = ['nsenter', '-t', pid, '-m', 'setpriv', '--reuid', str(uid), '--regid', str(uid), '--clear-groups',
+                                   '/usr/bin/python3', '-c',
+                                   "import os,sys;\ntry: os.open(sys.argv[1],os.O_RDONLY)\nexcept PermissionError: sys.exit(0)\nelse: sys.exit(1)",
+                                   '/run/credentials/' + UNITS[role] + '/' + name]
+                        result = subprocess.run(command, capture_output=True, text=True, timeout=10)
+                        self.assertEqual(0, result.returncode, result.stderr)
                 self.ctl('stop', UNITS[role])
+
+    def test_real_private_file_modes_owner_gid_and_unprotected_ancestor(self):
+        directory = Path('/run/credential-fixture-private')
+        directory.mkdir(mode=0o700)
+        file = directory / 'fake.txt'
+        file.write_bytes(b'fake-private-credential')
+        file.chmod(0o600)
+        self.assertEqual('fake-private-credential', _credential(directory, file.name, uid=0, limit=100))
+        for mode in (0o440, 0o644, 0o660, 0o601, 0o4600, 0o2600):
+            file.chmod(mode)
+            self.assertEqual(mode, file.stat().st_mode & 0o7777)
+            with self.subTest(mode=mode), self.assertRaises(ManualRuntimeError):
+                _credential(directory, file.name, uid=0, limit=100)
+        file.chmod(0o600)
+        for owner, group in ((10003, 0), (0, 10003)):
+            os.chown(file, owner, group)
+            with self.subTest(owner=owner, group=group), self.assertRaises(ManualRuntimeError):
+                _credential(directory, file.name, uid=0, limit=100)
+        os.chown(file, 0, 0)
+        os.chown(directory, 10003, 10003)
+        with self.assertRaises(ManualRuntimeError):
+            _credential(directory, file.name, uid=0, limit=100)
+        os.chown(directory, 0, 0)
 
     def test_service_guards_hold_before_provider_reads(self):
         original = copy.deepcopy(self.profile)
