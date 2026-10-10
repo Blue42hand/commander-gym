@@ -35,7 +35,7 @@ def paired_profiles(root):
     value=dict(schemaVersion=1,scope='isolated-qa-observation-only',nonce='1'*32,issuedUnix=1000,expiresUnix=1900,
         productionProfileSha256=digest(p),qaProfileSha256=digest(q),previousRuntimeId='0'*64,sequence=2,
         sourceCiSha256=digest(ci),executionInventory={name:'a'*64 for name in ({f'units/{r}.service' for r in qa.ROLES_ORDER}|{f'probes/{r}' for r in qa.PROBES}|{f'implementation/commander_gym/{n}' for n in qa.IMPLEMENTATION_FILES})},
-        limits=qa.LIMITS.copy(),qaMinFreeBytes=64*1024**2,productionAuthoritySha256='2'*64,qaAuthoritySha256='3'*64,implementationSha256='4'*64,
+        limits=qa.LIMITS.copy(),qaMinFreeBytes=64*1024**2,productionAuthoritySha256=p['recordingAuthority']['registrySha256'],qaAuthoritySha256=q['recordingAuthority']['registrySha256'],implementationSha256='4'*64,
         previousProfileSha256=digest(q),previousSelectorSha256='5'*64,qaSourceSha='c'*40,qaSourceCi={'sha':'c'*40,'checks':[{'name':name,'conclusion':'success','runId':2} for name in ('python','manual-runtime-sdk')]})
     return p,q,ci,value
 
@@ -54,7 +54,7 @@ class QAContractTests(unittest.TestCase):
             with self.assertRaises(ManualRuntimeError):qa.match_profiles(self.p,q)
 
     def test_scope_freshness_limits_nonce_and_exact_ci_fail_closed(self):
-        for mutate in (lambda a:a.update(scope='activate-manual-runtime'),lambda a:a.update(sequence=True),lambda a:a.update(expiresUnix=1901),lambda a:a.update(nonce='../escape'),lambda a:a.update(qaProfileSha256='9'*64),lambda a:a['limits'].update(guestMemoryBytes=3*1024**3),lambda a:a.update(qaMinFreeBytes=True),lambda a:a['executionInventory'].update({'probes/foreign':'a'*64})):
+        for mutate in (lambda a:a.update(scope='activate-manual-runtime'),lambda a:a.update(sequence=True),lambda a:a.update(expiresUnix=1901),lambda a:a.update(nonce='../escape'),lambda a:a.update(qaProfileSha256='9'*64),lambda a:a.update(productionAuthoritySha256='9'*64),lambda a:a.update(qaAuthoritySha256='8'*64),lambda a:a['limits'].update(guestMemoryBytes=3*1024**3),lambda a:a.update(qaMinFreeBytes=True),lambda a:a['executionInventory'].update({'probes/foreign':'a'*64})):
             a=copy.deepcopy(self.authority);mutate(a)
             with self.subTest(a=a),self.assertRaises(ManualRuntimeError):qa.validate_authority(a,self.p,self.q,self.ci,now=1000)
         with self.assertRaisesRegex(ManualRuntimeError,'qa_authority_stale'):qa.validate_authority(self.authority,self.p,self.q,self.ci,now=1901)

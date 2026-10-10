@@ -117,6 +117,8 @@ def validate_authority(value, production, qa, ci, *, now):
             and type(value['previousRuntimeId']) is str and SHA.fullmatch(value['previousRuntimeId']), 'qa_previous_sequence')
     for k in ('productionAuthoritySha256','qaAuthoritySha256','implementationSha256','sourceCiSha256','previousProfileSha256','previousSelectorSha256'):
         require(type(value[k]) is str and SHA.fullmatch(value[k]), 'qa_authority_seals')
+    require(value['productionAuthoritySha256'] == production['recordingAuthority']['registrySha256']
+            and value['qaAuthoritySha256'] == qa['recordingAuthority']['registrySha256'], 'qa_exact_registry_authorities')
     require(value['sourceCiSha256'] == digest(ci), 'qa_ci_seal')
     require(type(ci) is dict and set(ci) == {'engine','gym'}, 'qa_ci_roles')
     for role, required in (('engine',{'coverage'}),('gym',{'python','jvm-adapter','manual-runtime-sdk'})):
