@@ -68,6 +68,7 @@ class DeckbuildingMethodologyTests(unittest.TestCase):
                 self.assertEqual(set(listed), {
                     "get_deckbuilding_methodology", "catalog_status", "search_tags",
                     "search_cards", "get_card", "list_engine_coverage", "get_engine_coverage",
+                    "coverage_status", "get_deck_coverage",
                 })
                 tool = listed["get_deckbuilding_methodology"]
                 self.assertTrue(tool.annotations.read_only_hint)

@@ -140,6 +140,30 @@ def build_server(root: str | Path):
         return checked(lambda: access.get_engine_coverage(snapshot_id, oracle_id, coverage_id))
 
     @server.tool(annotations=readonly)
+    def coverage_status(snapshot_id: str, coverage_id: str | None = None,
+                        expected_engine_sha: str | None = None,
+                        expected_gym_sha: str | None = None) -> dict[str, Any]:
+        """Discover existing coverage artifacts and compare exact requested pins.
+
+        No artifact is auto-selected. Missing evidence is unavailable; invalid
+        selected evidence fails closed. Pin matches do not establish live support.
+        Source hashes and dated receipts are returned with selected evidence.
+        """
+        return checked(lambda: access.coverage_status(snapshot_id, coverage_id,
+                                                     expected_engine_sha, expected_gym_sha))
+
+    @server.tool(annotations=readonly)
+    def get_deck_coverage(snapshot_id: str, oracle_ids: list[str],
+                          coverage_id: str | None = None) -> dict[str, Any]:
+        """Count registry presence for 1-1000 caller-supplied Oracle-ID slots.
+
+        Include the commander and repeated IDs for quantities. Returns aggregate
+        counts only; no stored deck or trace access. Registry coverage, Scryfall
+        legality, tests, upstream presence and current deployed support are distinct.
+        """
+        return checked(lambda: access.get_deck_coverage(snapshot_id, oracle_ids, coverage_id))
+
+    @server.tool(annotations=readonly)
     def get_card(snapshot_id: str, oracle_id: str | None = None,
                  printing_id: str | None = None) -> dict[str, Any] | None:
         """Get one Oracle identity or printing with faces, rulings, tags, and sources.

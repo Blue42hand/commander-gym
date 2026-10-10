@@ -173,6 +173,10 @@ def build_evidence(catalog: CardCatalog, registry_path: Path, report_path: Path,
         'unmapped_registry_name_count': sum(name not in candidates for name in names),
         'cards': entries,
     }
+    gym = report.get('commanderGym')
+    if gym is not None:
+        payload['schema_version'] = 2
+        payload['commander_gym'] = gym
     encoded = _canonical(payload)
     artifact = {'coverage_id': _hash(encoded), 'evidence': payload}
     _validate_payload(payload)
@@ -224,7 +228,7 @@ def load_evidence(root: Path, coverage_id: str, catalog: CardCatalog) -> dict:
     if (artifact.get('coverage_id') != coverage_id or not isinstance(payload, dict) or
             _hash(_canonical(payload)) != coverage_id):
         raise CatalogError('coverage digest mismatch')
-    if payload.get('schema_version') != 1 or payload.get('snapshot_id') != catalog.snapshot_id:
+    if payload.get('schema_version') not in (1, 2) or payload.get('snapshot_id') != catalog.snapshot_id:
         raise CatalogError('coverage belongs to another snapshot or schema')
     if payload.get('catalog_identity_sha256') != _hash(_canonical(_identities(catalog))):
         raise CatalogError('coverage catalog identity mismatch')
@@ -240,6 +244,13 @@ def _validate_payload(payload: dict) -> None:
               'engine_repository', 'engine_sha', 'revision_kind', 'qualification',
               'deployment_verification', 'registry_export_sha256', 'registry_name_count',
               'coverage_report_sha256', 'mapping', 'unmapped_registry_name_count', 'cards'}
+    if payload.get('schema_version') == 2:
+        fields.add('commander_gym')
+        gym = payload.get('commander_gym')
+        if (not isinstance(gym, dict) or set(gym) != {'repository', 'commit'} or
+                gym.get('repository') != 'https://github.com/Blue42hand/commander-gym.git' or
+                not isinstance(gym.get('commit'), str) or not HEX_SHA.fullmatch(gym['commit'])):
+            raise CatalogError('invalid coverage Commander Gym identity')
     if set(payload) != fields:
         raise CatalogError('coverage contains missing or unsupported fields')
     if (type(payload['registry_name_count']) is not int or
@@ -247,7 +258,7 @@ def _validate_payload(payload: dict) -> None:
             type(payload['unmapped_registry_name_count']) is not int or
             not 0 <= payload['unmapped_registry_name_count'] <= payload['registry_name_count']):
         raise CatalogError('invalid coverage registry counts')
-    if payload.get('schema_version') != 1 or payload.get('mapping') != 'exact_catalog_card_or_own_face_name_v1':
+    if payload.get('schema_version') not in (1, 2) or payload.get('mapping') != 'exact_catalog_card_or_own_face_name_v1':
         raise CatalogError('invalid coverage schema or identity mapping')
     sha = payload.get('engine_sha')
     if not isinstance(sha, str) or not HEX_SHA.fullmatch(sha) or payload.get('engine_repository') != REPOSITORY:
@@ -279,7 +290,8 @@ def _validate_payload(payload: dict) -> None:
 
 def metadata(coverage_id: str, payload: dict) -> dict:
     return {'coverage_id': coverage_id, **{key: value for key, value in payload.items() if key != 'cards'},
-            'gameplay_correctness': 'unknown', 'coverage_note': NOTE}
+            'gameplay_correctness': 'unknown', 'tested_card_behavior': 'unknown',
+            'upstream_presence': 'unknown', 'coverage_note': NOTE}
 
 
 def lookup(catalog: CardCatalog, oracle_id: str, coverage_id: str | None, payload: dict | None) -> dict:
@@ -294,6 +306,13 @@ def lookup(catalog: CardCatalog, oracle_id: str, coverage_id: str | None, payloa
     elif payload is not None:
         result.update(payload['cards'].get(oracle_id, {'reason': 'oracle_evidence_missing'}))
         result['evidence'] = metadata(coverage_id, payload)
+    result['scryfall_commander_legal'] = None if card is None else card['commander_legal']
+    result['tested_card_behavior'] = 'unknown'
+    result['upstream_presence'] = 'unknown'
+    result['deployed_registry_presence_at_receipt'] = (
+        result['registry_presence'] if payload is not None and
+        payload['deployment_verification'] is not None else 'unknown')
+    result['current_deployed_support'] = 'unknown'
     return result
 
 
