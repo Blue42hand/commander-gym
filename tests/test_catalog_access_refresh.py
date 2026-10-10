@@ -88,12 +88,20 @@ class CatalogAccessRefreshTests(unittest.TestCase):
         self.assertNotIn(str(self.root), json.dumps(access.catalog_status()))
 
     def test_refresh_skips_unchanged_manifest_without_download(self):
+        coverage = self.root / 'engine-coverage'
+        coverage.mkdir()
+        artifact = coverage / ('a' * 64 + '.json')
+        original = b'{"fixture":"immutable-history"}\n'
+        artifact.write_bytes(original)
+        artifact.chmod(0o444)
         with (mock.patch('commander_gym.catalog_refresh.fetch_manifest', return_value=self._manifest()),
               mock.patch('commander_gym.catalog_refresh.download_source') as download):
             result = refresh_catalog(self.root)
         self.assertEqual(result, {'current_snapshot_id': ONE, 'refresh_needed': False,
                                   'published': False})
         download.assert_not_called()
+        self.assertEqual(artifact.read_bytes(), original)
+        self.assertEqual(list(coverage.iterdir()), [artifact])
 
     def test_older_schema_needs_rebuild_even_when_sources_are_unchanged(self):
         metadata = self.root / 'snapshots' / f'{ONE}.json'
