@@ -100,7 +100,8 @@ class DatasetExportTests(unittest.TestCase):
 
         self.assertEqual(len(rows), 2)
         action = rows[0]
-        self.assertEqual(action["dataset_schema_version"], DATASET_EXPORT_SCHEMA_VERSION)
+        self.assertEqual(action["dataset_schema_version"], 1)
+        self.assertEqual(DATASET_EXPORT_SCHEMA_VERSION, 2)
         self.assertEqual(action["record_kind"], "action")
         self.assertEqual(action["provenance"]["run_id"], "run-1")
         self.assertEqual(action["provenance"]["seed"], 17)

@@ -12,10 +12,54 @@ from typing import Any, Dict, List, Mapping, Optional
 from .identity import IdentityError, IdentityRef
 
 SCHEMA_VERSION = 1
+ACTION_RECORD_SCHEMA_VERSION = 2
 
 
 class RecordValidationError(ValueError):
     """Raised when a training/evaluation record is structurally invalid."""
+
+
+_ACTION_PARAM_KINDS = {
+    "attackers": "ENTITY_ID_MAP", "blockers": "ENTITY_ID_ARRAY_MAP",
+    "targets": "ENTITY_ID_ARRAY", "xValue": "INTEGER", "declaredCostTimes": "INTEGER",
+    "tappedPermanents": "ENTITY_ID_ARRAY", "sacrificedPermanents": "ENTITY_ID_ARRAY",
+    "discardedCards": "ENTITY_ID_ARRAY", "exiledCards": "ENTITY_ID_ARRAY",
+    "delvedCards": "ENTITY_ID_ARRAY",
+}
+
+
+def validate_action_params(params: Any, offered: Mapping[str, Any]) -> None:
+    """Check the native wire contract, without deciding rules legality.
+
+    Acceptance still requires the correlated native application receipt. Closed
+    named fields keep routing, credentials and administrative data out of targets.
+    """
+    if not isinstance(params, dict):
+        raise RecordValidationError("chosen_action_params must be an explicit object")
+    spec = offered.get("parameterSpec")
+    if not isinstance(spec, Mapping) or set(spec) != {"allowedFields"}:
+        raise RecordValidationError("v2 action requires native parameterSpec")
+    fields = spec["allowedFields"]
+    if not isinstance(fields, Mapping) or any(
+        name not in _ACTION_PARAM_KINDS or kind != _ACTION_PARAM_KINDS[name]
+        for name, kind in fields.items()
+    ):
+        raise RecordValidationError("unsupported native action parameter fields")
+    if set(params) - set(fields):
+        raise RecordValidationError("chosen_action_params contains an unoffered field")
+    def entity(value: Any) -> bool:
+        return isinstance(value, str) and bool(value)
+    def entities(value: Any) -> bool:
+        return isinstance(value, list) and all(entity(item) for item in value)
+    for name, value in params.items():
+        kind = fields[name]
+        valid = (type(value) is int if kind == "INTEGER" else
+                 entities(value) if kind == "ENTITY_ID_ARRAY" else
+                 isinstance(value, dict) and all(entity(k) and entity(v) for k, v in value.items())
+                 if kind == "ENTITY_ID_MAP" else
+                 isinstance(value, dict) and all(entity(k) and entities(v) for k, v in value.items()))
+        if not valid:
+            raise RecordValidationError(f"chosen_action_params.{name} requires {kind}")
 
 
 def _binding_ref_from_value(value: Any) -> Optional[IdentityRef]:
@@ -107,9 +151,10 @@ class DecisionRecord:
     outcome: Optional[Dict[str, Any]] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
     schema_version: int = SCHEMA_VERSION
+    chosen_action_params: Optional[Dict[str, Any]] = None
 
     def validate(self) -> None:
-        if self.schema_version != SCHEMA_VERSION:
+        if type(self.schema_version) is not int or self.schema_version not in {SCHEMA_VERSION, ACTION_RECORD_SCHEMA_VERSION}:
             raise RecordValidationError(
                 f"unsupported schema_version {self.schema_version}; expected {SCHEMA_VERSION}"
             )
@@ -135,6 +180,12 @@ class DecisionRecord:
             raise RecordValidationError("legal action ids must be unique")
         if self.chosen_action_id not in set(action_ids):
             raise RecordValidationError("chosen_action_id must reference a legal action")
+        if self.schema_version == SCHEMA_VERSION:
+            if self.chosen_action_params is not None:
+                raise RecordValidationError("v1 cannot carry chosen_action_params")
+        else:
+            selected = next(action for action in self.legal_actions if action.action_id == self.chosen_action_id)
+            validate_action_params(self.chosen_action_params, selected.payload)
         _validate_binding_ref(self.binding)
         if self.outcome is not None and not isinstance(self.outcome, dict):
             raise RecordValidationError("outcome must be an object or null")
@@ -144,6 +195,8 @@ class DecisionRecord:
     def to_dict(self) -> Dict[str, Any]:
         self.validate()
         result = asdict(self)
+        if self.schema_version == SCHEMA_VERSION:
+            result.pop("chosen_action_params")
         if self.binding is None:
             result.pop("binding", None)
         return result
@@ -151,10 +204,14 @@ class DecisionRecord:
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "DecisionRecord":
         schema_version = value.get("schema_version", SCHEMA_VERSION)
-        if schema_version != SCHEMA_VERSION:
+        if type(schema_version) is not int or schema_version not in {SCHEMA_VERSION, ACTION_RECORD_SCHEMA_VERSION}:
             raise RecordValidationError(
                 f"unsupported schema_version {schema_version}; expected {SCHEMA_VERSION}"
             )
+        if schema_version == SCHEMA_VERSION and "chosen_action_params" in value:
+            raise RecordValidationError("v1 cannot carry chosen_action_params")
+        if schema_version == ACTION_RECORD_SCHEMA_VERSION and "chosen_action_params" not in value:
+            raise RecordValidationError("v2 requires chosen_action_params; historical values are never inferred")
         actions_value = value.get("legal_actions")
         if not isinstance(actions_value, list):
             raise RecordValidationError("legal_actions must be an array")
@@ -171,6 +228,7 @@ class DecisionRecord:
             observation=value.get("observation", {}),
             legal_actions=[ActionRecord.from_dict(item) for item in actions_value],
             chosen_action_id=value.get("chosen_action_id"),
+            chosen_action_params=value.get("chosen_action_params"),
             pilot=PilotProvenance.from_dict(pilot_value),
             deck_id=value.get("deck_id"),
             deck_version=value.get("deck_version"),

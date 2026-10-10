@@ -175,10 +175,10 @@ class CommanderGymPlayerController(
     private val beforeCallback: () -> Unit = {},
     private val manualHumanGame: Boolean = false,
     private val recorder: RecorderCallbackClient? = null,
-) : com.wingedsheep.ai.RecordedAiPlayerController {
+) : com.wingedsheep.ai.RecordedAiPlayerController, com.wingedsheep.ai.RecordedAiCallbackController {
     override fun chooseRecordedAction(state: ClientGameState, legalActions: List<LegalActionInfo>,
                                       recentGameLog: List<String>, evidence: com.wingedsheep.ai.AiDecisionEvidence): ActionResponse =
-        chooseActionWithPaymentError(state, legalActions, null, recentGameLog, null, evidence)
+        chooseActionWithPaymentError(state, legalActions, null, recentGameLog, null, evidence).response
     private val base = endpoint.toString().trimEnd('/')
     private val bearer = token
     private val requestTimeout = timeout
@@ -196,7 +196,7 @@ class CommanderGymPlayerController(
         recentGameLog: List<String>,
     ): ActionResponse = chooseActionWithPaymentError(
         state, legalActions, pendingDecision, recentGameLog, null,
-    )
+    ).response
 
     override fun chooseActionAfterRejectedPayment(
         state: ClientGameState,
@@ -206,7 +206,12 @@ class CommanderGymPlayerController(
         nativePaymentError: String,
     ): ActionResponse = chooseActionWithPaymentError(
         state, legalActions, pendingDecision, recentGameLog, nativePaymentError,
-    )
+    ).response
+
+    override fun chooseRecordedCallback(state: ClientGameState, legalActions: List<LegalActionInfo>,
+        pendingDecision: PendingDecision?, recentGameLog: List<String>,
+        evidence: com.wingedsheep.ai.AiDecisionEvidence, nativePaymentError: String?): com.wingedsheep.ai.RecordedAiChoice =
+        chooseActionWithPaymentError(state, legalActions, pendingDecision, recentGameLog, nativePaymentError, evidence)
 
     private fun chooseActionWithPaymentError(
         state: ClientGameState,
@@ -215,7 +220,7 @@ class CommanderGymPlayerController(
         recentGameLog: List<String>,
         nativePaymentError: String?,
         evidence: com.wingedsheep.ai.AiDecisionEvidence? = null,
-    ): ActionResponse {
+    ): com.wingedsheep.ai.RecordedAiChoice {
         if (nativePaymentError != null) {
             require(nativePaymentError.isNotBlank()) { "Native payment error must not be blank" }
             require(pendingDecision is SelectManaSourcesDecision) {
@@ -255,34 +260,41 @@ class CommanderGymPlayerController(
                 val native = legalActions.getOrNull(index)
                     ?: error("Commander Gym returned a stale legal action index")
                 val params = json.decodeFromJsonElement<ActionParams>(response.requiredObject("params"))
-                ActionResponse.SubmitAction(parameterize(native, params))
+                com.wingedsheep.ai.RecordedAiChoice(ActionResponse.SubmitAction(parameterize(native, params)),
+                    index, response.requiredObject("params"))
             }
             "decision" -> {
                 require(response.requiredString("playerId") == playerId.value) {
                     "Commander Gym returned a decision for another seat"
                 }
-                ActionResponse.SubmitDecision(
+                com.wingedsheep.ai.RecordedAiChoice(ActionResponse.SubmitDecision(
                     playerId,
                     json.decodeFromJsonElement<DecisionResponse>(response.requiredObject("response")),
-                )
+                ))
             }
             else -> error("Commander Gym returned an unknown response kind")
         }
     }
 
-    override fun decideMulligan(mulliganMessage: MulliganInfo): Boolean {
+    override fun decideMulligan(mulliganMessage: MulliganInfo): Boolean = mulligan(mulliganMessage, null)
+    override fun decideRecordedMulligan(info: MulliganInfo, evidence: com.wingedsheep.ai.AiDecisionEvidence): Boolean = mulligan(info, evidence)
+    private fun mulligan(mulliganMessage: MulliganInfo, evidence: com.wingedsheep.ai.AiDecisionEvidence?): Boolean {
         val response = post("decide-mulligan", buildJsonObject {
             putIdentity()
             put("mulligan", mulliganMessage.toJson())
+            if (evidence != null) put("decisionEvidence", json.encodeToJsonElement(com.wingedsheep.ai.AiDecisionEvidence.serializer(), evidence))
         })
         return response["keep"]?.jsonPrimitive?.booleanOrNull
             ?: error("Commander Gym mulligan response is malformed")
     }
 
-    override fun chooseBottomCards(message: BottomCardsInfo): List<EntityId> {
+    override fun chooseBottomCards(message: BottomCardsInfo): List<EntityId> = bottom(message, null)
+    override fun chooseRecordedBottomCards(info: BottomCardsInfo, evidence: com.wingedsheep.ai.AiDecisionEvidence): List<EntityId> = bottom(info, evidence)
+    private fun bottom(message: BottomCardsInfo, evidence: com.wingedsheep.ai.AiDecisionEvidence?): List<EntityId> {
         val response = post("choose-bottom-cards", buildJsonObject {
             putIdentity()
             put("bottomCards", message.toJson())
+            if (evidence != null) put("decisionEvidence", json.encodeToJsonElement(com.wingedsheep.ai.AiDecisionEvidence.serializer(), evidence))
         })
         val ids = response["cardIds"]?.jsonArray
             ?: error("Commander Gym bottom-card response is malformed")
