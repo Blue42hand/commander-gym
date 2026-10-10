@@ -94,7 +94,7 @@ jobs:
           COMMANDER_GYM_CANONICAL_FIXTURE_ROOT="$fixture_root" \
           COMMANDER_GYM_CANONICAL_FIXTURE_ENGINE_SHA="$(git -C argentum-engine rev-parse HEAD)" \
             ./argentum-engine/gradlew -p argentum-engine :game-server:test \
-              --tests com.wingedsheep.gameserver.recording.CanonicalCallbackFixtureTest --rerun-tasks
+              --tests com.wingedsheep.gameserver.recording.CanonicalCallbackFixtureTest --rerun
           PYTHONPATH=commander-gym python commander-gym/scripts/qualify_canonical_v2_fixture.py \
             --root "$fixture_root" --gym-sha "$(git -C commander-gym rev-parse HEAD)" \
             > canonical-v2-fixture.json
