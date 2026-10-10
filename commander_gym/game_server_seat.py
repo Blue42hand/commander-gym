@@ -140,8 +140,13 @@ class GameServerSeatAdapter:
         if decision_evidence is not None:
             from .captured_choices import verified_observation
             native = verified_observation(decision_evidence, self._player_id)
-            if pending_decision is not None or any(observation.get(key) != value for key, value in native.items()):
+            if ((decision_evidence.get('version') == 1 and pending_decision is not None) or
+                    any(observation.get(key) != value for key, value in native.items() if key not in {'callbackKind', 'nativePaymentError'})):
                 raise GameServerSeatError("native decision evidence does not match callback observation")
+            if decision_evidence.get('version') == 2:
+                if native.get('nativePaymentError') != native_payment_error:
+                    raise GameServerSeatError('native payment feedback differs from authenticated callback')
+                observation['callbackKind'] = native['callbackKind']
             observation.update(schemaHash=decision_evidence['schemaHash'], stateDigest=decision_evidence['stateDigest'])
         if native_payment_error is not None:
             if not isinstance(native_payment_error, str) or not native_payment_error.strip():
@@ -186,12 +191,13 @@ class GameServerSeatAdapter:
                 "chooseAction",
                 observation,
                 {"channel": "decision", "response": choice.response, "metadata": choice.metadata},
+                decision_evidence,
             )
             return response
 
         raise GameServerSeatError("pilot returned an unsupported game-server response")
 
-    def decide_mulligan(self, mulligan: Mapping[str, Any]) -> bool:
+    def decide_mulligan(self, mulligan: Mapping[str, Any], *, decision_evidence: Mapping[str, Any] | None = None) -> bool:
         actions = [
             {
                 "action": {"type": "KeepHand", "playerId": self._player_id},
@@ -213,14 +219,20 @@ class GameServerSeatAdapter:
         observation = self._observation(
             {"mulligan": deepcopy(dict(mulligan))}, actions, None, ()
         )
-        choice = self._choose_with_failure_receipt("decideMulligan", observation)
+        if decision_evidence is not None:
+            from .captured_choices import verified_observation
+            native = verified_observation(decision_evidence, self._player_id)
+            if decision_evidence.get('version') != 2 or native['callbackKind'] != 'decideMulligan' or native['state'] != {'mulligan': dict(mulligan)}:
+                raise GameServerSeatError('native mulligan evidence does not match callback')
+            observation = {**native, 'schemaHash': decision_evidence['schemaHash'], 'stateDigest': decision_evidence['stateDigest']}
+        choice = self._choose_with_failure_receipt("decideMulligan", observation, decision_evidence)
         if not isinstance(choice, ArgentumActionChoice) or choice.params:
             raise GameServerSeatError("mulligan callback requires an unparameterized keep/take choice")
         keep = choice.action_id == 0
-        self._record("decideMulligan", observation, {"keep": keep, "metadata": choice.metadata})
+        self._record("decideMulligan", observation, {"keep": keep, "metadata": choice.metadata}, decision_evidence)
         return keep
 
-    def choose_bottom_cards(self, bottom: Mapping[str, Any]) -> list[Any]:
+    def choose_bottom_cards(self, bottom: Mapping[str, Any], *, decision_evidence: Mapping[str, Any] | None = None) -> list[Any]:
         decision_id = bottom.get("decisionId", f"bottom-cards:{self._player_id}")
         if not isinstance(decision_id, str) or not decision_id:
             raise GameServerSeatError("bottom-cards callback decisionId must be a string when supplied")
@@ -241,7 +253,15 @@ class GameServerSeatAdapter:
             "cards": deepcopy(bottom.get("cards", {})),
         }
         observation = self._observation({}, (), pending, ())
-        choice = self._choose_with_failure_receipt("chooseBottomCards", observation)
+        if decision_evidence is not None:
+            from .captured_choices import verified_observation
+            native = verified_observation(decision_evidence, self._player_id)
+            native_pending = native['pendingDecision']
+            if (decision_evidence.get('version') != 2 or native['callbackKind'] != 'chooseBottomCards' or
+                    any(native_pending.get(key) != value for key, value in bottom.items())):
+                raise GameServerSeatError('native bottom evidence does not match callback')
+            observation = {**native, 'schemaHash': decision_evidence['schemaHash'], 'stateDigest': decision_evidence['stateDigest']}
+        choice = self._choose_with_failure_receipt("chooseBottomCards", observation, decision_evidence)
         if not isinstance(choice, ArgentumDecisionChoice):
             raise GameServerSeatError("bottom-cards callback requires a structured response")
         selected = choice.response.get("selectedCards")
@@ -257,6 +277,7 @@ class GameServerSeatAdapter:
             "chooseBottomCards",
             observation,
             {"selectedCards": selected, "metadata": choice.metadata},
+            decision_evidence,
         )
         return deepcopy(selected)
 

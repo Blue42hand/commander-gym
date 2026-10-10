@@ -300,7 +300,22 @@ class NativeGameCapture:
                             since = self._terminal_since.setdefault(game_id, time.monotonic())
                             if journal.pending_decisions and time.monotonic() - since < self.terminal_grace_seconds:
                                 continue  # preserve later paid-response/usage receipts during concession
-                            gaps = ['canonical_game_server_training_adapter_unavailable']
+                            gaps = []
+                            if self._initializations[game_id]['payload'].get('callbackEvidenceVersion') == 2:
+                                try:
+                                    from .canonical_capture import build_capture_envelope
+                                    report = inspect_journal(directory, cancel=self.stop_requested)
+                                    envelope = build_capture_envelope(directory, report, cancel=self.stop_requested)
+                                    attached = [row['payload']['envelope'] for row in report['rows'] if row['kind'] == 'raw_evidence']
+                                    if attached:
+                                        if len(attached) != 1 or attached[0] != envelope:
+                                            raise JournalError('recovered canonical envelope differs from verified source')
+                                    else:
+                                        journal.raw_evidence(envelope)
+                                except (OSError, ValueError, KeyError, TypeError, IndexError):
+                                    gaps.append('canonical_v2_callback_or_lifecycle_unavailable')
+                            else:
+                                gaps.append('canonical_game_server_training_adapter_unavailable')
                             if list(directory.glob('native-gap-*.json')):
                                 gaps.append('native_capture_gap_marker')
                             if len(cursor.revisions) > 1:

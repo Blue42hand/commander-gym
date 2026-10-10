@@ -72,8 +72,8 @@ jobs:
       - uses: actions/checkout@v6
         with:
           repository: Blue42hand/argentum-engine
-          # Exact native baseline for the staged manual-runtime package; no host activation.
-          ref: 45907c29a10aff549ce542f4cc7f6ea6359debc1
+          # Exact reviewed native canonical-v2 merge; source qualification only.
+          ref: cc69f83c48be72ac9d9a2325b65391a0f8def163
           path: argentum-engine
       - uses: actions/setup-java@v5
         with:
@@ -87,13 +87,37 @@ jobs:
         run: ./argentum-engine/gradlew -p commander-gym/jvm-adapter test jar
         env:
           ARGENTUM_ENGINE_DIR: ${{ github.workspace }}/argentum-engine
+      - name: Qualify actual native writer and canonical v2 restore
+        run: |
+          fixture_root=$(mktemp -d)
+          chmod 700 "$fixture_root"
+          COMMANDER_GYM_CANONICAL_FIXTURE_ROOT="$fixture_root" \
+          COMMANDER_GYM_CANONICAL_FIXTURE_ENGINE_SHA="$(git -C argentum-engine rev-parse HEAD)" \
+            ./argentum-engine/gradlew -p argentum-engine :game-server:test \
+              --tests com.wingedsheep.gameserver.recording.CanonicalCallbackFixtureTest --rerun-tasks
+          PYTHONPATH=commander-gym python commander-gym/scripts/qualify_canonical_v2_fixture.py \
+            --root "$fixture_root" --gym-sha "$(git -C commander-gym rev-parse HEAD)" \
+            > canonical-v2-fixture.json
+          cat canonical-v2-fixture.json
       - name: Package and inspect matched server adapter
         run: |
           ./argentum-engine/gradlew -p argentum-engine :game-server:bootJar \
             -PaiControllerAdapterJar="$GITHUB_WORKSPACE/commander-gym/jvm-adapter/build/libs/commander-gym-argentum-adapter.jar"
+          server_jar=$(find argentum-engine/game-server/build/libs -name '*.jar' ! -name '*-plain.jar' | head -1)
           python commander-gym/scripts/qualify_manual_luna_release.py \
-            --server-jar "$(find argentum-engine/game-server/build/libs -name '*.jar' ! -name '*-plain.jar' | head -1)" \
+            --server-jar "$server_jar" \
             --adapter-jar commander-gym/jvm-adapter/build/libs/commander-gym-argentum-adapter.jar \
             --native-sha "$(git -C argentum-engine rev-parse HEAD)" \
             --gym-sha "$(git -C commander-gym rev-parse HEAD)" \
             --output manual-luna-release.json
+          mkdir matched-release
+          cp "$server_jar" matched-release/server.jar
+          cp commander-gym/jvm-adapter/build/libs/commander-gym-argentum-adapter.jar matched-release/adapter.jar
+          cp manual-luna-release.json canonical-v2-fixture.json matched-release/
+      - name: Preserve matched source qualification artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: canonical-v2-matched-release
+          path: matched-release/
+          retention-days: 7
+          compression-level: 0

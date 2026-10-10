@@ -19,10 +19,11 @@ from pathlib import Path
 from typing import Any, Iterable, Sequence
 
 from .records import DecisionRecord, RecordValidationError, StructuredDecisionRecord
+from .canonical_contract import action_target, target_schema_version
 from .run_records import RunRecord
 from .training_guard import benchmark_decision_ids
 
-DATASET_EXPORT_SCHEMA_VERSION = 1
+DATASET_EXPORT_SCHEMA_VERSION = 2
 
 EvidenceRecord = DecisionRecord | StructuredDecisionRecord
 
@@ -67,7 +68,7 @@ def _input_for_record(record: EvidenceRecord) -> dict[str, Any]:
 
 def _target_for_record(record: EvidenceRecord) -> dict[str, Any]:
     if isinstance(record, DecisionRecord):
-        return {"chosen_action_id": record.chosen_action_id}
+        return action_target(record)
     if isinstance(record, StructuredDecisionRecord):
         return {"response": record.response}
     raise DatasetExportError(
@@ -99,6 +100,7 @@ def build_run_dataset_rows(
     records: Iterable[EvidenceRecord],
     *,
     held_out_decision_ids: Iterable[str] = (),
+    schema_version: int | None = None,
 ) -> list[dict[str, Any]]:
     """Build self-contained research rows from one validated run.
 
@@ -114,6 +116,10 @@ def build_run_dataset_rows(
     participants_by_seat = {participant.seat: participant for participant in run.participants}
 
     materialized = list(records)
+    try:
+        export_version = target_schema_version(materialized, schema_version)
+    except RecordValidationError as error:
+        raise DatasetExportError(str(error)) from error
     record_ids: list[str] = []
     for record in materialized:
         _record_kind(record)
@@ -172,7 +178,7 @@ def build_run_dataset_rows(
     for record in materialized:
         rows.append(
             {
-                "dataset_schema_version": DATASET_EXPORT_SCHEMA_VERSION,
+                "dataset_schema_version": export_version,
                 "record_kind": _record_kind(record),
                 "input": _input_for_record(record),
                 "target": _target_for_record(record),
@@ -191,6 +197,7 @@ def write_run_dataset_jsonl(
     records: Iterable[EvidenceRecord],
     *,
     benchmark_paths: Sequence[str | os.PathLike[str]] = (),
+    schema_version: int | None = None,
 ) -> None:
     """Atomically write one run as deterministic JSONL training/evaluation evidence.
 
@@ -204,6 +211,7 @@ def write_run_dataset_jsonl(
         run,
         records,
         held_out_decision_ids=held_out,
+        schema_version=schema_version,
     )
 
     target = Path(path)

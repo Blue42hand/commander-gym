@@ -333,10 +333,12 @@ class GameServerSidecarHandler(BaseHTTPRequestHandler):
                 }
             raise TypeError("unsupported adapter response")
         if callback == "decideMulligan":
-            self._require_keys(request, common | {"mulligan"})
-            return {"keep": adapter.decide_mulligan(request.get("mulligan"))}
-        self._require_keys(request, common | {"bottomCards"})
-        return {"cardIds": adapter.choose_bottom_cards(request.get("bottomCards"))}
+            self._require_keys(request, common | {"mulligan", "decisionEvidence"})
+            return {"keep": (adapter.decide_mulligan(request.get("mulligan")) if request.get("decisionEvidence") is None else
+                             adapter.decide_mulligan(request.get("mulligan"), decision_evidence=request["decisionEvidence"]))}
+        self._require_keys(request, common | {"bottomCards", "decisionEvidence"})
+        return {"cardIds": (adapter.choose_bottom_cards(request.get("bottomCards")) if request.get("decisionEvidence") is None else
+                            adapter.choose_bottom_cards(request.get("bottomCards"), decision_evidence=request["decisionEvidence"]))}
 
     @staticmethod
     def _require_keys(request: Mapping[str, Any], allowed: set[str]) -> None:
