@@ -68,8 +68,11 @@ class NativeLegalFixtureTests(unittest.TestCase):
         self.assertEqual(response.usage.total_tokens,0)
         client.calls=128
         with self.assertRaisesRegex(ValueError,'bound'):client.create(**request(view()))
-        client=NativeLegalFixtureClient()
-        with patch('commander_gym.qa_legal_responses.time.monotonic',return_value=client._started+900):
+        # Exact synthetic origin avoids floating-point subtraction rounding at the deadline.
+        client=NativeLegalFixtureClient();client._started=0.0
+        with patch('commander_gym.qa_legal_responses.time.monotonic',return_value=899.0):
+            self.assertEqual(client.create(**request(view())).usage.total_tokens,0)
+        with patch('commander_gym.qa_legal_responses.time.monotonic',return_value=900.0):
             with self.assertRaisesRegex(ValueError,'bound'):client.create(**request(view()))
         req=request(view());req['instructions']='x'*(2*1024*1024)
         with self.assertRaisesRegex(ValueError,'unsupported'):NativeLegalFixtureClient().create(**req)
