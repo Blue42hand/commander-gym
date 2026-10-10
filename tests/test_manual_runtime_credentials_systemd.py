@@ -202,7 +202,7 @@ class SystemdCredentialTests(unittest.TestCase):
         for role in UNITS:
             with self.subTest(role=role):
                 report = self.unit(role)
-                self.assertEqual('accepted', report['result'])
+                self.assertEqual('accepted', report['result'], report)
                 self.assertEqual((0, 0, '0o440', '0o550', True),
                                  (report['copyUid'], report['copyGid'], report['copyMode'], report['directoryMode'], report['readonly']))
                 pid = self.ctl('show', '-p', 'MainPID', '--value', UNITS[role]).stdout.strip()
