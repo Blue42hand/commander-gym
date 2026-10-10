@@ -133,9 +133,10 @@ def probe(role, scenario):
                         metadata[label]['readonly'] = bool(os.statvfs(path).f_flag & os.ST_RDONLY)
                     except OSError:
                         metadata[label]['readonly'] = None
-                except OSError:
-                    metadata[label] = {'accessible': False}
-            print(json.dumps({'result': 'unexpected-hold', 'code': str(error) if isinstance(error, ManualRuntimeError) else type(error).__name__, 'metadata': metadata}), flush=True)
+                except OSError as failure:
+                    metadata[label] = {'accessible': False, 'errno': failure.errno}
+            print(json.dumps({'result': 'unexpected-hold', 'code': str(error) if isinstance(error, ManualRuntimeError) else type(error).__name__, 'directoryPath': str(directory), 'metadata': metadata}), flush=True)
+            time.sleep(15)
             raise AssertionError('valid fixture held') from None
         assert not observed, 'secret reader reached before service guard'
         print(json.dumps({'result': 'held', 'role': role, 'code': type(error).__name__}), flush=True)
@@ -191,7 +192,14 @@ class SystemdCredentialTests(unittest.TestCase):
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
             if REPORT.exists() and REPORT.stat().st_size:
-                return json.loads(REPORT.read_text())
+                result = json.loads(REPORT.read_text())
+                if result['result'] == 'unexpected-hold':
+                    pid = self.ctl('show', '-p', 'MainPID', '--value', UNITS[role]).stdout.strip()
+                    diagnostic = subprocess.run(['nsenter', '-t', pid, '-m', '/usr/bin/python3', '-c',
+                        "import os,json,sys; p=sys.argv[1]; print(json.dumps({'present':os.path.exists(p),'siblings':os.listdir('/run/credentials')}))",
+                        '/run/credentials/' + UNITS[role]], capture_output=True, text=True, timeout=10)
+                    result['rootNamespaceDiagnostic'] = diagnostic.stdout.strip() or diagnostic.stderr.strip()
+                return result
             time.sleep(.05)
         raise AssertionError(self.ctl('status', UNITS[role], check=False).stdout)
 
