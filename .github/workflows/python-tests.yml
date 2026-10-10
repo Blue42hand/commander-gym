@@ -72,8 +72,8 @@ jobs:
       - uses: actions/checkout@v6
         with:
           repository: Blue42hand/argentum-engine
-          # Exact reviewed Redis QA source candidate; source qualification only.
-          ref: 6b515df2b01ce28b5885f31c39593bacccaa92ed
+          # Exact reviewed Redis QA native merge; source qualification only.
+          ref: c56d1b336d024998cf193101bb12c50026df7537
           path: argentum-engine
       - uses: actions/setup-java@v5
         with:
