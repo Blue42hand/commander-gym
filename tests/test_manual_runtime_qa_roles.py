@@ -86,11 +86,12 @@ class QARoleTests(unittest.TestCase):
     def test_native_configtree_uses_literal_token_not_credential_loader(self):
         profile=self.profile;uid=profile['identities']['nativeUid']
         message=dict(role='native',profile=profile,runtimeId=digest(profile),sequence=2,importPaths=[],sidecarGid=777)
-        spec=Mock(arguments=('java','fake'),environment={})
+        from commander_gym.manual_runtime_launch import LaunchSpec
+        spec=LaunchSpec(arguments=('java','fake'),environment={})
         with patch.object(roles.os,'getuid',return_value=uid),patch.object(roles.os,'geteuid',return_value=uid),patch.dict(roles.os.environ,{},clear=True),patch.object(roles.signal,'signal'),patch.object(roles,'_private_role_directory'),patch.object(Path,'iterdir',return_value=iter([])),patch.object(roles,'_literal_file') as literal,patch('commander_gym.manual_runtime_launch.native_spec',return_value=spec),patch.object(roles.os,'execve') as execute:
             roles.run_child(message)
             self.assertEqual(literal.call_args.args[1],roles.TOKEN.encode())
-            execute.assert_called_once_with('java',spec.arguments,spec.environment)
+            execute.assert_called_once_with('java',(*spec.arguments,'--native.qa.callback-gate-enabled=true'),spec.environment)
 
     def test_proxy_requires_new_sealed_dependency_closure(self):
         from commander_gym.qa_proxy_launch import proxy_spec

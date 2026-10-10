@@ -163,7 +163,7 @@ def run_child(message):
         def qa_capture(root, pins, **kwargs):
             # The selected catalog still declares the production Pilot identity;
             # these pins describe the actual fixture execution, not a model call.
-            pins = {**pins, 'models': {'provider':'qa-schema-fixture','model':'none',
+            pins = {**pins, 'models': {'provider':'qa-native-legal-fixture','model':'none',
                                      'configured':pins['models']},
                     'config': {**pins['config'], 'qaExecution': {
                         'providerMode':'fake','credentialSource':'qa-placeholder-only'}}}
@@ -174,13 +174,13 @@ def run_child(message):
         from .game_server_binding_openai_sidecar import BindingOpenAIGameServerConfig, build_binding_openai_game_server_sidecar
         from .game_server_openai_sidecar import OpenAIGameServerSidecarConfig
         from .recorder_bridge import RemoteCaptureSink
-        from .qa_fake_responses import SchemaFixtureClient
+        from .qa_legal_responses import NativeLegalFixtureClient
         catalog = Path(profile['artifacts']['catalog']['root'])
         config = BindingOpenAIGameServerConfig(OpenAIGameServerSidecarConfig(TOKEN, 'qa-no-provider',
             timeout=90, max_attempts=2), catalog/profile['catalog']['roster'], catalog, manual_uncapped=True)
         capture = RemoteCaptureSink(Path(profile['paths']['recorderSocket']).parent/'sidecar.sock',
                                     recorder_uid=profile['identities']['nativeUid'])
-        server = build_binding_openai_game_server_sidecar(config, client=SchemaFixtureClient(), game_capture=capture)
+        server = build_binding_openai_game_server_sidecar(config, client=NativeLegalFixtureClient(), game_capture=capture)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:
@@ -196,6 +196,8 @@ def run_child(message):
         token_path = config/'commander-gym.sidecar.token'
         _literal_file(token_path, TOKEN.encode())
         spec = native_spec(runtime, credential_directory=config)
+        from dataclasses import replace
+        spec = replace(spec, arguments=(*spec.arguments, "--native.qa.callback-gate-enabled=true"))
         os.execve(spec.arguments[0], spec.arguments, spec.environment)
     else:
         from .qa_proxy_launch import proxy_spec
