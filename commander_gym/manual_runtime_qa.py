@@ -16,6 +16,7 @@ import resource
 import re
 import tempfile
 import os
+import pwd
 from pathlib import Path
 import socket
 import stat
@@ -55,6 +56,16 @@ def root_bytes(path, maximum=4*1024*1024):
     raw = protected_bytes(path, uid=0, max_bytes=maximum)
     info = path.lstat()
     require(info.st_nlink == 1 and stat.S_IMODE(info.st_mode) & 0o077 == 0, 'qa_root_file')
+    return raw
+
+
+def registry_bytes(profile):
+    path = Path(profile['paths']['registryPath'])
+    raw = protected_bytes(path,uid=0,max_bytes=4*1024*1024)
+    info = path.lstat();mode = stat.S_IMODE(info.st_mode)
+    require(info.st_nlink == 1 and mode in (0o600,0o640),'qa_registry_file')
+    if mode == 0o640:
+        require(info.st_gid == pwd.getpwuid(profile['identities']['nativeUid']).pw_gid,'qa_registry_reader_group')
     return raw
 
 
@@ -200,7 +211,7 @@ class QAFileHost:
         self.ci = decode(root_bytes(ROOT/'source-ci.json'))
         validate_authority(self.authority,self.production,self.qa,self.ci,now=time.time())
         require(raw_digest(root_bytes(ROOT/'production-authority.json')) == self.authority['productionAuthoritySha256'], 'qa_p_authority_seal')
-        require(raw_digest(root_bytes(Path(self.qa['paths']['registryPath']))) == self.authority['qaAuthoritySha256'], 'qa_q_authority_seal')
+        require(raw_digest(registry_bytes(self.qa)) == self.authority['qaAuthoritySha256'], 'qa_q_authority_seal')
         require(Path(__file__).resolve() == ROOT/'implementation/commander_gym/manual_runtime_qa.py', 'qa_implementation_layout')
         require(raw_digest(root_bytes(Path(__file__))) == self.authority['implementationSha256'], 'qa_implementation_seal')
         verify_artifacts(self.qa)

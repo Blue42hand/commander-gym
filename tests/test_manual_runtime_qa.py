@@ -69,6 +69,19 @@ class QAContractTests(unittest.TestCase):
         class Subclass(qa.QAFileHost):pass
         with self.assertRaisesRegex(ManualRuntimeError,'qa_dedicated_host_required'):qa.promote_qa(Subclass.__new__(Subclass))
 
+    def test_registry_preserves_existing_root_private_native_group_read_contract(self):
+        import types
+        path=Path(self.q['paths']['registryPath']);raw=path.read_bytes()
+        actual=Path.lstat
+        def metadata(path):
+            rows=list(actual(path));rows[4]=0;rows[5]=777;return os.stat_result(rows)
+        with patch.object(qa,'protected_bytes',return_value=raw),patch.object(Path,'lstat',metadata),patch.object(qa.pwd,'getpwuid',return_value=types.SimpleNamespace(pw_gid=777)):
+            path.chmod(0o640);self.assertEqual(qa.registry_bytes(self.q),raw)
+            with patch.object(qa.pwd,'getpwuid',return_value=types.SimpleNamespace(pw_gid=778)),self.assertRaisesRegex(ManualRuntimeError,'qa_registry_reader_group'):qa.registry_bytes(self.q)
+            path.chmod(0o644)
+            with self.assertRaisesRegex(ManualRuntimeError,'qa_registry_file'):qa.registry_bytes(self.q)
+            path.chmod(0o600);self.assertEqual(qa.registry_bytes(self.q),raw)
+
     def test_qa_implementation_has_its_own_exact_ci_and_import_inventory(self):
         for mutate in (lambda a:a['qaSourceCi'].update(sha='d'*40),lambda a:a['qaSourceCi']['checks'][0].update(conclusion='skipped'),lambda a:a['executionInventory'].pop('implementation/commander_gym/manual_runtime_rollout.py'),lambda a:a['executionInventory'].update({'implementation/commander_gym/../escape.py':'a'*64})):
             value=copy.deepcopy(self.authority);mutate(value)
