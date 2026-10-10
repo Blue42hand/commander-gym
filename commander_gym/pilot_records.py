@@ -17,6 +17,7 @@ fabricating legal actions.
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from typing import Any, Mapping
 
@@ -82,6 +83,8 @@ def _without_live_routing(observation: Mapping[str, Any]) -> dict[str, Any]:
     if isinstance(pending, Mapping):
         recorded_pending = dict(pending)
         recorded_pending.pop("decisionId", None)
+        if observation.get("schemaHash") == hashlib.sha256(b"argentum-ai-callback-seat-evidence-v2").hexdigest():
+            recorded_pending.pop("id", None)
         recorded["pendingDecision"] = recorded_pending
 
     return recorded
@@ -241,6 +244,8 @@ def structured_decision_record_from_execution_trace(
 def decision_record_from_execution_trace(
     trace: PilotExecutionTrace,
     context: PilotRecordContext,
+    *,
+    schema_version: int = 1,
 ) -> DecisionRecord:
     """Convert one successful enumerated Argentum action trace into ``DecisionRecord``.
 
@@ -293,6 +298,10 @@ def decision_record_from_execution_trace(
     }
 
     record = DecisionRecord(
+        schema_version=schema_version,
+        chosen_action_params=(dict(trace.submitted["params"])
+                              if schema_version == 2 and isinstance(trace.submitted.get("params"), dict)
+                              else None),
         game_id=context.game_id,
         decision_id=context.decision_id,
         decision_type=_decision_type(trace),

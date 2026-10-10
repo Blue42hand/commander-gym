@@ -46,42 +46,32 @@ It makes no LAN/tailnet/public-access or production HTTPS claim. The guest owner
 must verify its proposed nginx ABI/runtime and literal fixture TLS bytes before
 execution. This repository does not ship that OS-specific binary or TLS fixture.
 
-## Canonical recording decision still required
+## Paired canonical v2 source qualification
 
-These entries intentionally preserve the existing incomplete recording outcome.
-Complete authenticated callback conversion needs a paired native evidence
-protocol extension, not merely a new recorder pin:
+The bounded canonical v2 extension supplies the missing native callback and
+parameter receipts in a new matched native/Gym pair. The ordinary/v1 controller
+interfaces and their historical recordings remain unchanged. See
+[canonical callback recording v2](canonical-callback-recording-v2.md) for the
+explicit action parameters, typed structured/mulligan/bottom receipts, exact
+native acceptance and masking, and restored-state continuity requirements.
+Action-record/raw-envelope/dataset-export v2 preserve submitted parameters;
+structured-response records and RunRecord retain their existing schema.
 
-- `GameSession.beginAiDecisionEvidence` currently excludes pending structured
-  decisions. Extend its native input/result receipts to carry one correlation ID,
-  exact masked pending decision/response contract, authoritative accepted response
-  or explicit disposition, and the resulting masked seat observation/digest.
-- Parameterized choices need receipts for the offered template plus exact supplied
-  parameters and the action actually parameterized/validated/applied by Argentum.
-  Current exact offered-action equality cannot authenticate these choices.
-- Mulligan/bottom callbacks need the same native correlation/application/result
-  evidence. Their existing offers/submissions do not authenticate the bridge's
-  UUID or provide a native masked result digest. Gym-created semantic labels are
-  not a substitute for native legal choice identity.
-- The engine controller/provider and JVM adapter must transport this evidence
-  for all callback kinds. A new engine pin and matched adapter/server packages are
-  therefore essential, in addition to a new Gym capture/converter pin.
+The deterministic `CanonicalCallbackFixtureTest` uses the real native writer,
+native application and committed-state persistence restore, with fake answers
+recorded before native application. The offline Gym qualification driver reopens
+the recorder between callbacks and validates the complete canonical envelope.
+This complements shared-lobby/provider and JVM callback transport acceptance. It
+is not guest, real-provider, model-quality or production qualification.
 
-Existing `DecisionRecord`, `StructuredDecisionRecord`, `RunRecord` and raw-envelope
-schemas can represent successful choices; no parallel training schema is needed.
-However `PrivateGameJournal.raw_evidence/finish` currently require canonical IDs
-to equal every callback ID, including technical failures. A failed, stale or
-cancelled callback cannot truthfully have a chosen action. The conservative
-existing-contract option is to retain completeness gaps for those runs. Making
-such diagnostic-only runs complete would require an explicit coverage-contract
-decision separating executed decisions from diagnostic callbacks while retaining
-every raw receipt. This change is not made here. Native restart/resume eligibility
-also needs explicit correlated receipt continuity rather than assuming replay.
+Failed, stale, cancelled, rejected, overridden, unmatched or uncertain callbacks
+still preserve recording incompleteness. No fabricated choices, inferred parameter
+migration, administrative model input or gap removal can certify such a run.
 
-The bounded next decision is whether to extend the native producer/controller
-evidence protocol for all successful callback kinds while keeping failed/stale/
-cancelled runs incomplete. Until that paired source change is reviewed, a genuine
-complete-recording interruption/recovery acceptance driver is blocked. Removing
-gaps, assigning fabricated digests/choices or using admin state as pilot input is
-not an implementation option. The host owner alone consumes explicit new pins
-and performs guest qualification; no frozen artifact is silently substituted.
+The host owner needs an explicit new matched source/artifact/profile proposal and
+successful exact CI before reviewing bounded guest QA. These four credential-free
+roles and their closed fake start-policy remain the seam; this change neither
+extends executable inventory nor grants host execution. Existing historical pins,
+failed captures and authority remain unchanged. No frozen artifact is silently
+substituted, and no guest boot, service activation or credential loading follows
+from source qualification.

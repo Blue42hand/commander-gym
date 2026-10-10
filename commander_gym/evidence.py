@@ -22,6 +22,8 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from .records import DecisionRecord, RecordValidationError, StructuredDecisionRecord
+from .records import validate_action_params
+from .canonical_contract import action_target, target_schema_version
 from .run_records import (
     RUN_STATUS_COMPLETED,
     RUN_STATUS_FAILED,
@@ -30,7 +32,7 @@ from .run_records import (
 )
 from .storage import LocalArtifactStore, StorageLayout, StoredBlob
 
-RAW_EVIDENCE_SCHEMA_VERSION = 1
+RAW_EVIDENCE_SCHEMA_VERSION = 2
 RAW_EVIDENCE_CATALOG_SCHEMA_VERSION = 1
 RAW_EVIDENCE_KIND = "commander-gym.raw-run-evidence"
 MODEL_IO_SCHEMA_VERSION = 1
@@ -249,7 +251,7 @@ def _input_for_record(record: EvidenceRecord) -> dict[str, Any]:
 
 def _target_for_record(record: EvidenceRecord) -> dict[str, Any]:
     if isinstance(record, DecisionRecord):
-        target: dict[str, Any] = {"chosen_action_id": record.chosen_action_id}
+        target: dict[str, Any] = action_target(record)
     elif isinstance(record, StructuredDecisionRecord):
         target = {"response": record.response}
     else:
@@ -393,6 +395,7 @@ def build_raw_evidence_envelope(
     records: Iterable[EvidenceRecord],
     *,
     commander_gym_revision: str,
+    schema_version: int | None = None,
 ) -> dict[str, Any]:
     """Build one immutable chronological raw-evidence envelope.
 
@@ -410,6 +413,10 @@ def build_raw_evidence_envelope(
     _require_string(run.engine.revision, "run.engine.revision")
 
     materialized = list(records)
+    try:
+        evidence_version = target_schema_version(materialized, schema_version)
+    except RecordValidationError as error:
+        raise EvidenceError(str(error)) from error
     identity_epoch = _validate_run_decision_join(run, materialized)
     decisions: list[dict[str, Any]] = []
     for sequence_index, record in enumerate(materialized):
@@ -424,7 +431,7 @@ def build_raw_evidence_envelope(
         )
 
     envelope = {
-        "evidence_schema_version": RAW_EVIDENCE_SCHEMA_VERSION,
+        "evidence_schema_version": evidence_version,
         "kind": RAW_EVIDENCE_KIND,
         "producer": {
             "implementation": "commander-gym",
@@ -515,7 +522,8 @@ def validate_raw_evidence_envelope(value: Mapping[str, Any]) -> None:
 
     if not isinstance(value, Mapping):
         raise EvidenceError("raw evidence envelope must be an object")
-    if value.get("evidence_schema_version") != RAW_EVIDENCE_SCHEMA_VERSION:
+    version = value.get("evidence_schema_version")
+    if type(version) is not int or version not in {1, 2}:
         raise EvidenceError(
             "unsupported raw evidence schema_version "
             f"{value.get('evidence_schema_version')!r}; expected {RAW_EVIDENCE_SCHEMA_VERSION}"
@@ -563,6 +571,39 @@ def validate_raw_evidence_envelope(value: Mapping[str, Any]) -> None:
             raise EvidenceError("raw evidence decision input/target must be objects")
         if not isinstance(provenance, Mapping):
             raise EvidenceError("raw evidence decision provenance must be an object")
+        if decision["record_kind"] == "action":
+            if version == 1 and ("chosen_action_params" in target or provenance.get("record_schema_version") == 2):
+                raise EvidenceError("v1 targets cannot carry chosen_action_params")
+            if version == 2:
+                if set(target) - {"chosen_action_id", "chosen_action_params", "model_io"}:
+                    raise EvidenceError("v2 action target contains an unsupported field")
+                if provenance.get("record_schema_version") != 2:
+                    raise EvidenceError("v2 action target requires an explicit v2 source record")
+                legal = input_value.get("legal_actions")
+                if not isinstance(legal, list):
+                    raise EvidenceError("v2 action input requires native legal_actions")
+                selected = [item for item in legal if isinstance(item, Mapping)
+                            and item.get("action_id") == target.get("chosen_action_id")]
+                if len(selected) != 1 or not isinstance(selected[0].get("payload"), Mapping):
+                    raise EvidenceError("v2 target must select exactly one offered native action")
+                try:
+                    validate_action_params(target.get("chosen_action_params"), selected[0]["payload"])
+                except RecordValidationError as error:
+                    raise EvidenceError(str(error)) from error
+        elif version == 2:
+            if provenance.get("record_schema_version") != 1:
+                raise EvidenceError("v2 structured target requires source record v1")
+            if set(target) - {"response", "model_io"}:
+                raise EvidenceError("v2 structured target contains an unsupported field")
+            response = target.get("response")
+            if not isinstance(response, Mapping) or not response or "decisionId" in response:
+                raise EvidenceError("v2 structured target requires a routing-free response")
+            observation = input_value.get("observation")
+            if not isinstance(observation, Mapping):
+                raise EvidenceError("v2 structured input requires an observation object")
+            pending = observation.get("pendingDecision")
+            if isinstance(pending, Mapping) and ({"id", "decisionId"} & set(pending)):
+                raise EvidenceError("v2 structured input contains live routing")
         _validate_envelope_model_io(input_value, target, provenance)
         decision_id = _require_string(
             provenance.get("decision_id"), "raw evidence provenance.decision_id"
@@ -687,7 +728,7 @@ class RawEvidenceStore:
             "run_id": run_id,
             "artifact_id": artifact.artifact_id,
             "artifact_size_bytes": artifact.size_bytes,
-            "evidence_schema_version": RAW_EVIDENCE_SCHEMA_VERSION,
+            "evidence_schema_version": envelope["evidence_schema_version"],
             "identity_epoch": envelope["identity_epoch"],
             "qualification": envelope["qualification"],
             "producer": envelope["producer"],

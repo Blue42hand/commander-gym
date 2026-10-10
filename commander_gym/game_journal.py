@@ -443,6 +443,10 @@ class PrivateGameJournal:
         if run["run_id"] != self.run_id or run["game_id"] != self.game_id:
             raise JournalError("raw evidence identity mismatch")
         rows = inspect_journal(self.directory)["rows"]
+        if envelope['evidence_schema_version'] == 2:
+            pins = rows[0]['payload']['pins']
+            if run['engine']['revision'] != pins['engine'] or envelope['producer']['revision'] != pins['gym']:
+                raise JournalError('canonical v2 envelope differs from immutable source pins')
         if any(row["kind"] == "raw_evidence" for row in rows):
             raise JournalError("canonical raw evidence already attached")
         captured = (row['payload']['decision_id'] for row in rows if row['kind'] == 'seat_callback')

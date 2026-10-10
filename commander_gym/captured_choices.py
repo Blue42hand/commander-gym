@@ -24,24 +24,47 @@ from .pilot_execution import PilotExecutionTrace
 from .pilot_records import PilotRecordContext, decision_record_from_execution_trace
 
 SCHEMA_HASH = hashlib.sha256(b'argentum-ai-enumerated-seat-evidence-v1').hexdigest()
+CALLBACK_SCHEMA_HASH = hashlib.sha256(b'argentum-ai-callback-seat-evidence-v2').hexdigest()
 
 
 def verified_observation(context: Mapping[str, Any], seat: str) -> dict[str, Any]:
-    if (not isinstance(context, Mapping) or type(context.get('version')) is not int or
-            context['version'] != 1 or context.get('schemaHash') != SCHEMA_HASH or
+    version = context.get('version') if isinstance(context, Mapping) else None
+    if (not isinstance(context, Mapping) or type(version) is not int or
+            version not in {1, 2} or context.get('schemaHash') != (SCHEMA_HASH if version == 1 else CALLBACK_SCHEMA_HASH) or
             not isinstance(context.get('correlationId'), str) or not context['correlationId'] or
             not isinstance(context.get('observationBody'), str)):
         raise JournalError('unsupported native decision evidence')
     if hashlib.sha256(context['observationBody'].encode('utf-8')).hexdigest() != context.get('stateDigest'):
         raise JournalError('native decision observation hash mismatch')
     observation = json.loads(context['observationBody'])
-    if (not isinstance(observation, dict) or set(observation) != {'type', 'state', 'legalActions',
-            'pendingDecision', 'recentGameLog', 'perspectivePlayerId', 'agentToAct', 'terminated'} or
+    if not isinstance(observation, dict):
+        raise JournalError('native decision observation must be an object')
+    keys = {'type', 'state', 'legalActions', 'pendingDecision', 'recentGameLog', 'perspectivePlayerId', 'agentToAct', 'terminated'}
+    if version == 2:
+        keys.add('callbackKind')
+        if observation.get('callbackKind') == 'paymentCorrection':
+            keys.add('nativePaymentError')
+            if not isinstance(observation.get('nativePaymentError'), str) or not observation['nativePaymentError'].strip():
+                raise JournalError('native payment feedback is unavailable')
+    if (not isinstance(observation, dict) or set(observation) != keys or
             observation['type'] != 'GameServerSeat' or observation['perspectivePlayerId'] != seat or
             observation['agentToAct'] != seat or not isinstance(observation['state'], dict) or
-            observation['state'].get('viewingPlayerId') != seat or observation['pendingDecision'] is not None or
             not isinstance(observation['legalActions'], list) or type(observation['terminated']) is not bool):
         raise JournalError('native decision seat or observation shape mismatch')
+    if version == 1:
+        if observation['state'].get('viewingPlayerId') != seat or observation['pendingDecision'] is not None:
+            raise JournalError('native v1 decision shape mismatch')
+    else:
+        kind = observation['callbackKind']
+        if kind not in {'chooseAction', 'paymentCorrection', 'decideMulligan', 'chooseBottomCards', 'result'}:
+            raise JournalError('unsupported native callback kind')
+        if kind in {'chooseAction', 'paymentCorrection', 'result'} and observation['state'].get('viewingPlayerId') != seat:
+            raise JournalError('native callback state perspective mismatch')
+        if kind == 'decideMulligan' and (set(observation['state']) != {'mulligan'} or observation['pendingDecision'] is not None):
+            raise JournalError('native mulligan callback shape mismatch')
+        if kind == 'chooseBottomCards' and (observation['state'] != {} or not isinstance(observation['pendingDecision'], dict)
+                or observation['pendingDecision'].get('kind') != 'BottomCards' or observation['legalActions']):
+            raise JournalError('native bottom callback shape mismatch')
     return observation
 
 
