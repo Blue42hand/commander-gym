@@ -118,3 +118,42 @@ Run the focused offline suite with:
 ```sh
 python -m unittest discover -s tests -p test_engine_coverage.py -v
 ```
+
+## Coverage status and submitted deck slots
+
+`coverage_status(snapshot_id, coverage_id?, expected_engine_sha?, expected_gym_sha?)`
+returns existing evidence metadata without automatically selecting a revision.
+An empty store is unavailable. Explicit missing, corrupt, or mismatched evidence
+fails closed. Full lowercase commit pins can be compared to selected evidence;
+`stale_for_requested_context` means the catalog is no longer current or a known
+pin differs. `matches_requested_pins` requires both pins to match and the catalog
+to be current. Otherwise freshness is unknown. It is never a live deployment check
+or a time-based freshness guarantee; inspect the retained receipt timestamp.
+
+The existing offline publisher emits schema 2 when the authoritative report has
+`commanderGym.repository` and `commanderGym.commit`. It validates the exact public
+Gym repository and full SHA, retains only those fields, and hashes them into the
+same immutable artifact. Existing schema 1 artifacts remain readable with unknown
+Gym identity; no inferred source pin or migration changes old evidence IDs.
+
+`get_engine_coverage` also separates snapshot Scryfall Commander legality,
+registry presence, unknown tested card behavior, unknown upstream presence,
+registry presence at a deployment receipt's recorded time, and unknown current
+deployed support. Successful registry CI is not a per-card behavior test and none
+of these outputs asserts human verification.
+
+`get_deck_coverage(snapshot_id, oracle_ids, coverage_id?)` counts between 1 and
+1000 submitted slots. Include commander slots and repeat IDs for quantities.
+Results aggregate present/absent/unknown registration and Scryfall legality,
+with a percentage over all submitted slots (including unknowns). They do not
+certify a legal Commander deck or gameplay behavior. There is no deck identifier,
+stored deck lookup, trace access, write, or second ledger; the caller's IDs are
+not echoed. The read-only service does not persist submitted lists. Operators
+must assess their transport logging policy before sending private deck contents.
+
+Rollout remains with the Tolaria host owner. Deploy the reviewed source and rebuild
+public evidence with the exact catalog, registry export, report and reviewed CI
+receipt; add a deployment receipt only after independently observing the actual
+matching artifact. Refresh plugin discovery, then check status, selected pins,
+per-card lookup and aggregate counts. Schema 2 artifacts require this reader;
+retain schema 1 IDs for sessions until the reader transition is complete.
