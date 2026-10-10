@@ -149,6 +149,10 @@ class SystemdCredentialTests(unittest.TestCase):
         assert Path('/.dockerenv').exists() and Path('/proc/1/comm').read_text().strip() == 'systemd'
         assert os.getuid() == 0 and not Path('/run/host').exists()
         # No host bus/mounts are supplied by the CI invocation; Docker network=none.
+        # systemd's credential helper uses a child mount namespace and moves the
+        # prepared mount onto /run. Its propagation must reach this container's
+        # service manager, never the host (Docker supplied a private tmpfs here).
+        subprocess.run(['mount', '--make-rshared', '/run'], check=True)
         cls.profile = synthetic_profile()
         SOURCE.mkdir(mode=0o700)
         cls.write_source('openai.env', ('OPENAI_API_KEY=' + FAKE_PROVIDER).encode())
