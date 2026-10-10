@@ -24,7 +24,7 @@ from .manual_runtime_profile import (
 )
 from .manual_runtime_rollout import RuntimeSnapshot
 
-ROLES = ('recorder', 'sidecar', 'native', 'proxy')
+ROLES = ('recorder', 'sidecar', 'native', 'proxy', 'redis')
 TOKEN = 'commander-gym-isolated-qa-placeholder-only'
 MAX_MESSAGE = 4 * 1024 * 1024
 
@@ -95,8 +95,8 @@ def root_main(role):
     runtime = authenticate(role)
     spec, message = child_spec(role, runtime)
     profile = runtime.profile
-    identity = 'nativeUid' if role in ('native', 'recorder') else role+'Uid'
-    account = pwd.getpwuid(profile['identities'][identity])
+    from .qa_redis_variant import role_uid
+    account = pwd.getpwuid(role_uid(profile, role))
     sidecar_gid = pwd.getpwuid(profile['identities']['sidecarUid']).pw_gid
     groups = sorted({account.pw_gid, *([sidecar_gid] if role in ('native','recorder') else [])})
     message['sidecarGid'] = sidecar_gid
@@ -148,15 +148,19 @@ def run_child(message):
     require(role in ROLES, 'qa_role_name')
     validate_profile(profile)
     require(profile['purpose'] == 'qualification' and digest(profile) == message['runtimeId'], 'qa_role_child_profile')
-    identity = 'nativeUid' if role in ('native', 'recorder') else role+'Uid'
-    require(os.getuid() == os.geteuid() == profile['identities'][identity], 'qa_role_child_uid')
+    from .qa_redis_variant import role_uid
+    require(os.getuid() == os.geteuid() == role_uid(profile, role), 'qa_role_child_uid')
     # Root selected paths. Do not retain provider/credential values from caller env.
     require(not any('OPENAI' in k or 'TOKEN' in k or 'CREDENTIAL' in k for k in os.environ), 'qa_role_child_environment')
     runtime = ValidatedRuntime(canonical(profile), message['runtimeId'], message['sequence'])
     stopping = threading.Event()
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, lambda *_: stopping.set())
-    if role == 'recorder':
+    if role == 'redis':
+        from .qa_redis_variant import redis_spec
+        spec = redis_spec(runtime)
+        os.execve(spec.arguments[0], spec.arguments, spec.environment)
+    elif role == 'recorder':
         from .manual_runtime_recorder import run_recorder
         from .native_game_capture import NativeGameCapture
         require(message['sidecarGid'] in os.getgroups(), 'qa_role_recorder_group')
@@ -197,7 +201,11 @@ def run_child(message):
         _literal_file(token_path, TOKEN.encode())
         spec = native_spec(runtime, credential_directory=config)
         from dataclasses import replace
-        spec = replace(spec, arguments=(*spec.arguments, "--native.qa.callback-gate-enabled=true"))
+        extra = ("--native.qa.callback-gate-enabled=true",)
+        if profile.get('profile') == 'manual-luna-redis-qa-v1':
+            from .qa_redis_variant import native_overrides
+            extra += native_overrides(profile)
+        spec = replace(spec, arguments=(*spec.arguments, *extra))
         os.execve(spec.arguments[0], spec.arguments, spec.environment)
     else:
         from .qa_proxy_launch import proxy_spec

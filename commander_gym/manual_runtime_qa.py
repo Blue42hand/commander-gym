@@ -36,6 +36,10 @@ AUTHORITY = Path('/etc/commander-gym-qa/authority.json')
 ROOT = Path('/opt/commander-gym-qa')
 PROBES = ('admission', 'native-writer', 'recording-recovery', 'websocket')
 ROLES_ORDER = ('recorder', 'sidecar', 'native', 'proxy')
+
+
+def roles_order(profile):
+    return ('redis', *ROLES_ORDER) if profile.get('profile') == 'manual-luna-redis-qa-v1' else ROLES_ORDER
 LIMITS = {'allocatedBytes': 2*1024**3, 'guestMemoryBytes': 2*1024**3,
           'supervisorMemoryBytes': 3*1024**3, 'swapBytes': 0, 'cpuPercent': 100,
           'tasks': 128, 'runtimeSeconds': 900}
@@ -74,19 +78,33 @@ def match_profiles(production, qa):
     validate_profile(production); validate_profile(qa)
     require(production['purpose'] == 'native-manual-play'
             and qa['purpose'] == 'qualification', 'qa_profile_purposes')
-    for key in set(production) - {'purpose', 'artifacts', 'paths', 'recordingAuthority'}:
+    redis_qa = qa.get('profile') == 'manual-luna-redis-qa-v1'
+    excluded = {'purpose', 'artifacts', 'paths', 'recordingAuthority'}
+    if redis_qa:
+        from .qa_redis_variant import dependency_additions
+        require(production['profile'] == 'manual-luna-v1', 'qa_redis_reference_profile')
+        require(qa['settings'] == {**production['settings'], 'redisEnabled': True}, 'qa_redis_settings_delta')
+        excluded |= {'profile', 'settings'}
+    for key in set(production) - excluded:
         require(production[key] == qa[key], 'qa_profile_delta')
     # Root remapping is necessary in Q; sealed config is carried as P bytes and
     # never installed. Separately sealed QA units are the explicit execution seam.
     for role in ROLES:
-        require(production['artifacts'][role]['files'] == qa['artifacts'][role]['files'], 'qa_artifact_delta')
+        pfiles = production['artifacts'][role]['files']; qfiles = qa['artifacts'][role]['files']
+        if redis_qa and role == 'dependencies':
+            additions = dependency_additions(qa)
+            require(not set(pfiles) & set(additions) and qfiles == {**pfiles, **additions}, 'qa_redis_dependency_delta')
+        else:
+            require(pfiles == qfiles, 'qa_artifact_delta')
         require(Path(qa['artifacts'][role]['root']).is_relative_to(ROOT/'artifacts')
                 and qa['artifacts'][role]['uid'] == 0, 'qa_artifact_layout')
     require(all(Path(path).is_relative_to(ROOT/'qa') for path in qa['paths'].values()), 'qa_path_escape')
     require(qa['recordingAuthority']['registryUid'] == 0, 'qa_registry_custody')
     return {'productionProfileSha256': digest(production), 'qaProfileSha256': digest(qa),
-            'unchangedRoleInventories': {role: digest(qa['artifacts'][role]['files']) for role in sorted(ROLES)},
-            'substitutions': ['purpose', 'artifactRoots', 'runtimePaths', 'recordingAuthority'],
+            'unchangedRoleInventories': {role: digest(qa['artifacts'][role]['files']) for role in sorted(ROLES) if not (redis_qa and role == 'dependencies')},
+            **({'redisDependencyAdditions': additions} if redis_qa else {}),
+            'substitutions': ['purpose', 'artifactRoots', 'runtimePaths', 'recordingAuthority'] +
+                (['profile','settings.redisEnabled','redisQa','redisDependencyAdditions'] if redis_qa else []),
             'productionQualificationIssued': False, 'activationEligible': False}
 
 
@@ -142,8 +160,9 @@ def validate_authority(value, production, qa, ci, *, now):
     names = [c['name'] for c in checks]
     require(len(names) == len(set(names)) and {'python','manual-runtime-sdk'} <= set(names), 'qa_implementation_ci_missing')
     inventory = value['executionInventory']
-    required = ({f'units/{role}.service' for role in ROLES_ORDER} | {f'probes/{role}' for role in PROBES}
-                | {f'implementation/commander_gym/{name}' for name in IMPLEMENTATION_FILES})
+    required = ({f'units/{role}.service' for role in roles_order(qa)} | {f'probes/{role}' for role in PROBES}
+                | {f'implementation/commander_gym/{name}' for name in IMPLEMENTATION_FILES}
+                | ({f'implementation/commander_gym/{name}' for name in ('qa_redis_variant.py','qa_redis_entry.py','qa_redis_recovery.py','manual_runtime_qa_roles.py','qa_callback_drain.py')} if qa.get('profile') == 'manual-luna-redis-qa-v1' else set()))
     require(type(inventory) is dict and required <= set(inventory) and len(inventory) <= 5000
             and all(type(name) is str and (name in required or re.fullmatch(r'implementation/commander_gym/(?:[a-zA-Z0-9_]+/)*[a-zA-Z0-9_]+\.py',name))
                     and type(sha) is str and SHA.fullmatch(sha) for name,sha in inventory.items()), 'qa_execution_inventory')
@@ -218,7 +237,7 @@ class QAFileHost:
         require(raw_digest(root_bytes(Path(__file__))) == self.authority['implementationSha256'], 'qa_implementation_seal')
         verify_artifacts(self.qa)
         self.state = ROOT/'qa/state'; self.locked = False; self.pending = None
-        self.units = {role: 'commander-gym-qa-'+self.authority['nonce']+'-'+role+'.service' for role in ROLES_ORDER}
+        self.units = {role: 'commander-gym-qa-'+self.authority['nonce']+'-'+role+'.service' for role in roles_order(self.qa)}
         self._inventory()
         if (self.state/'bank.json').exists():
             bank = self._json('bank.json');require(digest(bank) == self._json('transaction.json')['bankSha256'],'qa_bank_changed')
@@ -249,6 +268,9 @@ class QAFileHost:
             fields = self._show(unit,('FragmentPath','DropInPaths','NeedDaemonReload'))
             require(fields['FragmentPath'] == str(ROOT/'units'/f'{role}.service')
                     and fields['DropInPaths'] == '' and fields['NeedDaemonReload'] == 'no', 'qa_loaded_unit_mismatch')
+            if role == 'redis':
+                memory = self._show(unit, ('MemoryMax', 'MemorySwapMax'))
+                require(memory == {'MemoryMax':str(64*1024**2), 'MemorySwapMax':'0'}, 'qa_redis_service_memory')
 
     def _show(self,unit,properties):
         require(unit in self.units.values(), 'qa_unit_escape')
@@ -354,7 +376,7 @@ class QAFileHost:
         self.pending.update(stopContext=context,stopInventory=inventory)
         write(self.state/'stop-context.json',dict(context=context,inventory=inventory))
         self.observe('stop-context',context)
-        for role in reversed(ROLES_ORDER):self._service('stop',role)
+        for role in reversed(tuple(self.units)):self._service('stop',role)
 
     def quiescence_barrier(self):
         self._locked();require(self.pending is not None and 'stopContext' in self.pending,'qa_stop_context')
@@ -389,7 +411,7 @@ class QAFileHost:
         write(self.state/'start-policy.json',dict(acceptingNewGames=False,nonce=self.authority['nonce'],providerMode='fake',credentialSource='qa-placeholder-only'))
         profile = decode(root_bytes(self.state/'service-profile.json'))
         require(profile['purpose'] == 'qualification','qa_never_starts_production')
-        for role in ROLES_ORDER:self._service('start',role)
+        for role in roles_order(profile):self._service('start',role)
 
     def complete(self,runtime):
         record = self._json('transaction.json');require(record['candidate'] == runtime.runtime_id,'qa_commit_identity')
