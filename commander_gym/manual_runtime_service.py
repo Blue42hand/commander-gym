@@ -26,7 +26,7 @@ def service_runtime(role: str, credential_directory: Path, *, boot_id: str) -> V
     gate = decode(protected_bytes(GATE, uid=0, max_bytes=4096))
     require(set(gate) == {'runtimeId', 'sequence', 'bootId'} and gate['bootId'] == boot_id
             and type(gate['sequence']) is int and gate['sequence'] >= 1, 'precredential_gate')
-    raw = _credential(credential_directory, 'profile.json', uid=os.getuid(), limit=4*1024*1024)
+    raw = _credential(credential_directory, 'profile.json', uid=os.getuid(), limit=4*1024*1024, role=role)
     profile = decode(raw.encode())
     validate_profile(profile)
     require(profile['purpose'] == 'native-manual-play' and gate['runtimeId'] == digest(profile), 'attested_profile')

@@ -31,6 +31,21 @@ jobs:
         env:
           PYTHONPATH: ${{ github.workspace }}:${{ github.workspace }}/tests
           REQUIRE_MANUAL_SYSTEMD_TESTS: '1'
+      - name: Build disposable systemd credential reader fixture
+        run: |
+          context=$(mktemp -d)
+          cp -r commander_gym tests "$context/"
+          docker build -f tests/systemd-credentials.Dockerfile -t manual-credential-fixture "$context"
+      - name: Qualify actual nonroot credential copies without host bus or network
+        run: |
+          container=$(docker run -d --privileged --cgroupns=private --network=none --tmpfs /run --tmpfs /run/lock manual-credential-fixture)
+          trap 'docker rm -f "$container"' EXIT
+          for attempt in $(seq 1 30); do
+            if docker exec "$container" systemctl list-units >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          docker exec -e PYTHONPATH=/opt/fixture:/opt/fixture/tests -e REQUIRE_SYSTEMD_CREDENTIALS=1 "$container" \
+            python3 -B -m unittest discover -s /opt/fixture/tests -p test_manual_runtime_credentials_systemd.py -v
   python:
     runs-on: ubuntu-latest
     steps:

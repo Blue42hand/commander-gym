@@ -10,9 +10,9 @@ from dataclasses import dataclass, field
 import hashlib
 import os
 from pathlib import Path
-import stat
 from typing import Callable
 
+from .manual_runtime_credentials import credential as _credential
 from .manual_runtime_profile import (
     ManualRuntimeError, ValidatedRuntime, decode, digest, protected_bytes,
     recording_pins, relative_path, require, validate_profile, verify_artifacts,
@@ -104,23 +104,6 @@ def parse_existing_key(text: str) -> str:
     raise ManualRuntimeError("provider_key_entry_missing")
 
 
-def _credential(directory: Path, name: str, *, uid: int, limit: int) -> str:
-    relative_path(name)
-    require("/" not in name, "credential_name")
-    info = directory.lstat()
-    require(stat.S_ISDIR(info.st_mode) and not directory.is_symlink()
-            and info.st_uid in (0, uid) and info.st_mode & 0o022 == 0, "credential_directory_custody")
-    path = directory / name
-    info = path.lstat()
-    require(stat.S_ISREG(info.st_mode) and not path.is_symlink()
-            and info.st_uid in (0, uid) and info.st_mode & 0o077 == 0, "credential_file_custody")
-    raw = protected_bytes(path, uid=info.st_uid, max_bytes=limit)
-    try:
-        return raw.decode()
-    except UnicodeError as error:
-        raise ManualRuntimeError("credential_encoding") from error
-
-
 def sidecar_environment(runtime: ValidatedRuntime, *, credential_directory: Path, uid: int,
                         credential_reader: Callable = _credential) -> dict[str, str]:
     # Runtime is immutable; reverify executable/config/catalog bytes BEFORE reading
@@ -130,8 +113,8 @@ def sidecar_environment(runtime: ValidatedRuntime, *, credential_directory: Path
     verify_artifacts(profile, roles=frozenset({"sidecar", "dependencies", "launcher", "catalog"}))
     dependency_root, lock = _runtime(profile)
     require(uid == profile["identities"]["sidecarUid"], "sidecar_identity")
-    key = parse_existing_key(credential_reader(credential_directory, "openai.env", uid=uid, limit=16384))
-    token = credential_reader(credential_directory, "commander-gym.sidecar.token", uid=uid, limit=1024).strip()
+    key = parse_existing_key(credential_reader(credential_directory, "openai.env", uid=uid, limit=16384, role='sidecar'))
+    token = credential_reader(credential_directory, "commander-gym.sidecar.token", uid=uid, limit=1024, role='sidecar').strip()
     require(32 <= len(token) <= 512 and all(c.isascii() and (c.isalnum() or c in "._~-") for c in token), "sidecar_token_shape")
     catalog = profile["artifacts"]["catalog"]
     # BoundedProcessClient launches a child with sys.executable -m. Supply only
