@@ -71,14 +71,21 @@ def manual_snapshot(runtime: ValidatedRuntime) -> RuntimeSnapshot:
 
 
 def promote(host: RuntimeHost, profile: dict, qualification: dict, approval: dict, *, clock=time.time) -> dict:
+    def validate(previous_id, sequence, now):
+        return precredential_validate(profile, qualification, approval,
+            previous_id=previous_id, sequence=sequence, now=now)
+    return _promote(host, validate, clock=clock)
+
+
+def _promote(host: RuntimeHost, validate, *, clock=time.time) -> dict:
+    """Shared transaction ordering; production entry always uses its full validator."""
     with host.exclusive_lock():
         host.assert_no_unfinished_transaction()
         previous = host.current()
         require(previous.kind in ("keyless", "manual-luna-v1"), "unknown_active_profile")
         # Validate the exact approval before even invoking the previous-runtime
         # host validator; that boundary must itself remain read-only.
-        candidate = precredential_validate(profile, qualification, approval,
-            previous_id=previous.runtime_id, sequence=previous.sequence + 1, now=clock())
+        candidate = validate(previous.runtime_id, previous.sequence + 1, clock())
         host.verify_snapshot(previous)
         before = host.status()
         boot = idle_state(before, previous, now=clock(), closed=False)
@@ -88,8 +95,7 @@ def promote(host: RuntimeHost, profile: dict, qualification: dict, approval: dic
         # exclusive lock after drain, closing the admission/check race.
         require(host.current() == previous, "current_changed")
         host.verify_snapshot(previous)
-        candidate = precredential_validate(profile, qualification, approval,
-            previous_id=previous.runtime_id, sequence=previous.sequence + 1, now=clock())
+        candidate = validate(previous.runtime_id, previous.sequence + 1, clock())
         host.begin(previous, candidate)
         committed = False
         try:
