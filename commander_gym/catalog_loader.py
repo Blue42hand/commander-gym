@@ -442,14 +442,17 @@ def _exclusive_output(output_dir: Path):
         if not output_dir.exists():
             return
         entries = {p.name for p in output_dir.iterdir()} - {'.catalog-import.lock'}
-        if entries - {'snapshots', 'staging', 'current.json'}:
+        if entries - {'snapshots', 'staging', 'current.json', 'engine-coverage'}:
             raise CatalogLoadError('non-catalog output directory is not allowed')
         snapshots = output_dir / 'snapshots'
         staging = output_dir / 'staging'
         current = output_dir / 'current.json'
+        coverage = output_dir / 'engine-coverage'
         if (snapshots.is_symlink() or staging.is_symlink() or current.is_symlink()
+                or coverage.is_symlink()
                 or (snapshots.exists() and not snapshots.is_dir())
-                or (staging.exists() and not staging.is_dir())):
+                or (staging.exists() and not staging.is_dir())
+                or (coverage.exists() and not coverage.is_dir())):
             raise CatalogLoadError('catalog path must not be a symlink or non-directory')
         if not current.exists() and snapshots.exists() and any(snapshots.iterdir()):
             raise CatalogLoadError('unpublished snapshots require operator review')

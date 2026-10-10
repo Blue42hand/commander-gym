@@ -320,6 +320,43 @@ class CatalogLoaderTests(unittest.TestCase):
         with self.assertRaisesRegex(CatalogLoadError, 'symlink'):
             publish_from_files(link, self.sources())
 
+    def test_new_snapshot_preserves_historical_coverage_artifacts(self):
+        target = self.root / 'catalog'
+        original = publish_from_files(target, self.sources())
+        coverage = target / 'engine-coverage'
+        coverage.mkdir()
+        artifacts = {coverage / ('a' * 64 + '.json'): b'{"fixture":"schema1-history"}\n',
+                     coverage / ('b' * 64 + '.json'): b'{"fixture":"schema2-history"}\n'}
+        for path, data in artifacts.items():
+            path.write_bytes(data)
+            path.chmod(0o444)
+        previous_db = target / 'snapshots' / (original['snapshot_id'] + '.sqlite')
+        previous_hash = hashlib.sha256(previous_db.read_bytes()).hexdigest()
+        self.records['rulings'][0]['comment'] = 'Changed ruling.'
+        new = publish_from_files(target, self.sources())
+        self.assertNotEqual(new['snapshot_id'], original['snapshot_id'])
+        self.assertEqual({path: path.read_bytes() for path in artifacts}, artifacts)
+        self.assertEqual(set(coverage.iterdir()), set(artifacts))
+        self.assertEqual(hashlib.sha256(previous_db.read_bytes()).hexdigest(), previous_hash)
+        self.assertEqual(json.loads((target / 'current.json').read_text())['snapshot_id'],
+                         new['snapshot_id'])
+
+    def test_refuses_coverage_symlink_and_non_directory_before_lock(self):
+        for kind in ('symlink', 'file'):
+            with self.subTest(kind=kind):
+                target = self.root / kind
+                target.mkdir()
+                path = target / 'engine-coverage'
+                if kind == 'symlink':
+                    path.symlink_to(self.root, target_is_directory=True)
+                else:
+                    path.write_text('keep')
+                with self.assertRaisesRegex(CatalogLoadError, 'symlink or non-directory'):
+                    publish_from_files(target, self.sources())
+                self.assertFalse((target / '.catalog-import.lock').exists())
+                if kind == 'file':
+                    self.assertEqual(path.read_text(), 'keep')
+
     def test_reversible_card_preserves_both_real_oracle_identities(self):
         reversible = card(OLD, '2025-01-01', None)
         reversible.pop('oracle_id')
