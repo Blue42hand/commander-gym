@@ -4,7 +4,7 @@ from tempfile import TemporaryDirectory
 import unittest
 import zipfile
 
-from scripts.qualify_manual_luna_release import CONFIGURATION, IMPORTS, QA_GATE, qualify
+from scripts.qualify_manual_luna_release import CONFIGURATION, IMPORTS, QA_GATE, QA_REDIS, qualify
 
 
 class ManualLunaReleaseTests(unittest.TestCase):
@@ -36,10 +36,14 @@ class ManualLunaReleaseTests(unittest.TestCase):
             self.assertNotIn("qaCallbackGatePackaged", receipt)
             with self.assertRaisesRegex(ValueError, "admission gate missing"):
                 qualify(server, adapter, native, gym, require_qa_callback_gate=True)
+            with self.assertRaisesRegex(ValueError, "QA Redis recovery variant missing"):
+                qualify(server, adapter, native, gym, require_qa_redis_variant=True)
+            entries[QA_REDIS] = b"synthetic-redis-class"
             entries[QA_GATE] = b"synthetic-class"
             server.write_bytes(self.archive(entries))
             self.assertTrue(qualify(server, adapter, native, gym,
                                     require_qa_callback_gate=True)["qaCallbackGatePackaged"])
+            self.assertTrue(qualify(server, adapter, native, gym, require_qa_redis_variant=True)["qaRedisVariantPackaged"])
             with self.assertRaisesRegex(ValueError, "pins"):
                 qualify(server, adapter, native, "c" * 40)
             for changed in (b"mismatched", None):

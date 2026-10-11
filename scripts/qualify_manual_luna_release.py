@@ -11,6 +11,7 @@ import zipfile
 
 IMPORTS = "META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports"
 CONFIGURATION = "org.commandergym.argentum.CommanderGymAutoConfiguration"
+QA_REDIS = "BOOT-INF/classes/com/wingedsheep/gameserver/persistence/QaRedisPersistence.class"
 QA_GATE = "BOOT-INF/classes/com/wingedsheep/gameserver/ai/QaCallbackAdmission.class"
 
 
@@ -19,7 +20,7 @@ def manifest(archive: zipfile.ZipFile) -> dict[str, str]:
     return dict(line.split(": ", 1) for line in text.splitlines() if ": " in line)
 
 
-def qualify(server: Path, adapter: Path, native_sha: str, gym_sha: str, *, require_qa_callback_gate: bool = False) -> dict:
+def qualify(server: Path, adapter: Path, native_sha: str, gym_sha: str, *, require_qa_callback_gate: bool = False, require_qa_redis_variant: bool = False) -> dict:
     if any(re.fullmatch(r"[0-9a-f]{40}", pin) is None for pin in (native_sha, gym_sha)):
         raise ValueError("exact native and Gym commit pins required")
     adapter_bytes = adapter.read_bytes()
@@ -32,6 +33,8 @@ def qualify(server: Path, adapter: Path, native_sha: str, gym_sha: str, *, requi
         if "org/commandergym/argentum/CommanderGymControllerProvider.class" not in archive.namelist():
             raise ValueError("compiled controller provider missing")
     with zipfile.ZipFile(server) as archive:
+        if require_qa_redis_variant and (QA_REDIS not in archive.namelist() or QA_GATE not in archive.namelist()):
+            raise ValueError("compiled QA Redis recovery variant missing")
         if require_qa_callback_gate and QA_GATE not in archive.namelist():
             raise ValueError("compiled QA callback admission gate missing")
         if manifest(archive).get("Argentum-Revision") != native_sha:
@@ -50,6 +53,8 @@ def qualify(server: Path, adapter: Path, native_sha: str, gym_sha: str, *, requi
     }
     if require_qa_callback_gate:
         receipt["qaCallbackGatePackaged"] = True
+    if require_qa_redis_variant:
+        receipt["qaRedisVariantPackaged"] = True
     return receipt
 
 
@@ -61,9 +66,10 @@ def main() -> int:
     parser.add_argument("--gym-sha", required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--require-qa-callback-gate", action="store_true")
+    parser.add_argument("--require-qa-redis-variant", action="store_true")
     args = parser.parse_args()
     receipt = qualify(args.server_jar, args.adapter_jar, args.native_sha, args.gym_sha,
-                      require_qa_callback_gate=args.require_qa_callback_gate)
+                      require_qa_callback_gate=args.require_qa_callback_gate, require_qa_redis_variant=args.require_qa_redis_variant)
     args.output.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
     print(json.dumps(receipt, sort_keys=True))
     return 0

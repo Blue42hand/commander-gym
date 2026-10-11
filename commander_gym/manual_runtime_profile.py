@@ -79,15 +79,21 @@ def _commit(value: Any) -> bool:
 
 
 def validate_profile(profile: Mapping[str, Any]) -> dict:
-    require(type(profile) is dict and set(profile) == PROFILE_FIELDS, "profile_fields")
+    redis_qa = type(profile) is dict and profile.get("profile") == "manual-luna-redis-qa-v1"
+    require(type(profile) is dict and set(profile) == PROFILE_FIELDS | ({"redisQa"} if redis_qa else set()), "profile_fields")
     require(type(profile["schemaVersion"]) is int and profile["schemaVersion"] == 1, "profile_schema")
-    require(profile["profile"] == "manual-luna-v1" and profile["purpose"] in ("qualification", "native-manual-play"), "profile_kind")
+    require((profile["profile"] == "manual-luna-v1" and profile["purpose"] in ("qualification", "native-manual-play"))
+            or (redis_qa and profile["purpose"] == "qualification"), "profile_kind")
     require(_commit(profile["engineSha"]) and _commit(profile["gymSha"]), "source_pins")
     require(type(profile["recordingSchemaVersion"]) is int and profile["recordingSchemaVersion"] == 1, "recording_schema")
     expected = {"defaultController": "engine", "manualOnly": True, "manualUncapped": True,
                 "model": "gpt-6-luna", "requestTimeoutSeconds": 90, "maxAttempts": 2,
                 "callbackTimeoutSeconds": 110, "nativeTimeoutMs": 120000,
                 "paidProvidersEnabled": True, "accountsEnabled": False, "redisEnabled": False}
+    if redis_qa:
+        expected["redisEnabled"] = True
+        from .qa_redis_variant import validate_settings
+        validate_settings(profile)
     require(profile["settings"] == expected and all(type(profile["settings"][k]) is type(v) for k, v in expected.items()), "manual_settings")
     artifacts = profile["artifacts"]
     require(type(artifacts) is dict and set(artifacts) == ROLES, "artifact_roles")
@@ -271,4 +277,4 @@ def recording_pins(profile: dict) -> dict:
             "decks": None, "rng": None,
             "bindings": {"fingerprints": profile["catalog"]["bindings"], "pilotFingerprint": profile["catalog"]["pilotFingerprint"], "componentDigest": profile["catalog"]["componentDigest"]},
             "config": {"purpose": profile["purpose"], "paidProvidersEnabled": True, "gameAiMode": "engine", "manualOnly": True,
-                       "manualUncapped": True, "accountsEnabled": False, "redisEnabled": False, "runtimeProfileSha256": digest(profile)}}
+                       "manualUncapped": True, "accountsEnabled": False, "redisEnabled": profile["settings"]["redisEnabled"], "runtimeProfileSha256": digest(profile)}}

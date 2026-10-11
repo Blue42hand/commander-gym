@@ -72,8 +72,8 @@ jobs:
       - uses: actions/checkout@v6
         with:
           repository: Blue42hand/argentum-engine
-          # Exact reviewed native QA callback gate merge; source qualification only.
-          ref: 6aee3965887e69f92da5a66c27a3b1874b169504
+          # Exact reviewed Redis QA native merge; source qualification only.
+          ref: c56d1b336d024998cf193101bb12c50026df7537
           path: argentum-engine
       - uses: actions/setup-java@v5
         with:
@@ -110,6 +110,7 @@ jobs:
             --native-sha "$(git -C argentum-engine rev-parse HEAD)" \
             --gym-sha "$(git -C commander-gym rev-parse HEAD)" \
             --require-qa-callback-gate \
+            --require-qa-redis-variant \
             --output manual-luna-release.json
           mkdir matched-release
           cp "$server_jar" matched-release/server.jar
