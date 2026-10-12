@@ -74,6 +74,169 @@ def _identities(catalog: CardCatalog) -> dict[str, list[str]]:
     return {key: sorted(value) for key, value in sorted(names.items())}
 
 
+
+MAPPING_V2 = 'canonical_card_or_explicit_front_face_v2'
+
+
+def _identity_roles(catalog: CardCatalog) -> dict:
+    """Keep whole names, explicit layout and face ownership distinct."""
+    with catalog._connect() as db:
+        has_layout = any(r['name'] == 'authoring_json' for r in
+                         db.execute("PRAGMA table_info('printings')"))
+        identities = {}
+        sql = ('SELECT c.oracle_id, c.name, p.authoring_json FROM cards c LEFT JOIN printings p '
+               'ON p.snapshot_id=c.snapshot_id AND p.oracle_id=c.oracle_id AND p.printing_id=c.printing_id '
+               'WHERE c.snapshot_id=? ORDER BY c.oracle_id') if has_layout else (
+               'SELECT oracle_id, name, NULL AS authoring_json FROM cards WHERE snapshot_id=? ORDER BY oracle_id')
+        for row in db.execute(sql, (catalog.snapshot_id,)):
+            layout, layout_hash = None, None
+            raw = row['authoring_json']
+            if raw is not None:
+                layout_hash = _hash(raw.encode('utf-8'))
+                try:
+                    details = json.loads(raw)
+                    value = details.get('layout') if isinstance(details, dict) else None
+                    layout = value if isinstance(value, str) else None
+                except (ValueError, TypeError):
+                    layout = None
+            identities[row['oracle_id']] = {'name': row['name'], 'layout': layout,
+                                             'layout_source_sha256': layout_hash, 'faces': []}
+        for row in db.execute('SELECT oracle_id, face_index, face_oracle_id, name FROM card_faces '
+                              'WHERE snapshot_id=? ORDER BY oracle_id, face_index', (catalog.snapshot_id,)):
+            identities[row['oracle_id']]['faces'].append({
+                'index': row['face_index'], 'oracle_id': row['face_oracle_id'], 'name': row['name']})
+    return identities
+
+
+def _registry_names(raw: bytes) -> list[str]:
+    try:
+        names = raw.decode('utf-8').splitlines()
+    except UnicodeError as exc:
+        raise CatalogError('registry names must be UTF-8') from exc
+    if (not names or len(names) > MAX_REGISTRY_NAMES or names != sorted(set(names)) or
+            any(not name or name != name.strip() or len(name) > 512 for name in names)):
+        raise CatalogError('registry export must be complete, sorted and unique')
+    return names
+
+
+def _role_entries(identities: dict, names: list[str]) -> tuple[dict, int]:
+    """Canonical exact ownership precedes explicitly evidenced front normalization."""
+    canonical, fronts, aliases = {}, {}, {}
+    for key, identity in identities.items():
+        canonical.setdefault(identity['name'], []).append(key)
+        own = [f for f in identity['faces'] if f['oracle_id'] in (None, key)]
+        for face in own:
+            aliases.setdefault(face['name'], []).append(key)
+        if (identity['layout'] in ('transform', 'modal_dfc') and len(identity['faces']) == 2 and len(own) == 2 and
+                [f['index'] for f in own] == [0, 1] and
+                identity['name'] == ' // '.join(f['name'] for f in own)):
+            fronts.setdefault(own[0]['name'], []).append(key)
+    registered = set(names)
+
+    def candidates(ids, kind):
+        return [{'oracle_id': k, 'canonical_name': identities[k]['name'], 'match_kind': kind}
+                for k in sorted(set(ids))]
+
+    entries = {}
+    for key, identity in identities.items():
+        name = identity['name']
+        own_names = {f['name'] for f in identity['faces'] if f['oracle_id'] in (None, key)}
+        matches = sorted(({name} | own_names) & registered)
+        presence, reason, kind, details = 'absent', 'not_in_complete_export', 'none', []
+        if name in registered:
+            matches = [name]
+            if len(canonical[name]) == 1:
+                presence, reason, kind = 'present', 'exact_canonical_name', 'canonical_name'
+            else:
+                presence, reason, kind = 'unknown', 'ambiguous_canonical_name', 'canonical_name'
+                details = candidates(canonical[name], kind)
+        else:
+            eligible = [n for n in matches if key in fronts.get(n, [])]
+            if eligible:
+                front = eligible[0]
+                matches = [front]
+                if canonical.get(front):
+                    presence, reason, kind = 'unknown', 'front_face_collision', 'front_face'
+                    details = candidates(canonical[front], 'canonical_name') + candidates(fronts[front], kind)
+                elif len(fronts[front]) > 1:
+                    presence, reason, kind = 'unknown', 'ambiguous_front_face', 'front_face'
+                    details = candidates(fronts[front], kind)
+                else:
+                    presence, reason, kind = 'present', 'explicit_front_face', 'front_face'
+            elif matches:
+                presence, reason, kind = 'unknown', 'face_alias_only', 'face_alias'
+                details = candidates([k for n in matches for k in canonical.get(n, [])], 'canonical_name')
+                details += candidates([k for n in matches for k in aliases.get(n, [])], 'face_alias')
+        entries[key] = {'registry_presence': presence, 'reason': reason, 'registry_names': matches,
+                        'match_kind': kind, 'candidates': details}
+    return entries, sum(n not in canonical and n not in aliases for n in names)
+
+
+def _validate_v3(payload: dict) -> None:
+    fields = {'schema_version', 'snapshot_id', 'catalog_identity_sha256', 'catalog_sources',
+              'engine_repository', 'engine_sha', 'revision_kind', 'qualification',
+              'deployment_verification', 'registry_export_sha256', 'registry_name_count',
+              'coverage_report_sha256', 'mapping', 'unmapped_registry_name_count', 'cards',
+              'commander_gym', 'registry_export'}
+    if type(payload.get('schema_version')) is not int or set(payload) != fields or payload.get('mapping') != MAPPING_V2:
+        raise CatalogError('invalid coverage schema or identity mapping')
+    raw = payload.get('registry_export')
+    if not isinstance(raw, str):
+        raise CatalogError('coverage registry export unavailable')
+    try:
+        encoded = raw.encode('utf-8')
+    except UnicodeError as exc:
+        raise CatalogError('invalid coverage registry UTF-8') from exc
+    names = _registry_names(encoded)
+    registered = set(names)
+    if _hash(encoded) != payload['registry_export_sha256'] or len(names) != payload['registry_name_count']:
+        raise CatalogError('coverage registry export hash or count mismatch')
+    entries = payload.get('cards')
+    if not isinstance(entries, dict):
+        raise CatalogError('invalid coverage card evidence')
+    combinations = {
+        ('present', 'exact_canonical_name', 'canonical_name'),
+        ('present', 'explicit_front_face', 'front_face'),
+        ('unknown', 'ambiguous_canonical_name', 'canonical_name'),
+        ('unknown', 'ambiguous_front_face', 'front_face'),
+        ('unknown', 'front_face_collision', 'front_face'),
+        ('unknown', 'face_alias_only', 'face_alias'),
+        ('absent', 'not_in_complete_export', 'none')}
+    for key, entry in entries.items():
+        if (not isinstance(key, str) or not 1 <= len(key) <= 128 or not isinstance(entry, dict) or
+                set(entry) != {'registry_presence', 'reason', 'registry_names', 'match_kind', 'candidates'} or
+                any(not isinstance(entry.get(k), str) for k in ('registry_presence', 'reason', 'match_kind')) or
+                (entry['registry_presence'], entry['reason'], entry['match_kind']) not in combinations or
+                not isinstance(entry['registry_names'], list) or
+                any(not isinstance(n, str) for n in entry['registry_names']) or
+                entry['registry_names'] != sorted(set(entry['registry_names'])) or
+                any(n not in registered for n in entry['registry_names']) or
+                not isinstance(entry['candidates'], list)):
+            raise CatalogError('invalid coverage card evidence')
+        if ((entry['registry_presence'] == 'absent') != (not entry['registry_names']) or
+                (entry['registry_presence'] != 'unknown' and entry['candidates']) or
+                (entry['registry_presence'] == 'unknown' and not entry['candidates'])):
+            raise CatalogError('invalid coverage candidate evidence')
+        for candidate in entry['candidates']:
+            if (not isinstance(candidate, dict) or set(candidate) != {'oracle_id', 'canonical_name', 'match_kind'} or
+                    not isinstance(candidate['oracle_id'], str) or not 1 <= len(candidate['oracle_id']) <= 128 or
+                    not isinstance(candidate['canonical_name'], str) or not 1 <= len(candidate['canonical_name']) <= 512 or
+                    not isinstance(candidate['match_kind'], str) or candidate['match_kind'] not in ('canonical_name', 'front_face', 'face_alias')):
+                raise CatalogError('invalid coverage candidate evidence')
+    # Reuse unchanged legacy pin/receipt validation; new entry semantics are checked above
+    # and regenerated from the selected catalog on read.
+    proxy = {k: v for k, v in payload.items() if k != 'registry_export'}
+    proxy['schema_version'] = 2 if proxy['commander_gym'] is not None else 1
+    if proxy['commander_gym'] is None:
+        del proxy['commander_gym']
+    proxy['mapping'] = 'exact_catalog_card_or_own_face_name_v1'
+    proxy['cards'] = {k: {'registry_presence': e['registry_presence'],
+        'reason': {'present': 'exact_name_match', 'absent': 'not_in_complete_export',
+                   'unknown': 'ambiguous_exact_name'}[e['registry_presence']],
+        'registry_names': e['registry_names']} for k, e in entries.items()}
+    _validate_payload(proxy)
+
+
 def _receipt(receipt: Any, engine_sha: str, *, deployed: bool = False) -> dict:
     if not isinstance(receipt, dict) or receipt.get('engine_sha') != engine_sha:
         raise CatalogError('receipt must pin the same engine SHA')
@@ -118,7 +281,7 @@ def build_evidence(catalog: CardCatalog, registry_path: Path, report_path: Path,
     """Join a complete runtime name export to one exact catalog identity set.
 
     Names are matched byte-for-byte: no punctuation, case, fuzzy, or implicit
-    front-face normalization. A shared name marks every candidate unknown.
+    front-face normalization. Canonical and explicit front identities are separate.
     Missing qualification/deployment evidence cannot silently become verified.
     """
     registry_bytes = _read(registry_path)
@@ -134,34 +297,14 @@ def build_evidence(catalog: CardCatalog, registry_path: Path, report_path: Path,
             qualification['coverage_report_sha256'] != _hash(report_bytes)):
         raise CatalogError('qualification receipt does not match export and report bytes')
     deployment = None if deployment_receipt is None else _receipt(deployment_receipt, sha, deployed=True)
-    try:
-        names = registry_bytes.decode('utf-8').splitlines()
-    except UnicodeError as exc:
-        raise CatalogError('registry names must be UTF-8') from exc
-    if (not names or len(names) > MAX_REGISTRY_NAMES or names != sorted(set(names)) or
-            any(not name or name != name.strip() or len(name) > 512 for name in names) or
-            report.get('schema') != 1 or
-            type(report.get('registryCardNames')) is not int or
-            report.get('registryCardNames') != len(names)):
-        raise CatalogError('registry export must be complete, sorted, unique, and match report count')
-    identities = _identities(catalog)
-    candidates: dict[str, list[str]] = {}
-    for oracle_id, aliases in identities.items():
-        for name in aliases:
-            candidates.setdefault(name, []).append(oracle_id)
-    entries = {}
-    registered = set(names)
-    for oracle_id, aliases in identities.items():
-        matches = [name for name in aliases if name in registered]
-        ambiguous = [name for name in matches if len(candidates[name]) != 1]
-        entries[oracle_id] = {
-            'registry_presence': 'unknown' if ambiguous else 'present' if matches else 'absent',
-            'reason': 'ambiguous_exact_name' if ambiguous else 'exact_name_match' if matches else 'not_in_complete_export',
-            'registry_names': matches,
-        }
+    names = _registry_names(registry_bytes)
+    if report.get('schema') != 1 or type(report.get('registryCardNames')) is not int or report['registryCardNames'] != len(names):
+        raise CatalogError('registry export must match report count')
+    identities = _identity_roles(catalog)
+    entries, unmapped = _role_entries(identities, names)
     status = catalog.catalog_status()
     payload = {
-        'schema_version': 1, 'snapshot_id': catalog.snapshot_id,
+        'schema_version': 3, 'snapshot_id': catalog.snapshot_id,
         'catalog_identity_sha256': _hash(_canonical(identities)),
         'catalog_sources': status['datasets'],
         'engine_repository': REPOSITORY, 'engine_sha': sha,
@@ -169,14 +312,12 @@ def build_evidence(catalog: CardCatalog, registry_path: Path, report_path: Path,
         'qualification': qualification, 'deployment_verification': deployment,
         'registry_export_sha256': _hash(registry_bytes), 'registry_name_count': len(names),
         'coverage_report_sha256': _hash(report_bytes),
-        'mapping': 'exact_catalog_card_or_own_face_name_v1',
-        'unmapped_registry_name_count': sum(name not in candidates for name in names),
+        'mapping': MAPPING_V2,
+        'registry_export': registry_bytes.decode('utf-8'),
+        'commander_gym': report.get('commanderGym'),
+        'unmapped_registry_name_count': unmapped,
         'cards': entries,
     }
-    gym = report.get('commanderGym')
-    if gym is not None:
-        payload['schema_version'] = 2
-        payload['commander_gym'] = gym
     encoded = _canonical(payload)
     artifact = {'coverage_id': _hash(encoded), 'evidence': payload}
     _validate_payload(payload)
@@ -228,18 +369,26 @@ def load_evidence(root: Path, coverage_id: str, catalog: CardCatalog) -> dict:
     if (artifact.get('coverage_id') != coverage_id or not isinstance(payload, dict) or
             _hash(_canonical(payload)) != coverage_id):
         raise CatalogError('coverage digest mismatch')
-    if payload.get('schema_version') not in (1, 2) or payload.get('snapshot_id') != catalog.snapshot_id:
+    if payload.get('schema_version') not in (1, 2, 3) or payload.get('snapshot_id') != catalog.snapshot_id:
         raise CatalogError('coverage belongs to another snapshot or schema')
-    if payload.get('catalog_identity_sha256') != _hash(_canonical(_identities(catalog))):
+    identities = _identity_roles(catalog) if payload['schema_version'] == 3 else _identities(catalog)
+    if payload.get('catalog_identity_sha256') != _hash(_canonical(identities)):
         raise CatalogError('coverage catalog identity mismatch')
     if payload.get('catalog_sources') != catalog.catalog_status()['datasets']:
         raise CatalogError('coverage catalog source mismatch')
     _validate_payload(payload)
+    if payload['schema_version'] == 3:
+        expected, unmapped = _role_entries(identities, _registry_names(payload['registry_export'].encode('utf-8')))
+        if (unmapped != payload['unmapped_registry_name_count'] or
+                any(expected.get(key) != entry for key, entry in payload['cards'].items())):
+            raise CatalogError('coverage identity mapping mismatch')
     return payload
 
 
 def _validate_payload(payload: dict) -> None:
     """Validate semantic pins at both the publication and read boundaries."""
+    if payload.get('schema_version') == 3:
+        return _validate_v3(payload)
     fields = {'schema_version', 'snapshot_id', 'catalog_identity_sha256', 'catalog_sources',
               'engine_repository', 'engine_sha', 'revision_kind', 'qualification',
               'deployment_verification', 'registry_export_sha256', 'registry_name_count',
@@ -289,7 +438,7 @@ def _validate_payload(payload: dict) -> None:
 
 
 def metadata(coverage_id: str, payload: dict) -> dict:
-    return {'coverage_id': coverage_id, **{key: value for key, value in payload.items() if key != 'cards'},
+    return {'coverage_id': coverage_id, **{key: value for key, value in payload.items() if key not in ('cards', 'registry_export')},
             'gameplay_correctness': 'unknown', 'tested_card_behavior': 'unknown',
             'upstream_presence': 'unknown', 'coverage_note': NOTE}
 

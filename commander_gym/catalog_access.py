@@ -124,7 +124,7 @@ class CatalogAccess:
         if coverage_id is not None:
             payload = load_evidence(self.root, coverage_id, self._catalog(snapshot_id))
             result['selected_evidence'] = metadata(coverage_id, payload)
-            gym_sha = payload.get('commander_gym', {}).get('commit')
+            gym_sha = (payload.get('commander_gym') or {}).get('commit')
             result['engine_pin_match'] = (None if expected_engine_sha is None else
                                           payload['engine_sha'] == expected_engine_sha)
             result['gym_pin_match'] = (None if expected_gym_sha is None or gym_sha is None else

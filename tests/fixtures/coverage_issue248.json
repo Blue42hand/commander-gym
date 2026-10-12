@@ -1,0 +1,477 @@
+{
+  "snapshot_id": "d5eac6f597c9feaf9bfce68d",
+  "coverage_id": "55fd46f4bd9eb6033bd02dc312d3b1ade00d7f982bcdbe3646030b80cb34c09b",
+  "engine_sha": "4569820f513321c952a19b00b233e691af4cea9d",
+  "gym_sha": "df58955bb64b69e52d1cdebe101b52d0eb3a2197",
+  "datasets": [
+    {
+      "kind": "default_cards",
+      "url": "https://data.scryfall.io/default-cards/default-cards-20261005210540.jsonl.gz",
+      "updated_at": "2026-10-05T21:05:40.525+00:00",
+      "compressed_size": 78775684,
+      "sha256": "0ca2c4cb391f3329b66c0daa0b156eff4b7abf24d8dc4a284a4d700828102080",
+      "downloaded_at": "2026-10-06T02:22:52.770360+00:00"
+    },
+    {
+      "kind": "oracle_tags",
+      "url": "https://data.scryfall.io/oracle-tags/oracle-tags-20261005210033.jsonl.gz",
+      "updated_at": "2026-10-05T21:00:33.052+00:00",
+      "compressed_size": 5978084,
+      "sha256": "026daebfc4e748c3e746523cb19820d9ff7fb58cb7340b218a6a6ee9604f5563",
+      "downloaded_at": "2026-10-06T02:22:53.742343+00:00"
+    },
+    {
+      "kind": "rulings",
+      "url": "https://data.scryfall.io/rulings/rulings-20261005210033.jsonl.gz",
+      "updated_at": "2026-10-05T21:00:33.905+00:00",
+      "compressed_size": 5422271,
+      "sha256": "90754615e5d95b5c6bceed0bfcaef99ccf7755071b23c3565c879e661c587321",
+      "downloaded_at": "2026-10-06T02:22:53.250410+00:00"
+    }
+  ],
+  "targets": [
+    {
+      "name": "Sign in Blood",
+      "oracle_id": "c6207f6a-a624-4754-88f5-dbe700c841ff"
+    },
+    {
+      "name": "Feed the Swarm",
+      "oracle_id": "5825997b-10d7-4a36-972c-a80ddd90b8ed"
+    },
+    {
+      "name": "Exsanguinate",
+      "oracle_id": "8164b1e8-3350-465e-8a17-75f57d326344"
+    },
+    {
+      "name": "Infernal Grasp",
+      "oracle_id": "94f0a572-e91c-4b56-a5d1-6cbbeabd210d"
+    },
+    {
+      "name": "Withering Torment",
+      "oracle_id": "ffce81c5-1b58-4882-a4e7-6f8d7cb170de"
+    },
+    {
+      "name": "Sol Ring",
+      "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+    },
+    {
+      "name": "Starving Revenant",
+      "oracle_id": "2ca969eb-3d79-4d1f-8d9d-7b8204ad166a"
+    },
+    {
+      "name": "Swamp",
+      "oracle_id": "56719f6a-1a6c-4c0a-8d21-18f7d7350b68"
+    },
+    {
+      "name": "Phyrexian Arena",
+      "oracle_id": "ee579a32-a048-4335-b966-231ba731cdea"
+    },
+    {
+      "name": "Hoarding Broodlord",
+      "oracle_id": "18e856b5-aab7-4802-8cec-1d44dd95d9f7"
+    },
+    {
+      "name": "K'rrik, Son of Yawgmoth",
+      "oracle_id": "cbe3a4e7-5dbe-4f58-8ee6-a1762b65acfd"
+    },
+    {
+      "name": "Reanimate",
+      "oracle_id": "a044474a-cd72-4e9d-bd8d-a08f2de9cdc0"
+    },
+    {
+      "name": "Arcane Signet",
+      "oracle_id": "0bc7f093-bef0-4f1a-852c-4b75ebf54838"
+    }
+  ],
+  "cards": [
+    {
+      "oracle_id": "0bc7f093-bef0-4f1a-852c-4b75ebf54838",
+      "printing_id": "c6b6117c-faab-4bbb-b851-07bd8061ef03",
+      "name": "Arcane Signet",
+      "layout": "normal",
+      "commander_legal": true,
+      "faces": []
+    },
+    {
+      "oracle_id": "16fd12dc-9dc5-4fd8-a660-5684a2b64268",
+      "printing_id": "090f821f-05ee-43d7-b85e-568ee19e7376",
+      "name": "Withering Torment // Withering Torment",
+      "layout": "art_series",
+      "commander_legal": false,
+      "faces": [
+        {
+          "index": 0,
+          "oracle_id": null,
+          "name": "Withering Torment"
+        },
+        {
+          "index": 1,
+          "oracle_id": null,
+          "name": "Withering Torment"
+        }
+      ]
+    },
+    {
+      "oracle_id": "18e856b5-aab7-4802-8cec-1d44dd95d9f7",
+      "printing_id": "2cbfb78e-cbab-4511-a887-60dad1a6cb6b",
+      "name": "Hoarding Broodlord",
+      "layout": "normal",
+      "commander_legal": true,
+      "faces": []
+    },
+    {
+      "oracle_id": "1e9047c0-2d28-4e52-acfa-47dca799a447",
+      "printing_id": "a5dfc8dc-b2aa-4331-9757-b113eb467f51",
+      "name": "Infernal Grasp // Infernal Grasp",
+      "layout": "art_series",
+      "commander_legal": false,
+      "faces": [
+        {
+          "index": 0,
+          "oracle_id": null,
+          "name": "Infernal Grasp"
+        },
+        {
+          "index": 1,
+          "oracle_id": null,
+          "name": "Infernal Grasp"
+        }
+      ]
+    },
+    {
+      "oracle_id": "2497b6fe-8217-4a00-90e5-a2daa346ffac",
+      "printing_id": "50bb0686-3214-44b9-ab40-f3ba8bdb689e",
+      "name": "Starving Revenant // Starving Revenant",
+      "layout": "art_series",
+      "commander_legal": false,
+      "faces": [
+        {
+          "index": 0,
+          "oracle_id": null,
+          "name": "Starving Revenant"
+        },
+        {
+          "index": 1,
+          "oracle_id": null,
+          "name": "Starving Revenant"
+        }
+      ]
+    },
+    {
+      "oracle_id": "25877c41-39a4-4cc3-ac4b-8f3dd06d579b",
+      "printing_id": "66d88104-c69d-4349-a4ae-4a3d855a3536",
+      "name": "Stensian Sanguinist // Exsanguinate",
+      "layout": "prepare",
+      "commander_legal": true,
+      "faces": [
+        {
+          "index": 0,
+          "oracle_id": null,
+          "name": "Stensian Sanguinist"
+        },
+        {
+          "index": 1,
+          "oracle_id": null,
+          "name": "Exsanguinate"
+        }
+      ]
+    },
+    {
+      "oracle_id": "2ca969eb-3d79-4d1f-8d9d-7b8204ad166a",
+      "printing_id": "3e6ff99a-9ecc-4f1b-9c85-e0820f3a5729",
+      "name": "Starving Revenant",
+      "layout": "normal",
+      "commander_legal": true,
+      "faces": []
+    },
+    {
+      "oracle_id": "44443716-8356-40cd-a879-35264b29108c",
+      "printing_id": "1c4c2765-2fb0-43f2-9e50-934405d108d2",
+      "name": "Scheming Silvertongue // Sign in Blood",
+      "layout": "prepare",
+      "commander_legal": true,
+      "faces": [
+        {
+          "index": 0,
+          "oracle_id": null,
+          "name": "Scheming Silvertongue"
+        },
+        {
+          "index": 1,
+          "oracle_id": null,
+          "name": "Sign in Blood"
+        }
+      ]
+    },
+    {
+      "oracle_id": "56719f6a-1a6c-4c0a-8d21-18f7d7350b68",
+      "printing_id": "214a9e76-b7fd-4cc9-89e7-104a71919a84",
+      "name": "Swamp",
+      "layout": "normal",
+      "commander_legal": true,
+      "faces": []
+    },
+    {
+      "oracle_id": "57507577-226a-4041-879e-53cc11ddc718",
+      "printing_id": "13be22f7-662e-42ce-825c-89947426ae6a",
+      "name": "K'rrik, Son of Yawgmoth // K'rrik, Son of Yawgmoth",
+      "layout": "art_series",
+      "commander_legal": false,
+      "faces": [
+        {
+          "index": 0,
+          "oracle_id": null,
+          "name": "K'rrik, Son of Yawgmoth"
+        },
+        {
+          "index": 1,
+          "oracle_id": null,
+          "name": "K'rrik, Son of Yawgmoth"
+        }
+      ]
+    },
+    {
+      "oracle_id": "5825997b-10d7-4a36-972c-a80ddd90b8ed",
+      "printing_id": "8fa5e192-c7df-44d4-a2d1-9d7b2bec92c5",
+      "name": "Feed the Swarm",
+      "layout": "normal",
+      "commander_legal": true,
+      "faces": []
+    },
+    {
+      "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487",
+      "printing_id": "4f152dd9-2b35-45b2-90fe-8c71d0634226",
+      "name": "Sol Ring",
+      "layout": "normal",
+      "commander_legal": true,
+      "faces": []
+    },
+    {
+      "oracle_id": "6b29f8e7-5711-4c53-bb3e-ea4598005d68",
+      "printing_id": "24498442-4908-4d24-8123-89c1d1883ba4",
+      "name": "Swamp // Swamp",
+      "layout": "art_series",
+      "commander_legal": false,
+      "faces": [
+        {
+          "index": 0,
+          "oracle_id": null,
+          "name": "Swamp"
+        },
+        {
+          "index": 1,
+          "oracle_id": null,
+          "name": "Swamp"
+        }
+      ]
+    },
+    {
+      "oracle_id": "6cb8b8c4-0674-4f14-9d89-010969fbb80e",
+      "printing_id": "1d12804c-dda0-4dae-9eb8-f670e72c17e7",
+      "name": "Grave Researcher // Reanimate",
+      "layout": "prepare",
+      "commander_legal": true,
+      "faces": [
+        {
+          "index": 0,
+          "oracle_id": null,
+          "name": "Grave Researcher"
+        },
+        {
+          "index": 1,
+          "oracle_id": null,
+          "name": "Reanimate"
+        }
+      ]
+    },
+    {
+      "oracle_id": "7a7e35bb-a20e-49b8-b80a-9ab5aa10a6e9",
+      "printing_id": "5f8c3fa4-c6a5-4461-ad8f-2c8110e7b98b",
+      "name": "Sign in Blood // Sign in Blood",
+      "layout": "art_series",
+      "commander_legal": false,
+      "faces": [
+        {
+          "index": 0,
+          "oracle_id": null,
+          "name": "Sign in Blood"
+        },
+        {
+          "index": 1,
+          "oracle_id": null,
+          "name": "Sign in Blood"
+        }
+      ]
+    },
+    {
+      "oracle_id": "8164b1e8-3350-465e-8a17-75f57d326344",
+      "printing_id": "87db9df3-4558-4569-8bc4-860fa1391578",
+      "name": "Exsanguinate",
+      "layout": "normal",
+      "commander_legal": true,
+      "faces": []
+    },
+    {
+      "oracle_id": "94f0a572-e91c-4b56-a5d1-6cbbeabd210d",
+      "printing_id": "f67b323d-0dda-45f8-84b7-d883ce5045a8",
+      "name": "Infernal Grasp",
+      "layout": "normal",
+      "commander_legal": true,
+      "faces": []
+    },
+    {
+      "oracle_id": "95287d52-6a3c-471b-92cc-a6c1174d12b0",
+      "printing_id": "87e38f01-7815-4a84-b385-19c0ee5cae4c",
+      "name": "Feed the Swarm // Feed the Swarm",
+      "layout": "art_series",
+      "commander_legal": false,
+      "faces": [
+        {
+          "index": 0,
+          "oracle_id": null,
+          "name": "Feed the Swarm"
+        },
+        {
+          "index": 1,
+          "oracle_id": null,
+          "name": "Feed the Swarm"
+        }
+      ]
+    },
+    {
+      "oracle_id": "9a0e752e-e02a-47f7-97b1-d3d297376470",
+      "printing_id": "48e18dd3-8ce8-4415-9709-9d110a86049f",
+      "name": "Exsanguinate // Exsanguinate",
+      "layout": "art_series",
+      "commander_legal": false,
+      "faces": [
+        {
+          "index": 0,
+          "oracle_id": null,
+          "name": "Exsanguinate"
+        },
+        {
+          "index": 1,
+          "oracle_id": null,
+          "name": "Exsanguinate"
+        }
+      ]
+    },
+    {
+      "oracle_id": "a044474a-cd72-4e9d-bd8d-a08f2de9cdc0",
+      "printing_id": "3e560cb9-3036-46a2-a5c7-edb04d0095b7",
+      "name": "Reanimate",
+      "layout": "normal",
+      "commander_legal": true,
+      "faces": []
+    },
+    {
+      "oracle_id": "a7ba915b-885c-4e3e-8715-a07304665e50",
+      "printing_id": "d5cb7aad-4247-4536-b9a0-461943ca72d5",
+      "name": "Phyrexian Arena // Phyrexian Arena",
+      "layout": "art_series",
+      "commander_legal": false,
+      "faces": [
+        {
+          "index": 0,
+          "oracle_id": null,
+          "name": "Phyrexian Arena"
+        },
+        {
+          "index": 1,
+          "oracle_id": null,
+          "name": "Phyrexian Arena"
+        }
+      ]
+    },
+    {
+      "oracle_id": "ae03ecd8-c4a7-4217-86ba-699d3aa4fb80",
+      "printing_id": "d3778926-cf30-4124-aecf-9e6154f13366",
+      "name": "Arcane Signet // Arcane Signet",
+      "layout": "art_series",
+      "commander_legal": false,
+      "faces": [
+        {
+          "index": 0,
+          "oracle_id": null,
+          "name": "Arcane Signet"
+        },
+        {
+          "index": 1,
+          "oracle_id": null,
+          "name": "Arcane Signet"
+        }
+      ]
+    },
+    {
+      "oracle_id": "b6f0f019-4e70-4fa5-92dd-8cb3b8e44108",
+      "printing_id": "f01703b6-b81f-4618-83cb-96aae2dab86f",
+      "name": "Sol Ring // Sol Ring",
+      "layout": "art_series",
+      "commander_legal": false,
+      "faces": [
+        {
+          "index": 0,
+          "oracle_id": null,
+          "name": "Sol Ring"
+        },
+        {
+          "index": 1,
+          "oracle_id": null,
+          "name": "Sol Ring"
+        }
+      ]
+    },
+    {
+      "oracle_id": "c6207f6a-a624-4754-88f5-dbe700c841ff",
+      "printing_id": "0111bf5d-7132-4cf2-b27d-efba3ad9477a",
+      "name": "Sign in Blood",
+      "layout": "normal",
+      "commander_legal": true,
+      "faces": []
+    },
+    {
+      "oracle_id": "cbe3a4e7-5dbe-4f58-8ee6-a1762b65acfd",
+      "printing_id": "45393005-78c7-4056-9ce6-310264922af3",
+      "name": "K'rrik, Son of Yawgmoth",
+      "layout": "normal",
+      "commander_legal": true,
+      "faces": []
+    },
+    {
+      "oracle_id": "ee579a32-a048-4335-b966-231ba731cdea",
+      "printing_id": "e6db1ad2-ed85-4084-976e-da1933f4d008",
+      "name": "Phyrexian Arena",
+      "layout": "normal",
+      "commander_legal": true,
+      "faces": []
+    },
+    {
+      "oracle_id": "fdd17c49-ec1c-44e5-ba2e-890c8ee999ee",
+      "printing_id": "11683aa0-dfcc-4f92-99d3-ef119cca2a3a",
+      "name": "Hoarding Broodlord // Hoarding Broodlord",
+      "layout": "art_series",
+      "commander_legal": false,
+      "faces": [
+        {
+          "index": 0,
+          "oracle_id": null,
+          "name": "Hoarding Broodlord"
+        },
+        {
+          "index": 1,
+          "oracle_id": null,
+          "name": "Hoarding Broodlord"
+        }
+      ]
+    },
+    {
+      "oracle_id": "ffce81c5-1b58-4882-a4e7-6f8d7cb170de",
+      "printing_id": "0868f94e-235d-4f65-a7af-8aacd58dd61e",
+      "name": "Withering Torment",
+      "layout": "normal",
+      "commander_legal": true,
+      "faces": []
+    }
+  ]
+}
