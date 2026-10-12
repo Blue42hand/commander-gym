@@ -40,9 +40,9 @@ ROLES_ORDER = ('recorder', 'sidecar', 'native', 'proxy')
 
 def roles_order(profile):
     return ('redis', *ROLES_ORDER) if profile.get('profile') == 'manual-luna-redis-qa-v1' else ROLES_ORDER
-LIMITS = {'allocatedBytes': 2*1024**3, 'guestMemoryBytes': 2*1024**3,
-          'supervisorMemoryBytes': 3*1024**3, 'swapBytes': 0, 'cpuPercent': 100,
-          'tasks': 128, 'runtimeSeconds': 900}
+LIMITS = {'allocatedBytes': 2*1024**3, 'guestMemoryBytes': 12*1024**3,
+          'supervisorMemoryBytes': 16*1024**3, 'swapBytes': 0, 'cpuPercent': 400,
+          'tasks': 512, 'runtimeSeconds': 900}
 # These are expectations on the supervisor, not an installer or resource grant.
 IMPLEMENTATION_FILES = ('__init__.py','manual_runtime_qa.py','manual_runtime_rollout.py',
     'manual_runtime_profile.py','manual_runtime_quiescence.py','manual_runtime_config.py')
