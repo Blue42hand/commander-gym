@@ -26,7 +26,7 @@ import sys
 import time
 
 from .manual_runtime_profile import (
-    GATES, SHA, ROLES, ValidatedRuntime, canonical, decode, digest,
+    GATES, SHA, ROLES, ValidatedRuntime, ManualRuntimeError, canonical, decode, digest,
     protected_bytes, require, validate_profile, verify_artifacts,
 )
 from .manual_runtime_rollout import RuntimeSnapshot, _promote, idle_state
@@ -289,6 +289,35 @@ def _qa_mount_rows(raw):
     return rows
 
 
+def _qa_barrier_mount_failure_note(rows, barrier):
+    """Bounded classifications from already parsed rows; no further reads."""
+    required={'ro','nosuid','nodev','noexec'}
+    forbidden={'rw','suid','dev','exec'}
+    allowed=required|{'relatime','strictatime','noatime','nodiratime','lazytime','nosymfollow'}
+    def number(value):
+        return value if 0<=value<2**64 else 'out-of-range'
+    def row(value):
+        return {'id':number(value['id']), 'parent':number(value['parent']),
+                'device':[number(x) for x in value['device']],
+                'rootExpected':value['root']==(_QA_SYSTEMD_BARRIER_ROOT if value is barrier else '/'),
+                'tmpfsType':value['fstype']=='tmpfs', 'tmpfsSource':value['source']=='tmpfs',
+                'knownOptions':sorted(value['options']&(allowed|forbidden)),
+                'unknownOptionCount':len(value['options']-(allowed|forbidden))}
+    runs=[r for r in rows if r['point']=='/run']
+    value={'schemaVersion':1, 'stage':'qa_systemd_barrier_mount',
+           'checks':{'root':barrier['root']==_QA_SYSTEMD_BARRIER_ROOT,
+                     'fstype':barrier['fstype']=='tmpfs', 'source':barrier['source']=='tmpfs',
+                     'requiredOptions':required<=barrier['options'],
+                     'forbiddenOptionsAbsent':not forbidden&barrier['options'],
+                     'allowedOptionsOnly':barrier['options']<=allowed},
+           'missingRequiredOptions':sorted(required-barrier['options']),
+           'barrier':row(barrier), 'runRowCount':len(runs),
+           'run':row(runs[0]) if len(runs)==1 else None}
+    note='qa_systemd_barrier_metadata='+canonical(value).decode('ascii')
+    require(len(note)<=2048,'qa_systemd_barrier_diagnostic_bound')
+    return note
+
+
 def _qa_systemd_barrier_boundary(mounts):
     """Authenticate one inaccessible tmpfs bind using metadata-only O_PATH FDs.
 
@@ -300,13 +329,17 @@ def _qa_systemd_barrier_boundary(mounts):
     rows=_qa_mount_rows(mounts)
     matches=[r for r in rows if r['point']==_QA_SYSTEMD_BARRIER_POINT]
     require(len(matches)==1,'qa_systemd_barrier_single_mount');barrier=matches[0]
-    require(barrier['root']==_QA_SYSTEMD_BARRIER_ROOT and
-            barrier['fstype']=='tmpfs' and barrier['source']=='tmpfs' and
-            {'ro','nosuid','nodev','noexec'}<=barrier['options'] and
-            not {'rw','suid','dev','exec'}&barrier['options'] and
-            barrier['options']<={'ro','nosuid','nodev','noexec','relatime',
-                                 'strictatime','noatime','nodiratime','lazytime','nosymfollow'},
-            'qa_systemd_barrier_mount')
+    try:
+        require(barrier['root']==_QA_SYSTEMD_BARRIER_ROOT and
+                barrier['fstype']=='tmpfs' and barrier['source']=='tmpfs' and
+                {'ro','nosuid','nodev','noexec'}<=barrier['options'] and
+                not {'rw','suid','dev','exec'}&barrier['options'] and
+                barrier['options']<={'ro','nosuid','nodev','noexec','relatime',
+                                     'strictatime','noatime','nodiratime','lazytime','nosymfollow'},
+                'qa_systemd_barrier_mount')
+    except ManualRuntimeError as error:
+        error.add_note(_qa_barrier_mount_failure_note(rows,barrier))
+        raise
     run_rows=[r for r in rows if r['point']=='/run']
     require(len(run_rows)==1,'qa_systemd_barrier_run_mount');run_row=run_rows[0]
     require(run_row['root']=='/' and run_row['fstype']=='tmpfs' and
