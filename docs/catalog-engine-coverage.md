@@ -157,3 +157,49 @@ receipt; add a deployment receipt only after independently observing the actual
 matching artifact. Refresh plugin discovery, then check status, selected pins,
 per-card lookup and aggregate counts. Schema 2 artifacts require this reader;
 retain schema 1 IDs for sessions until the reader transition is complete.
+
+
+## Canonical names and explicit front faces (issue 248)
+
+Schema 3 uses canonical_card_or_explicit_front_face_v2. It separates a whole
+Oracle card's canonical name from its face aliases. A unique exact canonical
+registry name establishes registration for that whole identity; unrelated
+art-series or prepare aliases do not make that canonical match ambiguous and
+do not themselves establish registration for their parent card.
+
+The pinned engine's CardRegistry.register indexes card.name and may also
+index back/flip faces. DeckCoverageCli.writeRegistryNames exports that registry
+name set. Its normalizeForRegistry explicitly reports front-face normalization
+separately from exact whole-name coverage. These are names, not Oracle IDs or
+gameplay tests. The new mapper permits an explicit front match only for a
+catalog transform or modal_dfc identity with exactly two own/null-Oracle
+faces at indices 0/1 forming the exact canonical Front // Back name.
+Pinned naming-contract sources:
+[CardRegistry](https://github.com/Blue42hand/argentum-engine/blob/4569820f513321c952a19b00b233e691af4cea9d/rules-engine/src/main/kotlin/com/wingedsheep/engine/registry/CardRegistry.kt) and
+[DeckCoverageCli](https://github.com/Blue42hand/argentum-engine/blob/4569820f513321c952a19b00b233e691af4cea9d/gym-server/src/main/kotlin/com/wingedsheep/gym/server/tools/DeckCoverageCli.kt).
+Layout comes from that card's matching representative printing. Unknown or
+malformed layout, back-only matches, prepare/art-series aliases and foreign
+faces cannot grant whole-card support. Split/adventure or other layout aliases
+also remain unknown without an explicit naming contract.
+
+A canonical name shared by multiple Oracle identities remains unknown, as do
+colliding eligible front identities or a front shadowed by a different whole
+canonical owner. Unknown results carry public candidates containing Oracle ID,
+canonical name and match role. Case, punctuation and face ownership remain exact;
+Commander legality is not used to resolve registry identity.
+
+The role-aware catalog hash includes canonical names, face indices and ownership,
+and representative layout evidence. Schema 3 retains the exact UTF-8 registry
+export internally, preserving newline bytes, verifies its source hash/count,
+and regenerates each provided card entry against the selected catalog on read.
+Raw export bytes are omitted from query metadata. Missing card entries remain
+unknown. Old schema 1/2 artifacts retain their original flattened mapping,
+hashes, results and IDs; no reader migration silently reinterprets them.
+Rebuilding produces a new content-addressed coverage ID. Publishing to the live
+store and changing its selected evidence remain separate host-owner actions.
+
+Regression fixtures include the 13 issue identities and 15 related aliases
+from snapshot d5eac6f597c9feaf9bfce68d, with source hashes retained. They are
+small synthetic test databases using captured public identity rows, not a
+second coverage ledger. Gameplay correctness and current deployed support
+remain unknown regardless of registry mapping.
