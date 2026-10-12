@@ -242,6 +242,157 @@ def _qa_validate_mountinfo(raw):
                 'qa_credentials_mount')
 
 
+# Only the boundary below can authenticate this kernel tmpfs directory. There is
+# deliberately no approved=True mount-validator argument or public proof token.
+_QA_SYSTEMD_BARRIER_ROOT = '/systemd/inaccessible/dir'
+_QA_SYSTEMD_BARRIER_POINT = '/run/credentials'
+
+
+def _qa_mount_rows(raw):
+    """Parse complete kernel rows before examining any possible exception."""
+    require(type(raw) is bytes and 0<len(raw)<=_QA_MOUNTINFO_MAX_BYTES
+            and raw.endswith(b'\n') and b'\0' not in raw,'qa_mountinfo_size')
+    try:lines=raw.decode('utf-8').splitlines()
+    except UnicodeDecodeError:require(False,'qa_mountinfo_encoding')
+    require(0<len(lines)<=_QA_MOUNTINFO_MAX_ROWS,'qa_mountinfo_rows')
+    rows=[];identities=set()
+    for line in lines:
+        require(0<len(line)<=8192,'qa_mountinfo_row_size')
+        fields=line.split();require(fields.count('-')==1,'qa_mountinfo_separator')
+        sep=fields.index('-')
+        require(sep>=6 and len(fields)==sep+4 and re.fullmatch(r'[0-9]+',fields[0])
+                and int(fields[0])>0 and fields[0]==str(int(fields[0]))
+                and re.fullmatch(r'[0-9]+',fields[1]) and fields[1]==str(int(fields[1]))
+                and re.fullmatch(r'[0-9]+:[0-9]+',fields[2]),'qa_mountinfo_fields')
+        require(fields[0] not in identities,'qa_mountinfo_duplicate');identities.add(fields[0])
+        optional=fields[6:sep]
+        require(len(optional)==len(set(optional)) and all(x=='unbindable' or
+                re.fullmatch(r'(?:shared|master|propagate_from):[1-9][0-9]*',x)
+                for x in optional),'qa_mountinfo_optional')
+        root=_qa_mount_field(fields[3]);point=_qa_mount_field(fields[4])
+        source=_qa_mount_field(fields[sep+2]);fstype=fields[sep+1]
+        for path in (root,point):
+            require(path.startswith('/') and (path=='/' or
+                    all(p not in ('','.', '..') for p in path.split('/')[1:])),
+                    'qa_mountinfo_path')
+        options=fields[5].split(',');super_options=fields[sep+3].split(',')
+        require(all(options) and len(options)==len(set(options)) and
+                all(super_options) and len(super_options)==len(set(super_options)),
+                'qa_mountinfo_options')
+        require(fstype not in ('9p','virtiofs','nfs','nfs4','cifs'),'qa_host_share')
+        major,minor=(int(x) for x in fields[2].split(':'))
+        require(fields[2]==str(major)+':'+str(minor),'qa_mountinfo_device')
+        rows.append(dict(line=line,id=int(fields[0]),parent=int(fields[1]),
+                         device=(major,minor),root=root,point=point,source=source,
+                         fstype=fstype,options=frozenset(options),
+                         superOptions=frozenset(super_options)))
+    return rows
+
+
+def _qa_systemd_barrier_boundary(mounts):
+    """Authenticate one inaccessible tmpfs bind using metadata-only O_PATH FDs.
+
+    Linux shmem directories start at size2*20 and charge20 per child, including
+    regular files/symlinks. Size40+nlink2 is used ONLY on the authenticated tmpfs
+    sentinel, never on arbitrary mode000 directories or another filesystem.
+    No directory list, credential byte read, cap grant or mount action occurs.
+    """
+    rows=_qa_mount_rows(mounts)
+    matches=[r for r in rows if r['point']==_QA_SYSTEMD_BARRIER_POINT]
+    require(len(matches)==1,'qa_systemd_barrier_single_mount');barrier=matches[0]
+    require(barrier['root']==_QA_SYSTEMD_BARRIER_ROOT and
+            barrier['fstype']=='tmpfs' and barrier['source']=='tmpfs' and
+            {'ro','nosuid','nodev','noexec'}<=barrier['options'] and
+            not {'rw','suid','dev','exec'}&barrier['options'] and
+            barrier['options']<={'ro','nosuid','nodev','noexec','relatime',
+                                 'strictatime','noatime','nodiratime','lazytime','nosymfollow'},
+            'qa_systemd_barrier_mount')
+    run_rows=[r for r in rows if r['point']=='/run']
+    require(len(run_rows)==1,'qa_systemd_barrier_run_mount');run_row=run_rows[0]
+    require(run_row['root']=='/' and run_row['fstype']=='tmpfs' and
+            run_row['source']=='tmpfs' and barrier['device']==run_row['device']
+            and barrier['parent']==run_row['id'],'qa_systemd_barrier_run_mount')
+    # Default validation still rejects every other credential root/source and
+    # every late host share. The one candidate row is NOT sufficient proof.
+    for row in rows:
+        if row is not barrier:_qa_validate_mountinfo((row['line']+'\n').encode())
+    require(not any(r['point'] in ('/run/systemd','/run/systemd/inaccessible',
+                                  '/run/systemd/inaccessible/dir') or
+                    r['point'].startswith('/run/systemd/inaccessible/dir/')
+                    for r in rows),'qa_systemd_barrier_source_alias')
+    require(not any('CREDENTIAL' in key for key in os.environ),
+            'qa_systemd_barrier_credential_environment')
+    require(hasattr(os,'O_PATH'),'qa_systemd_barrier_opath')
+    flags=os.O_PATH|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC
+    fds=[];edges=[];snapshots={}
+    def parent(fd):
+        info=os.fstat(fd)
+        _qa_safe_directory(info)
+        snapshots[fd]=_qa_directory_identity(info);return info
+    def child(name,fd):
+        opened=os.open(name,flags,dir_fd=fd);fds.append(opened)
+        require(_qa_directory_identity(os.fstat(opened))==_qa_directory_identity(
+            os.stat(name,dir_fd=fd,follow_symlinks=False)),
+            'qa_systemd_barrier_changed')
+        edges.append((fd,name,opened));return opened
+    def sentinel(fd):
+        info=os.fstat(fd)
+        require(stat.S_ISDIR(info.st_mode) and info.st_uid==info.st_gid==0
+                and stat.S_IMODE(info.st_mode)==0 and info.st_nlink==2
+                and info.st_size==40,'qa_systemd_barrier_empty_tmpfs')
+        require((os.major(info.st_dev),os.minor(info.st_dev))==barrier['device'],
+                'qa_systemd_barrier_device')
+        snapshots[fd]=_qa_directory_identity(info);return info
+    try:
+        root_fd=os.open('/',flags);fds.append(root_fd);parent(root_fd)
+        run_fd=child('run',root_fd);run_info=parent(run_fd)
+        require((os.major(run_info.st_dev),os.minor(run_info.st_dev))==run_row['device'],
+                'qa_systemd_barrier_device')
+        systemd_fd=child('systemd',run_fd);systemd_info=parent(systemd_fd)
+        inaccessible_fd=child('inaccessible',systemd_fd);inaccessible_info=parent(inaccessible_fd)
+        require(systemd_info.st_dev==inaccessible_info.st_dev==run_info.st_dev,
+                'qa_systemd_barrier_source_device')
+        source_fd=child('dir',inaccessible_fd);source=sentinel(source_fd)
+        target_fd=child('credentials',run_fd);target=sentinel(target_fd)
+        require(_qa_directory_identity(source)==_qa_directory_identity(target),
+                'qa_systemd_barrier_source_identity')
+        # Reject another credential root even when it is not a mount. Only
+        # missing host/credentials is allowed; no child bytes are inspected.
+        host_fd=None
+        try:host_fd=child('host',run_fd)
+        except FileNotFoundError:pass
+        if host_fd is not None:
+            parent(host_fd)
+            try:os.stat('credentials',dir_fd=host_fd,follow_symlinks=False)
+            except FileNotFoundError:pass
+            else:require(False,'qa_systemd_barrier_other_credentials')
+        require(_qa_read_mountinfo()==mounts,'qa_mountinfo_changed')
+        for fd,old in snapshots.items():
+            require(_qa_directory_identity(os.fstat(fd))==old,'qa_systemd_barrier_changed')
+        for fd,name,opened in edges:
+            require(_qa_directory_identity(os.stat(name,dir_fd=fd,follow_symlinks=False))
+                    ==snapshots[opened],'qa_systemd_barrier_changed')
+        # Absence of the alternative root must remain stable too.
+        if host_fd is None:
+            try:os.stat('host',dir_fd=run_fd,follow_symlinks=False)
+            except FileNotFoundError:pass
+            else:require(False,'qa_systemd_barrier_changed')
+        else:
+            try:os.stat('credentials',dir_fd=host_fd,follow_symlinks=False)
+            except FileNotFoundError:pass
+            else:require(False,'qa_systemd_barrier_other_credentials')
+        require(_qa_read_mountinfo()==mounts,'qa_mountinfo_changed')
+        # Re-stat after the final table read too; it cannot hide a leaf mutation.
+        for fd,old in snapshots.items():
+            require(_qa_directory_identity(os.fstat(fd))==old,'qa_systemd_barrier_changed')
+        for fd,name,opened in edges:
+            require(_qa_directory_identity(os.stat(name,dir_fd=fd,follow_symlinks=False))
+                    ==snapshots[opened],'qa_systemd_barrier_changed')
+    except OSError:require(False,'qa_systemd_barrier_io')
+    finally:
+        for fd in reversed(fds):os.close(fd)
+
+
 def _qa_credentials_boundary():
     """Permit systemd's empty directory, never a credential payload/mount.
 
@@ -251,7 +402,10 @@ def _qa_credentials_boundary():
     flags=os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC
     root_fd=run_fd=credential_fd=None
     try:
-        mounts=_qa_read_mountinfo();_qa_validate_mountinfo(mounts)
+        mounts=_qa_read_mountinfo()
+        if any(row['point']==_QA_SYSTEMD_BARRIER_POINT for row in _qa_mount_rows(mounts)):
+            _qa_systemd_barrier_boundary(mounts);return
+        _qa_validate_mountinfo(mounts)
         root_fd=_qa_open_guest_root();root_info=os.fstat(root_fd);_qa_safe_directory(root_info)
         run_fd=os.open('run',flags,dir_fd=root_fd);run_info=os.fstat(run_fd);_qa_safe_directory(run_info)
         require(_qa_directory_identity(run_info)==_qa_directory_identity(
