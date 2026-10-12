@@ -169,6 +169,122 @@ def validate_authority(value, production, qa, ci, *, now):
     return match
 
 
+_QA_MOUNTINFO_MAX_BYTES = 1024*1024
+_QA_MOUNTINFO_MAX_ROWS = 4096
+_QA_SAFE_DIRECTORY_MODES = frozenset((0o700,0o750,0o755))
+
+
+def _qa_directory_identity(info):
+    return (info.st_dev,info.st_ino,info.st_mode,info.st_uid,info.st_gid,
+            info.st_nlink,info.st_size,info.st_mtime_ns,info.st_ctime_ns)
+
+
+def _qa_safe_directory(info):
+    require(stat.S_ISDIR(info.st_mode) and info.st_uid==0 and info.st_gid==0
+            and stat.S_IMODE(info.st_mode) in _QA_SAFE_DIRECTORY_MODES,
+            'qa_credentials_directory')
+
+
+def _qa_open_guest_root():
+    return os.open('/',os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC)
+
+
+def _qa_read_mountinfo():
+    fd=os.open('/proc/self/mountinfo',os.O_RDONLY|os.O_NOFOLLOW|os.O_CLOEXEC)
+    try:
+        info=os.fstat(fd)
+        require(stat.S_ISREG(info.st_mode),'qa_mountinfo_type')
+        chunks=[];total=0
+        while True:
+            part=os.read(fd,min(65536,_QA_MOUNTINFO_MAX_BYTES+1-total))
+            if not part:break
+            chunks.append(part);total+=len(part)
+            require(total<=_QA_MOUNTINFO_MAX_BYTES,'qa_mountinfo_size')
+        return b''.join(chunks)
+    finally:os.close(fd)
+
+
+def _qa_mount_field(raw):
+    escapes={'040':' ','011':'\t','012':'\n','134':'\\'}
+    require(not re.search(r'\\(?!040|011|012|134)',raw),'qa_mountinfo_escape')
+    return re.sub(r'\\(040|011|012|134)',lambda m:escapes[m.group(1)],raw)
+
+
+def _qa_credential_path(path):
+    return any(path==prefix or path.startswith(prefix+'/')
+               for prefix in ('/run/credentials','/run/host/credentials'))
+
+
+def _qa_validate_mountinfo(raw):
+    require(type(raw) is bytes and 0<len(raw)<=_QA_MOUNTINFO_MAX_BYTES
+            and raw.endswith(b'\n') and b'\0' not in raw,'qa_mountinfo_size')
+    try:lines=raw.decode('utf-8').splitlines()
+    except UnicodeDecodeError:require(False,'qa_mountinfo_encoding')
+    require(0<len(lines)<=_QA_MOUNTINFO_MAX_ROWS,'qa_mountinfo_rows')
+    for line in lines:
+        require(0<len(line)<=8192,'qa_mountinfo_row_size')
+        fields=line.split()
+        require(fields.count('-')==1,'qa_mountinfo_separator')
+        sep=fields.index('-')
+        require(sep>=6 and len(fields)==sep+4 and fields[0].isdigit()
+                and fields[1].isdigit() and re.fullmatch(r'[0-9]+:[0-9]+',fields[2]),
+                'qa_mountinfo_fields')
+        root=_qa_mount_field(fields[3]);point=_qa_mount_field(fields[4])
+        source=_qa_mount_field(fields[sep+2]);fstype=fields[sep+1]
+        for path in (root,point):
+            require(path.startswith('/') and (path=='/' or
+                    all(p not in ('','.', '..') for p in path.split('/')[1:])),
+                    'qa_mountinfo_path')
+        require(fstype not in ('9p','virtiofs','nfs','nfs4','cifs'),'qa_host_share')
+        require(not _qa_credential_path(root) and not _qa_credential_path(point)
+                and not _qa_credential_path(source)
+                and not re.search(r'(^|:)/run/(?:host/)?credentials(?:/|$)',source),
+                'qa_credentials_mount')
+
+
+def _qa_credentials_boundary():
+    """Permit systemd's empty directory, never a credential payload/mount.
+
+    This is only a local check inside the already authenticated isolated guest;
+    it does not replace the sealed outer no-host-share construction.
+    """
+    flags=os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC
+    root_fd=run_fd=credential_fd=None
+    try:
+        mounts=_qa_read_mountinfo();_qa_validate_mountinfo(mounts)
+        root_fd=_qa_open_guest_root();root_info=os.fstat(root_fd);_qa_safe_directory(root_info)
+        run_fd=os.open('run',flags,dir_fd=root_fd);run_info=os.fstat(run_fd);_qa_safe_directory(run_info)
+        require(_qa_directory_identity(run_info)==_qa_directory_identity(
+            os.stat('run',dir_fd=root_fd,follow_symlinks=False)),'qa_credentials_changed')
+        try:credential_fd=os.open('credentials',flags,dir_fd=run_fd)
+        except FileNotFoundError:pass  # Only this exact missing leaf is allowed.
+        if credential_fd is not None:
+            info=os.fstat(credential_fd);_qa_safe_directory(info)
+            require(_qa_directory_identity(info)==_qa_directory_identity(
+                os.stat('credentials',dir_fd=run_fd,follow_symlinks=False)),'qa_credentials_changed')
+            require(not os.listdir(credential_fd),'qa_credentials_not_empty')
+        require(_qa_read_mountinfo()==mounts,'qa_mountinfo_changed')
+        if credential_fd is None:
+            try:os.stat('credentials',dir_fd=run_fd,follow_symlinks=False)
+            except FileNotFoundError:pass
+            else:require(False,'qa_credentials_changed')
+        else:
+            require(not os.listdir(credential_fd),'qa_credentials_not_empty')
+            require(_qa_directory_identity(info)==_qa_directory_identity(os.fstat(credential_fd))
+                    and _qa_directory_identity(info)==_qa_directory_identity(
+                        os.stat('credentials',dir_fd=run_fd,follow_symlinks=False)),
+                    'qa_credentials_changed')
+        require(_qa_directory_identity(run_info)==_qa_directory_identity(os.fstat(run_fd))
+                and _qa_directory_identity(run_info)==_qa_directory_identity(
+                    os.stat('run',dir_fd=root_fd,follow_symlinks=False))
+                and _qa_directory_identity(root_info)==_qa_directory_identity(os.fstat(root_fd)),
+                'qa_credentials_changed')
+    except OSError:require(False,'qa_credentials_io')
+    finally:
+        for fd in (credential_fd,run_fd,root_fd):
+            if fd is not None:os.close(fd)
+
+
 def guest_boundary():
     require(sys.platform == 'linux' and os.geteuid() == 0, 'qa_linux_root')
     # Root-sealed operator marker is staged only in the disposable guest. Root
@@ -176,13 +292,9 @@ def guest_boundary():
     require(root_bytes(ROOT/'isolated-guest.marker', 128) == b'commander-gym-isolated-qa-v1\n', 'qa_guest_marker')
     require({p.name for p in Path('/sys/class/net').iterdir()} == {'lo'}, 'qa_external_nic')
     for path in ('/etc/argentum-luna/operator-policy.json', '/etc/argentum-play/qualifications',
-                 '/var/lib/commander-gym/runs/native', '/run/credentials'):
+                 '/var/lib/commander-gym/runs/native'):
         require(not Path(path).exists() and not Path(path).is_symlink(), 'qa_production_mount')
-    # The marker is authority to run Q only; no parent/root mount is accepted.
-    mounts = Path('/proc/self/mountinfo').read_text().splitlines()
-    for line in mounts:
-        fields = line.split(); sep = fields.index('-')
-        require(fields[sep+1] not in ('9p','virtiofs','nfs','nfs4','cifs'), 'qa_host_share')
+    _qa_credentials_boundary()
 
 
 def cgroup_empty(group):
