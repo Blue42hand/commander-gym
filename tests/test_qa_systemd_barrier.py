@@ -3,7 +3,7 @@
 The actual matched module is imported from root's new staged source checkout.
 Synthetic FD graph is explicit; it is not guest custody or runtime qualification.
 """
-import errno,os,stat,types,unittest
+import errno,os,stat,types,unittest,json,traceback
 from contextlib import ExitStack
 from unittest.mock import patch
 from commander_gym import manual_runtime_qa as qa
@@ -51,6 +51,35 @@ class SystemdBarrierTests(unittest.TestCase):
             stack.enter_context(patch.dict(qa.os.environ,environment or {},clear=True))
             if direct:qa._qa_systemd_barrier_boundary(self.tables)
             else:qa._qa_credentials_boundary()
+    def test_failure_metadata_survives_default_traceback_without_content_reads(self):
+        self.tables=BASE+BARRIER.replace(b'ro,nosuid,nodev,noexec,relatime',b'ro,relatime')
+        with self.assertRaises(ManualRuntimeError) as caught:self.invoke()
+        error=caught.exception
+        self.assertEqual(str(error),'qa_systemd_barrier_mount')
+        note=error.__notes__[0]
+        self.assertLessEqual(len(note),2048)
+        data=json.loads(note.split('=',1)[1])
+        self.assertEqual(data['missingRequiredOptions'],['nodev','noexec','nosuid'])
+        self.assertEqual(data['checks'],dict(root=True,fstype=True,source=True,requiredOptions=False,forbiddenOptionsAbsent=True,allowedOptionsOnly=True))
+        self.assertEqual(data['barrier']['id'],3)
+        self.assertEqual(data['run']['id'],2)
+        self.assertIn(note,''.join(traceback.TracebackException.from_exception(error).format()))
+        self.assertEqual(self.opened,[]) # Failed predicate runs before metadata FDs.
+    def test_failure_note_does_not_echo_unrecognized_fields_or_options(self):
+        marker='synthetic-private-never-echo'
+        self.tables=BASE+BARRIER.replace(b'tmpfs tmpfs',('tmpfs '+marker).encode()).replace(b'ro,nosuid,nodev,noexec,relatime',('ro,'+marker).encode())
+        with self.assertRaises(ManualRuntimeError) as caught:self.invoke()
+        note=caught.exception.__notes__[0]
+        self.assertNotIn(marker,note)
+        data=json.loads(note.split('=',1)[1])
+        self.assertFalse(data['checks']['source'])
+        self.assertFalse(data['checks']['allowedOptionsOnly'])
+        self.assertEqual(data['barrier']['unknownOptionCount'],1)
+    def test_failure_note_uses_same_parsed_table_without_reread(self):
+        bad=BASE+BARRIER.replace(b'ro,nosuid,nodev,noexec,relatime',b'ro')
+        with patch.object(qa,'_qa_read_mountinfo',side_effect=AssertionError('No diagnostic reread')),patch.object(qa.os,'open',side_effect=AssertionError('No diagnostic file open')):
+            with self.assertRaises(ManualRuntimeError) as caught:qa._qa_systemd_barrier_boundary(bad)
+        self.assertIn('qa_systemd_barrier_metadata=',caught.exception.__notes__[0])
     def test_authentic_empty_tmpfs_sentinel_passes_metadata_only(self):
         self.invoke();self.assertEqual(self.closed,[105,104,103,102,101,100])
     def test_default_validator_always_rejects_barrier_without_fd_proof(self):
