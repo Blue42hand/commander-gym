@@ -20,7 +20,7 @@ def metadata(inode,mode=0o755,device=None,size=80,links=3):
 
 class SystemdBarrierTests(unittest.TestCase):
     def setUp(self):
-        self.info={100:metadata(1,device=os.makedev(8,1)),101:metadata(2),102:metadata(3),103:metadata(4),
+        self.info={100:metadata(1,device=os.makedev(8,1)),101:metadata(2),102:metadata(3),103:metadata(4,mode=0o555),
                    104:metadata(8,mode=0,size=40,links=2),105:metadata(8,mode=0,size=40,links=2)}
         self.edges={(100,'run'):101,(101,'systemd'):102,(102,'inaccessible'):103,(103,'dir'):104,(101,'credentials'):105}
         self.opened=[];self.closed=[];self.tables=TABLE;self.fault=None;self.stat_hook=None
@@ -82,6 +82,34 @@ class SystemdBarrierTests(unittest.TestCase):
         self.assertIn('qa_systemd_barrier_metadata=',caught.exception.__notes__[0])
     def test_authentic_empty_tmpfs_sentinel_passes_metadata_only(self):
         self.invoke();self.assertEqual(self.closed,[105,104,103,102,101,100])
+    def test_readonly_systemd_parent_matches_real_systemd_metadata(self):
+        self.assertEqual(stat.S_IMODE(self.info[103].st_mode),0o555)
+        self.invoke();self.assertEqual(self.closed,[105,104,103,102,101,100])
+    def test_readonly_parent_exception_is_not_general(self):
+        for fd in (100,101,102):
+            old=self.info[fd].st_mode;self.info[fd].st_mode=stat.S_IFDIR|0o555
+            with self.subTest(fd=fd),self.assertRaises(ManualRuntimeError):self.invoke()
+            self.info[fd].st_mode=old
+        self.info[106]=metadata(10,mode=0o555);self.edges[(101,'host')]=106
+        with self.assertRaises(ManualRuntimeError):self.invoke()
+    def test_systemd_readonly_parent_still_requires_type_ownership_and_safe_mode(self):
+        for field,bad in (('st_uid',999),('st_gid',999),('st_mode',stat.S_IFREG|0o555),('st_mode',stat.S_IFLNK|0o555),('st_mode',stat.S_IFDIR|0o575),('st_mode',stat.S_IFDIR|0o557),('st_mode',stat.S_IFDIR|0o777),('st_mode',stat.S_IFDIR|0o1555)):
+            old=getattr(self.info[103],field);setattr(self.info[103],field,bad)
+            with self.subTest(field=field,bad=bad),self.assertRaises(ManualRuntimeError):self.invoke()
+            setattr(self.info[103],field,old)
+    def test_prior_safe_systemd_parent_modes_remain_supported(self):
+        for mode in (0o700,0o750,0o755):
+            self.info[103].st_mode=stat.S_IFDIR|mode
+            with self.subTest(mode=mode):self.invoke()
+    def test_readonly_systemd_parent_identity_mutation_is_rejected(self):
+        calls=0
+        def table():
+            nonlocal calls
+            calls+=1
+            if calls==2:self.info[103].st_ctime_ns+=1
+            return TABLE
+        self.tables=table
+        with self.assertRaises(ManualRuntimeError):self.invoke()
     def test_default_validator_always_rejects_barrier_without_fd_proof(self):
         with self.assertRaises(ManualRuntimeError):qa._qa_validate_mountinfo(TABLE)
         with self.assertRaises(TypeError):qa._qa_validate_mountinfo(TABLE,approved=True)
