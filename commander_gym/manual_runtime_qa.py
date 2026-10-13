@@ -185,6 +185,16 @@ def _qa_safe_directory(info):
             'qa_credentials_directory')
 
 
+def _qa_safe_systemd_inaccessible_parent(info):
+    # systemd deliberately marks only this masking-node parent read-only.
+    # The fixed nofollow /run/systemd/inaccessible path is authenticated by
+    # _qa_systemd_barrier_boundary; generic parent modes stay unchanged.
+    require(stat.S_ISDIR(info.st_mode) and info.st_uid==info.st_gid==0
+            and (stat.S_IMODE(info.st_mode) in _QA_SAFE_DIRECTORY_MODES
+                 or stat.S_IMODE(info.st_mode)==0o555),
+            'qa_credentials_directory')
+
+
 def _qa_open_guest_root():
     return os.open('/',os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC)
 
@@ -358,9 +368,10 @@ def _qa_systemd_barrier_boundary(mounts):
     require(hasattr(os,'O_PATH'),'qa_systemd_barrier_opath')
     flags=os.O_PATH|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC
     fds=[];edges=[];snapshots={}
-    def parent(fd):
+    def parent(fd, *, systemd_inaccessible=False):
         info=os.fstat(fd)
-        _qa_safe_directory(info)
+        if systemd_inaccessible:_qa_safe_systemd_inaccessible_parent(info)
+        else:_qa_safe_directory(info)
         snapshots[fd]=_qa_directory_identity(info);return info
     def child(name,fd):
         opened=os.open(name,flags,dir_fd=fd);fds.append(opened)
@@ -382,7 +393,7 @@ def _qa_systemd_barrier_boundary(mounts):
         require((os.major(run_info.st_dev),os.minor(run_info.st_dev))==run_row['device'],
                 'qa_systemd_barrier_device')
         systemd_fd=child('systemd',run_fd);systemd_info=parent(systemd_fd)
-        inaccessible_fd=child('inaccessible',systemd_fd);inaccessible_info=parent(inaccessible_fd)
+        inaccessible_fd=child('inaccessible',systemd_fd);inaccessible_info=parent(inaccessible_fd,systemd_inaccessible=True)
         require(systemd_info.st_dev==inaccessible_info.st_dev==run_info.st_dev,
                 'qa_systemd_barrier_source_device')
         source_fd=child('dir',inaccessible_fd);source=sentinel(source_fd)
