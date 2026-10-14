@@ -56,6 +56,10 @@ class RuntimeInstallSystemdTests(unittest.TestCase):
         self.assertTrue(Path('/opt/fixture/ISOLATED_RELEASE_TEST').exists())
         self.assertTrue(Path('/run/systemd/system').is_dir()); self.assertEqual(os.getuid(),0)
         self.assertFalse(Path('/etc/argentum-luna/current.json').exists())
+        # Docker provides a private /run tmpfs. Propagate credential mounts only
+        # within this disposable container, as in the credential reader fixture.
+        self.assertFalse(Path('/run/host').exists())
+        subprocess.run(['mount', '--make-rshared', '/run'], check=True)
         self.addCleanup(self.fixture_diagnostics)
         timeout=patch('commander_gym.manual_runtime_host.READINESS_TIMEOUT_SECONDS',15)
         timeout.start();self.addCleanup(timeout.stop)

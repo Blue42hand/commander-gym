@@ -197,8 +197,8 @@ def install(root, manifest):
         host._select_files(checked); host._reload(); host.verify_snapshot(host.current())
         host.start_closed()
         state = host.status()
+        command('/usr/bin/systemctl', 'enable', 'argentum-play.service', 'argentum-web.service', 'argentum-admission.timer')
         atomic_root(journal, canonical({'runtimeId': runtime_id, 'phase': 'completed'}))
         host.resume(state['bootId'], checked.runtime_id)
-    command('/usr/bin/systemctl', 'enable', 'argentum-play.service', 'argentum-web.service')
-    command('/usr/bin/systemctl', 'enable', '--now', 'argentum-admission.timer')
+    command('/usr/bin/systemctl', 'start', 'argentum-admission.timer')
     return {'state': 'installed', 'runtimeId': checked.runtime_id}
