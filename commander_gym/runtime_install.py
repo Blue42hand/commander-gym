@@ -128,6 +128,7 @@ Description=Keep healthy same-release admission available
 [Timer]
 OnBootSec=15
 OnUnitInactiveSec=15
+AccuracySec=1s
 Unit=argentum-admission.service
 [Install]
 WantedBy=timers.target

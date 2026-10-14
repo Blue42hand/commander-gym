@@ -63,7 +63,7 @@ class RuntimeInstallSystemdTests(unittest.TestCase):
         self.addCleanup(self.fixture_diagnostics)
         timeout=patch('commander_gym.manual_runtime_host.READINESS_TIMEOUT_SECONDS',15)
         timeout.start();self.addCleanup(timeout.stop)
-        for unit in ('argentum-play','argentum-luna-sidecar','argentum-recorder'):
+        for unit in ('argentum-play','argentum-luna-sidecar','argentum-recorder','argentum-admission'):
             override=Path('/run/systemd/system')/(unit+'.service.d')/'fixture-diagnostics.conf'
             override.parent.mkdir(parents=True);override.write_text('[Service]\nStandardError=journal\n')
 
@@ -77,7 +77,7 @@ class RuntimeInstallSystemdTests(unittest.TestCase):
         for command in (['systemctl','--no-pager','--failed'],
                         ['journalctl','--no-pager','-n','80','-u','argentum-recorder.service',
                          '-u','argentum-manual-preflight.service','-u','argentum-binding-catalog.service',
-                         '-u','argentum-luna-sidecar.service','-u','argentum-play.service','-u','argentum-web.service']):
+                         '-u','argentum-luna-sidecar.service','-u','argentum-play.service','-u','argentum-web.service','-u','argentum-admission.service']):
             subprocess.run(command, check=False, timeout=15)
 
     def command(self, *args):

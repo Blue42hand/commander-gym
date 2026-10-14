@@ -289,6 +289,7 @@ Description=Watch completed binding repository pulls
 [Timer]
 OnBootSec=5
 OnUnitInactiveSec={interval}
+AccuracySec=1s
 Unit=argentum-binding-catalog.service
 [Install]
 WantedBy=timers.target
