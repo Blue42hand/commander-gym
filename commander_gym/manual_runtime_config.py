@@ -106,7 +106,8 @@ log_format argentum_metadata '$time_iso8601 $request_method $status $body_bytes_
     return maps
 
 
-def service_units(*, launcher_root: str, dependency_root: str, python_relative: str, tailnet_only: bool = False) -> dict[str, str]:
+def service_units(*, launcher_root: str, dependency_root: str, python_relative: str, tailnet_only: bool = False,
+                  live_catalog: dict | None = None) -> dict[str, str]:
     require(type(tailnet_only) is bool, 'ingress_mode')
     for role, root in (('launcher', launcher_root), ('dependencies', dependency_root)):
         require(re.fullmatch('/srv/argentum-luna/artifacts/' + role + '/[0-9a-f]{64}', root), 'sealed_unit_layout')
@@ -246,6 +247,56 @@ ReadWritePaths=/etc/argentum-luna /var/lib/argentum-updater/manual-runtime /run/
 '''
         if operation == 'admit':
             result['units/' + unit + '.conf'] += 'TimeoutStartSec=660\n'
+    if live_catalog is not None:
+        require(live_catalog['checkoutRoot'] == '/srv/commander-bindings/checkout'
+                and live_catalog['snapshotRoot'] == '/var/lib/commander-bindings', 'live_catalog_layout')
+        # Pin the proxy executable as part of the same release on managed hosts.
+        result['units/argentum-web.conf'] += ('[Service]\nExecStart=\nExecStart=' + dependency_root
+            + "/qa-proxy/nginx -c /etc/argentum-play/nginx.conf -g 'daemon off;'\n")
+        interval = live_catalog['pollSeconds']
+        require(type(interval) is int and 5 <= interval <= 300, 'live_catalog_poll')
+        result['units/argentum-binding-catalog.service'] = f'''[Unit]
+Description=Validate and publish committed private binding data
+Before=argentum-recorder.service argentum-luna-sidecar.service
+[Service]
+Type=oneshot
+User=root
+Group=commander-prod
+StateDirectory=commander-bindings
+StateDirectoryMode=0750
+ExecStart={python} -I -S -B {launcher_root}/scripts/publish_binding_catalog.py
+UMask=0027
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ReadWritePaths=/var/lib/commander-bindings
+ReadOnlyPaths=/srv/commander-bindings/checkout
+InaccessiblePaths=/srv/commander-runtime /var/lib/commander-gym/runs /etc/argentum-play/commander-gym.sidecar.token
+RestrictAddressFamilies=AF_UNIX AF_INET
+IPAddressDeny=any
+IPAddressAllow=127.0.0.1
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH
+MemoryMax=256M
+TasksMax=16
+TimeoutStartSec=60
+StandardOutput=journal
+StandardError=null
+'''
+        result['units/argentum-binding-catalog.timer'] = f'''[Unit]
+Description=Watch completed binding repository pulls
+[Timer]
+OnBootSec=5
+OnUnitInactiveSec={interval}
+Unit=argentum-binding-catalog.service
+[Install]
+WantedBy=timers.target
+'''
+        result['units/argentum-luna-sidecar.service'] += '\n[Service]\nRestart=on-failure\nRestartSec=5\n'
+        dependency = '[Unit]\nRequires=argentum-binding-catalog.service\nAfter=argentum-binding-catalog.service\n'
+        for name in ('units/argentum-recorder.service', 'units/argentum-luna-sidecar.service'):
+            result[name] += '\n' + dependency
     return result
 
 
@@ -258,7 +309,7 @@ def validate_config_contract(profile: dict) -> None:
     require(len(tailnet) == 1 and (tailnet_only or lan_origin in ingress['origins']), 'config_origin_mode')
     expected = service_units(launcher_root=artifacts['launcher']['root'],
         dependency_root=artifacts['dependencies']['root'], python_relative='python/bin/python3.12',
-        tailnet_only=tailnet_only)
+        tailnet_only=tailnet_only, live_catalog=profile.get('liveCatalog'))
     expected['nginx.conf'] = shared_https_nginx(frontend_root=artifacts['frontend']['root'],
         tailnet_origin=tailnet[0], lan_address=ingress['lanAddress'], lan_subnet=ingress['lanSubnet'],
         tailnet_only=tailnet_only)

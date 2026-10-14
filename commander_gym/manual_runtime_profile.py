@@ -80,7 +80,8 @@ def _commit(value: Any) -> bool:
 
 def validate_profile(profile: Mapping[str, Any]) -> dict:
     redis_qa = type(profile) is dict and profile.get("profile") == "manual-luna-redis-qa-v1"
-    require(type(profile) is dict and set(profile) == PROFILE_FIELDS | ({"redisQa"} if redis_qa else set()), "profile_fields")
+    optional = ({"redisQa"} if redis_qa else set()) | ({"liveCatalog"} if type(profile) is dict and "liveCatalog" in profile else set())
+    require(type(profile) is dict and set(profile) == PROFILE_FIELDS | optional, "profile_fields")
     require(type(profile["schemaVersion"]) is int and profile["schemaVersion"] == 1, "profile_schema")
     require((profile["profile"] == "manual-luna-v1" and profile["purpose"] in ("qualification", "native-manual-play"))
             or (redis_qa and profile["purpose"] == "qualification"), "profile_kind")
@@ -158,8 +159,19 @@ def validate_profile(profile: Mapping[str, Any]) -> dict:
     relative_path(catalog["roster"])
     relative_path(catalog["manifest"])
     require(catalog["roster"] in artifacts["catalog"]["files"] and catalog["manifest"] in artifacts["catalog"]["files"], "catalog_seal_required")
-    require(type(catalog["bindings"]) is dict and len(catalog["bindings"]) == 3 and all(type(name) is str and name and _sha(fp) for name, fp in catalog["bindings"].items()), "binding_pins")
+    require(type(catalog["bindings"]) is dict and 1 <= len(catalog["bindings"]) <= 256 and all(type(name) is str and name and _sha(fp) for name, fp in catalog["bindings"].items()), "binding_pins")
     require(_sha(catalog["pilotFingerprint"]) and type(catalog["componentDigest"]) is str and catalog["componentDigest"].startswith("sha256:") and _sha(catalog["componentDigest"][7:]), "pilot_pins")
+    if 'liveCatalog' in profile:
+        live = profile['liveCatalog']
+        require(type(live) is dict and set(live) == {'checkoutRoot', 'snapshotRoot', 'roster', 'pollSeconds'}, 'live_catalog_fields')
+        absolute_path(live['checkoutRoot']); absolute_path(live['snapshotRoot']); relative_path(live['roster'])
+        require(type(live['pollSeconds']) is int and 5 <= live['pollSeconds'] <= 300, 'live_catalog_poll')
+        require(live['checkoutRoot'] != live['snapshotRoot']
+                and not Path(live['snapshotRoot']).is_relative_to(live['checkoutRoot'])
+                and not Path(live['checkoutRoot']).is_relative_to(live['snapshotRoot']), 'live_catalog_overlap')
+        if profile['purpose'] == 'native-manual-play':
+            require(live['checkoutRoot'] == '/srv/commander-bindings/checkout'
+                    and live['snapshotRoot'] == '/var/lib/commander-bindings', 'live_catalog_layout')
     policy = profile["credentialPolicy"]
     require(policy == {"providerReaders": ["sidecar"], "tokenReaders": ["native", "sidecar"],
                        "providerSource": "existing-private-env", "delivery": "systemd-credentials",

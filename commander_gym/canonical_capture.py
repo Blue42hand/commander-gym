@@ -270,6 +270,8 @@ def _convert(report, database, *, cancel):
             'engineRevision': revision, 'gymRevision': pins['gym'], 'lineage': {k: v.to_dict() for k, v in refs.items()}}}
         # Mechanical routing has no provider metadata; classify actual callback delivery explicitly.
         metadata.setdefault('routing', {'path': 'native-callback', 'callback': callback_kind})
+        if 'catalog' in lineage:
+            metadata['recordingProvenance']['catalog'] = lineage['catalog']
         timing = {}
         if start['clock_id'] == callback['clock_id'] and callback['elapsed_ns'] >= start['elapsed_ns']:
             timing['pilot_elapsed_ms'] = (callback['elapsed_ns'] - start['elapsed_ns']) / 1_000_000

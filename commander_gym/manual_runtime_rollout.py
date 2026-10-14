@@ -123,7 +123,7 @@ def _promote(host: RuntimeHost, validate, *, clock=time.time) -> dict:
                 host.held("committed_resume_unconfirmed")
                 raise ManualRuntimeError("committed_resume_unconfirmed") from None
             try:
-                host.stop_closure()
+                getattr(host, 'stop_for_rollback', host.stop_closure)()
                 require(host.quiescence_barrier() is True, "rollback_stop_barrier")
                 host.verify_snapshot(previous)
                 host.select(previous)

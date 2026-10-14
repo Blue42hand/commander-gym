@@ -29,6 +29,7 @@ from .manual_runtime_profile import (
 from .manual_runtime_rollout import RuntimeSnapshot
 from .manual_runtime_quiescence import capture_inventory, stop_context, matches_stop_proof
 
+READINESS_TIMEOUT_SECONDS = 600
 CONFIG = Path('/etc/argentum-luna')
 STATE = Path('/var/lib/argentum-updater/manual-runtime')
 GATE = Path('/run/argentum-luna-runtime/precredential.json')
@@ -48,6 +49,8 @@ TARGETS = {
     'units/argentum-admission.conf': Path('/etc/systemd/system/argentum-admission.service.d/manual-runtime.conf'),
     'units/argentum-luna-sidecar.service': Path('/etc/systemd/system/argentum-luna-sidecar.service'),
     'units/argentum-manual-preflight.service': Path('/etc/systemd/system/argentum-manual-preflight.service'),
+    'units/argentum-binding-catalog.service': Path('/etc/systemd/system/argentum-binding-catalog.service'),
+    'units/argentum-binding-catalog.timer': Path('/etc/systemd/system/argentum-binding-catalog.timer'),
 }
 
 
@@ -58,7 +61,8 @@ def selected_targets(profile):
     config_files = profile['artifacts']['config']['files']
     return {name: path for name, path in TARGETS.items()
             if not (tailnet_only and name == "lan-server.crt")
-            and not (name == 'units/argentum-recorder.service' and name not in config_files)}
+            and not (name in ('units/argentum-recorder.service', 'units/argentum-binding-catalog.service',
+                             'units/argentum-binding-catalog.timer') and name not in config_files)}
 
 
 def root_json(path: Path) -> dict:
@@ -116,11 +120,18 @@ class ProtectedRuntimeHost:
                 and policy['implementationApproved'] is True and policy['activationApproved'] is True
                 and type(policy['minFreeBytes']) is int and policy['minFreeBytes'] >= 32 * 1024**3, 'operator_activation_policy')
         self.policy = policy
-        # No environment-controlled import path; legacy trees were fully sealed.
-        for path in (NATIVE_LIB, SOURCE_LIB): sys.path.insert(0, str(path))
-        self.legacy = importlib.import_module('idle_updater')
-        self.native = importlib.import_module('host_adapter')
-        self.base = self.legacy.IdleHost()
+        # Standalone manual installs need no historical keyless deployment.
+        selector = root_json(CONFIG / 'current.json')
+        self.legacy = self.native = None
+        if selector.get('kind') == 'keyless':
+            for path in (NATIVE_LIB, SOURCE_LIB): sys.path.insert(0, str(path))
+            self.legacy = importlib.import_module('idle_updater')
+            self.native = importlib.import_module('host_adapter')
+            self.base = self.legacy.IdleHost()
+        else:
+            require(selector.get('kind') == 'manual-luna-v1', 'unknown_active_profile')
+            from .manual_runtime_control import ManualControl
+            self.base = ManualControl(anchor_profile['identities']['nativeUid'])
         self.locked = False
         self.pending = None
         self.anchor = anchor_profile
@@ -182,6 +193,18 @@ class ProtectedRuntimeHost:
         subprocess.run(['/usr/bin/systemctl', verb, unit], check=True, timeout=150,
                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
+    def _catalog_timer(self, enabled):
+        # A missing timer is normal for releases predating live catalogs.
+        unit = 'argentum-binding-catalog.timer'
+        if not Path('/etc/systemd/system/' + unit).exists(): return
+        subprocess.run(['/usr/bin/systemctl', 'enable' if enabled else 'disable', '--now', unit],
+                       check=True, timeout=30, stdin=subprocess.DEVNULL,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if not enabled:
+            subprocess.run(['/usr/bin/systemctl', 'stop', 'argentum-binding-catalog.service'],
+                           check=True, timeout=60, stdin=subprocess.DEVNULL,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
     def _reload(self):
         subprocess.run(['/usr/bin/systemctl', 'daemon-reload'], check=True, timeout=30,
                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -193,7 +216,7 @@ class ProtectedRuntimeHost:
 
     def begin(self, previous, candidate):
         self._locked(); self._clear_gate()
-        bank = STATE / ('rollback-' + candidate.runtime_id)
+        bank = STATE / ('rollback-' + candidate.runtime_id + '-' + str(candidate.sequence))
         require(not bank.exists(), 'rollback_bank_exists')
         bank.mkdir(mode=0o700)
         entries = {}
@@ -233,7 +256,35 @@ class ProtectedRuntimeHost:
         self.pending['stopInventory'] = inventory
         atomic_root(STATE / 'stop-request.json', canonical(context))
         self._clear_gate()
+        self._catalog_timer(False)
         for unit in UNITS: self._service('stop', unit)
+
+    def stop_for_rollback(self):
+        """Stop an uncommitted candidate even when startup produced no socket.
+
+        The previous healthy drain inventory remains the required byte barrier.
+        No rollback across changed captures or any admitted candidate is allowed.
+        """
+        self._locked()
+        require(self.pending is not None and 'stopContext' in self.pending, 'rollback_stop_context')
+        record = root_json(STATE / 'transaction.json')
+        require(record.get('phase') == 'activation-intent', 'rollback_already_committed')
+        selected = self.current()
+        require(selected.runtime_id in (self.pending['previous'].runtime_id, self.pending['candidate'].runtime_id),
+                'rollback_runtime_changed')
+        try:
+            state = self.status()
+        except (OSError, ValueError):
+            state = None
+        if state is not None:
+            require(state.get('releaseId') == selected.runtime_id and state.get('acceptingNewGames') is False
+                    and all(type(state.get(k)) is int and state[k] == 0
+                            for k in ('activeGames', 'pendingActivities', 'pendingRecordWrites', 'inFlightAdmissions')),
+                    'rollback_candidate_not_idle')
+        self._clear_gate(); self._catalog_timer(False)
+        for unit in UNITS: self._service('stop', unit)
+        # quiescence_barrier checks every PID and reconciles the unchanged
+        # inventory against the original, acknowledged stop generation.
 
     def quiescence_barrier(self):
         self._locked()
@@ -313,12 +364,13 @@ class ProtectedRuntimeHost:
         else:
             for unit in ('argentum-recorder.service', 'argentum-play.service', 'argentum-web.service'): self._service('start', unit)
         self._wait_ready(snapshot, closed=True)
+        if snapshot.kind == 'manual-luna-v1': self._catalog_timer('liveCatalog' in profile)
 
     def _wait_ready(self, snapshot, *, closed, allow_active=False):
         # Type=exec confirms execve, not JVM/recorder readiness. Keep admission
         # closed while startup recovery finishes, including on a cold boot.
         from .manual_runtime_rollout import idle_state, ready_state
-        deadline = time.monotonic() + 600
+        deadline = time.monotonic() + READINESS_TIMEOUT_SECONDS
         while time.monotonic() < deadline:
             try:
                 state = self.status()

@@ -46,6 +46,22 @@ jobs:
           done
           docker exec -e PYTHONPATH=/opt/fixture:/opt/fixture/tests -e REQUIRE_SYSTEMD_CREDENTIALS=1 "$container" \
             python3 -B -m unittest discover -s /opt/fixture/tests -p test_manual_runtime_credentials_systemd.py -v
+  release-install:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build offline release installation fixture
+        run: docker build -f tests/release-install.Dockerfile -t release-install-fixture .
+      - name: Exercise clean install, reboot admission, busy updates and rollback
+        run: |
+          container=$(docker run -d --privileged --cgroupns=private --network=none --tmpfs /run --tmpfs /run/lock release-install-fixture)
+          trap 'docker logs "$container"; docker rm -f "$container"' EXIT
+          for attempt in $(seq 1 30); do
+            if docker exec "$container" systemctl list-units >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          docker exec -e PYTHONPATH=/opt/fixture:/opt/fixture/tests -e REQUIRE_RELEASE_INSTALL_SYSTEMD=1 "$container" \
+            python3 -B -m unittest discover -s /opt/fixture/tests -p test_runtime_install_systemd.py -v
   python:
     runs-on: ubuntu-latest
     steps:

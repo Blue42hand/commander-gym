@@ -35,6 +35,29 @@ class ManualRuntimeHostTests(unittest.TestCase):
                       'activeGames': 0, 'pendingActivities': 0, 'pendingRecordWrites': 0, 'inFlightAdmissions': 0,
                       'acceptingNewGames': False, 'drainAcknowledged': True, 'recordingDrainComplete': True}
 
+    def test_failed_candidate_without_socket_can_stop_before_inventory_barrier(self):
+        candidate = SimpleNamespace(runtime_id='a'*64)
+        self.host.pending = {'previous': self.snapshot, 'candidate': candidate, 'stopContext': {'qa': True}}
+        self.host.current = Mock(return_value=self.snapshot)
+        self.host.base.status.side_effect = FileNotFoundError()
+        self.host._clear_gate = Mock(); self.host._catalog_timer = Mock(); self.host._service = Mock()
+        with patch.object(host_module, 'root_json', return_value={'phase': 'activation-intent'}):
+            self.host.stop_for_rollback()
+        self.assertEqual(self.host._service.call_count, len(host_module.UNITS))
+        self.assertEqual(self.host.pending['stopContext'], {'qa': True})
+
+    def test_candidate_admission_or_commit_prevents_rollback_stop(self):
+        self.host.pending = {'previous': self.snapshot, 'candidate': SimpleNamespace(runtime_id='a'*64), 'stopContext': {}}
+        self.host.current = Mock(return_value=self.snapshot)
+        self.host._service = Mock()
+        for record, state in [({'phase':'completed'}, self.state),
+                              ({'phase':'activation-intent'}, {**self.state, 'acceptingNewGames':True}),
+                              ({'phase':'activation-intent'}, {**self.state, 'activeGames':1})]:
+            self.host.base.status.return_value = state
+            with patch.object(host_module, 'root_json', return_value=record), self.assertRaises(ManualRuntimeError):
+                self.host.stop_for_rollback()
+            self.host._service.assert_not_called()
+
     def test_previous_verification_never_calls_mutating_storage_helper(self):
         self.host.native.current_release.return_value = (Path('/qa/release'), {'releaseId': self.snapshot.runtime_id})
         with patch.object(host_module.os, 'statvfs', return_value=SimpleNamespace(f_bavail=40*1024**3, f_frsize=1)):
