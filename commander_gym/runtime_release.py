@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import grp
 from contextlib import contextmanager
 import os
 from pathlib import Path
@@ -140,7 +141,13 @@ def stage_bundle(root, manifest):
                     out.flush(); os.fsync(out.fileno())
                 require(file_hash(target) == sha, 'staging_digest')
                 target.chmod(0o555 if manifest['files'][key]['executable'] else 0o444)
-            stage.chmod(0o755); os.rename(stage, destination)
+            if role == 'catalog':
+                group = grp.getgrnam('commander-prod').gr_gid
+                for path in [stage, *stage.rglob('*')]:
+                    os.chown(path, 0, group)
+                    path.chmod(0o750 if path.is_dir() else 0o440)
+            else: stage.chmod(0o755)
+            os.rename(stage, destination)
             fd = os.open(destination.parent, os.O_RDONLY | os.O_DIRECTORY)
             try: os.fsync(fd)
             finally: os.close(fd)

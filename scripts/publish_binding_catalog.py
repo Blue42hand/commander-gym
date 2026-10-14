@@ -27,7 +27,7 @@ def main():
     def validate_decks(candidate):
         if not (store / 'current.json').exists():
             # The bootstrapping set was qualified with this exact native release.
-            if candidate.profile_payloads() != registry.profile_payloads():
+            if candidate.binding_fingerprints != registry.binding_fingerprints:
                 raise ValueError('initial_catalog_must_match_qualified_release')
             return
         volume = os.statvfs(store)

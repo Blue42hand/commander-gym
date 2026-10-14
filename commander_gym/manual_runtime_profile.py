@@ -251,6 +251,7 @@ def validate_qualification(profile: dict, receipt: dict, *, now: float) -> None:
         require(type(check) is dict and set(check) == {"sha", "checks"} and check["sha"] == profile[role + "Sha"], "source_ci_identity")
         require(type(check["checks"]) is list and check["checks"] and all(type(item) is dict and set(item) == {"name", "conclusion", "runId"} and type(item["name"]) is str and item["name"] and item["conclusion"] == "success" and type(item["runId"]) is int and item["runId"] > 0 for item in check["checks"]), "source_ci_failed")
         required = {'engine': {'coverage'}, 'gym': {'python', 'jvm-adapter', 'manual-runtime-sdk'}}[role]
+        if role == 'gym' and 'liveCatalog' in profile: required |= {'release-install'}
         names = [item['name'] for item in check['checks']]
         require(len(names) == len(set(names)) and required <= set(names), 'required_source_ci_missing')
 

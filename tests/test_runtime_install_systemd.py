@@ -107,7 +107,9 @@ class RuntimeInstallSystemdTests(unittest.TestCase):
         p['artifacts']['config']=install_artifact('config',{n:t.encode() for n,t in units.items()})
 
     def bundle(self,p,previous='0'*64,sequence=1):
-        q=qualification(p,now=time.time());a=approval(p,q,previous=previous,sequence=sequence)
+        q=qualification(p,now=time.time())
+        q['sourceCi']['gym']['checks'].append({'name':'release-install','conclusion':'success','runId':1})
+        a=approval(p,q,previous=previous,sequence=sequence)
         target=Path('/opt/fixture/bundles')/str(sequence)
         reviewed=pack_bundle(p,q,a,target)
         return target,inspect_bundle(target,reviewed)
@@ -132,6 +134,9 @@ class RuntimeInstallSystemdTests(unittest.TestCase):
         capacity=SimpleNamespace(f_bavail=128*1024**3,f_frsize=1)
         with patch('os.statvfs',return_value=capacity):
             result=install(root,manifest);self.assertEqual(result['state'],'installed')
+            catalog=Path(p['artifacts']['catalog']['root'])
+            self.assertEqual(catalog.stat().st_mode & 0o007,0)
+            for entry in catalog.rglob('*'): self.assertEqual(entry.stat().st_mode & 0o007,0)
             host=ProtectedRuntimeHost(p);first=self.wait_open(host)
             self.command('systemctl','stop','argentum-play.service')
             GATE.unlink(missing_ok=True)

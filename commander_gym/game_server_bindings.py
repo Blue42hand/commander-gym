@@ -66,6 +66,7 @@ class GameServerBindingRegistry:
 
         profiles: dict[str, GameServerBindingProfile] = {}
         pilot_fingerprints = set()
+        binding_fingerprints = {}
         for raw_id in binding_ids:
             if not isinstance(raw_id, str) or not raw_id.strip():
                 raise GameServerBindingError("binding_ids must contain non-empty strings")
@@ -76,6 +77,7 @@ class GameServerBindingRegistry:
                 resolved = resolver.resolve(binding_id)
                 profile = self._profile_for(resolved)
                 pilot_fingerprints.add(resolved.pilot.fingerprint)
+                binding_fingerprints[binding_id] = resolved.binding.fingerprint
             except (BindingResolutionError, BindingLaunchError) as exc:
                 raise GameServerBindingError(str(exc)) from exc
             profiles[binding_id] = profile
@@ -83,6 +85,7 @@ class GameServerBindingRegistry:
         self._resolver = resolver
         self._profiles = profiles
         self.pilot_fingerprints = frozenset(pilot_fingerprints)
+        self.binding_fingerprints = binding_fingerprints
 
     @staticmethod
     def _profile_for(resolved: ResolvedSeatBinding) -> GameServerBindingProfile:
