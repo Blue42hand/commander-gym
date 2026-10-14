@@ -56,6 +56,14 @@ class RuntimeInstallSystemdTests(unittest.TestCase):
         self.assertTrue(Path('/opt/fixture/ISOLATED_RELEASE_TEST').exists())
         self.assertTrue(Path('/run/systemd/system').is_dir()); self.assertEqual(os.getuid(),0)
         self.assertFalse(Path('/etc/argentum-luna/current.json').exists())
+        self.addCleanup(self.fixture_diagnostics)
+
+    def fixture_diagnostics(self):
+        # Only this offline synthetic container; never collect production logs.
+        for command in (['systemctl','--no-pager','--failed'],
+                        ['journalctl','--no-pager','-n','80','-u','argentum-recorder.service',
+                         '-u','argentum-manual-preflight.service','-u','argentum-binding-catalog.service']):
+            subprocess.run(command, check=False, timeout=15)
 
     def command(self, *args):
         return subprocess.run(args,check=True,capture_output=True,text=True,timeout=60)
