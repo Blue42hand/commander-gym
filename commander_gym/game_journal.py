@@ -615,6 +615,11 @@ def publish_finalized_manifest(directory: Path, *, cancel=None) -> dict[str, Any
 def verify_finalized_manifest(directory: Path, *, cancel=None) -> dict[str, Any]:
     """Discovery gate: verify journal and every artifact before analysis claims."""
     report = inspect_journal(directory, cancel=cancel)
+    # The verified stream retains its boundary rows. Indexed access to the
+    # disk-backed sequence would reverify the entire prefix for each terminal
+    # field, multiplying cold-start time for large finalized recordings.
+    # Artifact hashes below still verify the on-disk bytes after this inspection.
+    first, terminal = report["rows"].first, report["rows"].last
     path = directory / "manifest.json"
     if path.is_symlink() or path.stat().st_mode & 0o077:
         raise JournalError("manifest must be private and not a symlink")
@@ -635,9 +640,9 @@ def verify_finalized_manifest(directory: Path, *, cancel=None) -> dict[str, Any]
             manifest.get("run_id") != report["run_id"] or
             manifest.get("journal_root_sha256") != report["root_sha256"] or
             manifest.get("recording_complete") != report["recording_complete"] or
-            manifest.get("game_id") != report["rows"][0]["payload"]["game_id"] or
-            manifest.get("outcome") != report["rows"][-1]["payload"]["outcome"] or
-            manifest.get("gaps") != report["rows"][-1]["payload"]["gaps"]):
+            manifest.get("game_id") != first["payload"]["game_id"] or
+            manifest.get("outcome") != terminal["payload"]["outcome"] or
+            manifest.get("gaps") != terminal["payload"]["gaps"]):
         raise JournalError("finalized manifest does not match sealed journal")
     artifacts = manifest["artifacts"]
     names = [artifact["path"] for artifact in artifacts]
