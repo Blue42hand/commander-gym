@@ -39,15 +39,22 @@ fun main() {
     System.setProperty("game.recording.engine-revision", text("engineSha"))
     val writer = requireNotNull(PrivateGameEvidence.fromSystemProperties(gameId)) as PrivateGameEvidence
     val session = GameSession(sessionId=gameId, cardRegistry=registry, evidenceSink=writer)
+    session.engineFormat = com.wingedsheep.sdk.core.Format.Commander()
     val talrand = EntityId.of("qualification-talrand")
     val lathril = EntityId.of("qualification-lathril")
     val deckSpecs = mapOf(talrand to config.getValue("talrand").jsonObject,
         lathril to config.getValue("lathril").jsonObject)
+    fun library(spec: JsonObject): Map<String, Int> {
+        val cards = spec.getValue("cards").jsonObject.mapValues { it.value.jsonPrimitive.int }.toMutableMap()
+        val commander = spec.getValue("commander").jsonPrimitive.content
+        check(cards.values.sum() == 100 && cards[commander] == 1)
+        cards.remove(commander)
+        return cards
+    }
     for ((seat, spec) in deckSpecs) {
         val ws = Mockito.mock(WebSocketSession::class.java)
         Mockito.`when`(ws.id).thenReturn("fixture-${seat.value}")
-        val cards = spec.getValue("cards").jsonObject.mapValues { it.value.jsonPrimitive.int }
-        check(cards.values.sum() == 100)
+        val cards = library(spec)
         session.addPlayer(PlayerSession(ws, seat, seat.value), cards, spec.getValue("commander").jsonPrimitive.content)
     }
     val local = EngineAiPlayerController(registry, talrand, { session.getStateSnapshot() })
@@ -58,7 +65,7 @@ fun main() {
         parameterize={ offered, params -> if (params.isEmpty) offered.action else
             ActionParameterizer.apply(offered, params, requireNotNull(session.getStateSnapshot())) })
     for ((seat, spec) in deckSpecs) {
-        val cards = spec.getValue("cards").jsonObject.mapValues { it.value.jsonPrimitive.int }
+        val cards = library(spec)
         if (seat == talrand) local.setDeckList(cards) else remote.setDeckList(cards)
     }
     val deadline = System.nanoTime() + Duration.ofMinutes(90).toNanos()
@@ -72,6 +79,7 @@ fun main() {
             put("turn", state?.turnNumber ?: 0); put("nativeTerminal", state?.gameOver == true)
             put("winnerId", state?.winnerId?.value?.let(::JsonPrimitive) ?: JsonNull)
             put("syntheticOpponent", "native-engine-talrand"); put("concessionUsed", false)
+            put("format", "Commander"); put("libraryCardsPerSeat", 99)
         }
         Files.writeString(Path.of(text("resultPath")), value.toString())
         println(value)
@@ -80,7 +88,13 @@ fun main() {
         CardSummary(name=c.name, manaCost=c.manaCost, typeLine=c.typeLine,
             power=c.power, toughness=c.toughness, oracleText=c.oracleText) }
     try {
-        session.startGame()
+        val initial = session.startGame()
+        for (seat in deckSpecs.keys) {
+            check(initial.lifeTotal(seat) == 40)
+            check(initial.getZone(seat, com.wingedsheep.sdk.core.Zone.COMMAND).size == 1)
+            check(initial.getZone(seat, com.wingedsheep.sdk.core.Zone.LIBRARY).size +
+                initial.getZone(seat, com.wingedsheep.sdk.core.Zone.HAND).size == 99)
+        }
         session.keepHand(talrand)
         while (!session.hasMulliganComplete(lathril)) {
             check(System.nanoTime() < deadline)
