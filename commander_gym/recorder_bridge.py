@@ -249,7 +249,11 @@ class RecorderBridge:
             if not directory.is_dir() or directory.is_symlink():
                 raise RecorderBridgeError('unknown native game')
             if journal is not None:
-                rows = journal.bridge_receipts()
+                try:
+                    rows = journal.bridge_receipts()
+                except (OSError, ValueError):
+                    self.capture.errors['recorder_bridge'] = 'ReceiptCustodyFailed'
+                    raise RecorderBridgeError('recorder receipt custody failed') from None
                 report = {'closed': journal.terminal}
             else:
                 report = inspect_journal(directory, cancel=self.capture.stop_requested)

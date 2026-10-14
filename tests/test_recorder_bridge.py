@@ -165,6 +165,7 @@ class RecorderBridgeTests(unittest.TestCase):
         journal.failed = True
         with self.assertRaises(ValueError):
             self.register()
+        self.assertFalse(self.capture.operational_metrics()['healthy'])
 
     def test_removed_segment_latches_failure_even_if_restored(self):
         self.register()
