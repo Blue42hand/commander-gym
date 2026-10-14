@@ -48,7 +48,8 @@ class RuntimeHost(Protocol):
     def delegate_keyless_update(self): ...
 
 
-def idle_state(state: dict, snapshot: RuntimeSnapshot, *, now: float, closed: bool) -> str:
+def ready_state(state: dict, snapshot: RuntimeSnapshot, *, now: float) -> str:
+    """Readiness for the selected release; active games are not a health failure."""
     require(type(state) is dict and state.get("releaseId") == snapshot.runtime_id
             and state.get("engineSha") == snapshot.engine_sha and state.get("gymSha") == snapshot.gym_sha
             and type(state.get("recordingSchemaVersion")) is int and state["recordingSchemaVersion"] == snapshot.recording_schema,
@@ -57,8 +58,14 @@ def idle_state(state: dict, snapshot: RuntimeSnapshot, *, now: float, closed: bo
     observed = state.get("observedUnix")
     require(type(observed) in (int, float) and math.isfinite(observed) and 0 <= now - observed <= 10, "state_stale")
     require(state.get("recordingHealthy") is True and state.get("recoveryComplete") is True, "recording_health")
-    require(all(type(state.get(key)) is int and state[key] == 0 for key in COUNTERS), "not_idle")
+    require(all(type(state.get(key)) is int and state[key] >= 0 for key in COUNTERS), "state_counters")
     require(type(state.get("acceptingNewGames")) is bool, "admission_state")
+    return state["bootId"]
+
+
+def idle_state(state: dict, snapshot: RuntimeSnapshot, *, now: float, closed: bool) -> str:
+    ready_state(state, snapshot, now=now)
+    require(all(state[key] == 0 for key in COUNTERS), "not_idle")
     if closed:
         require(state["acceptingNewGames"] is False and state.get("drainAcknowledged") is True
                 and state.get("recordingDrainComplete") is True, "drain_barrier")

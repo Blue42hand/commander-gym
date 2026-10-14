@@ -1,6 +1,14 @@
 # Human versus Luna on Tolaria
 
-Owner decision, October 13, 2026: this is the only active milestone. The implementation target is the existing native shared lobby, matched JVM adapter, Binding OpenAI sidecar, and sole native recorder. The model is `gpt-6-luna`.
+Owner decision, October 14, 2026: implement roadmap stages 1–3 in the next release. The implementation target remains the existing native shared lobby, matched JVM adapter, Binding OpenAI sidecar, and sole native recorder. The model is `gpt-6-luna`.
+
+## Current release scope
+
+1. Automate startup drain acknowledgment and healthy admission recovery. Preserve bounded provider retry/cancellation and visible errors. Qualify seat reconnect and idle reboot separately from native mid-game crash recovery.
+2. Supply one installation/update command with status, diagnostics, and rollback. Select a matched immutable release; wait for idle before switching, retain previous artifacts, and prove clean installation and failed-update recovery.
+3. Publish clean private Git catalog revisions as validated immutable snapshots. New selections identify a snapshot; running games retain theirs. Invalid or incomplete pulls leave the last valid catalog available. Repository data cannot install executable pilot code.
+
+Human acceptance still requires an actual human game and reconnect; synthetic clients and automated full games are supporting evidence only. Production activation remains a distinct approved cutover after artifact/configuration and rollback preparation.
 
 ## First release
 
@@ -34,4 +42,4 @@ The owner performs the interactive human acceptance. Automated clients and deter
 
 ## Backlog
 
-The full #77 foundation program, local models, transfer learning, mass self-play, optional Redis qualification, broad card qualification, upstream publication, and automated source promotion do not block this milestone unless a demonstrated dependency prevents the acceptance checks above. Historical documents and receipts remain evidence of their original scope; they do not override this delivery order.
+The full #77 foundation program, local models, transfer learning, mass self-play, optional Redis qualification, broad card qualification, and upstream publication remain deferred. Matched one-command updates and catalog publication are now in scope. Historical documents and receipts remain evidence of their original scope; they do not override this delivery order.

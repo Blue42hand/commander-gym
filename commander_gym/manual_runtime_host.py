@@ -314,15 +314,26 @@ class ProtectedRuntimeHost:
             for unit in ('argentum-recorder.service', 'argentum-play.service', 'argentum-web.service'): self._service('start', unit)
         self._wait_ready(snapshot, closed=True)
 
-    def _wait_ready(self, snapshot, *, closed):
+    def _wait_ready(self, snapshot, *, closed, allow_active=False):
         # Type=exec confirms execve, not JVM/recorder readiness. Keep admission
         # closed while startup recovery finishes, including on a cold boot.
-        from .manual_runtime_rollout import idle_state
+        from .manual_runtime_rollout import idle_state, ready_state
         deadline = time.monotonic() + 600
         while time.monotonic() < deadline:
             try:
                 state = self.status()
-                idle_state(state, snapshot, now=time.time(), closed=closed)
+                if allow_active:
+                    require(not closed, 'active_drain_forbidden')
+                    ready_state(state, snapshot, now=time.time())
+                else:
+                    boot = idle_state(state, snapshot, now=time.time(), closed=False)
+                    if closed and not state['acceptingNewGames'] and state.get('drainAcknowledged') is False:
+                        # A new JVM starts closed, without a drain epoch. Establish
+                        # it only after exact identity, recovery and idle checks.
+                        self.base.rpc('drain', bootId=boot)
+                        time.sleep(0.5)
+                        continue
+                    idle_state(state, snapshot, now=time.time(), closed=closed)
                 return state
             except (OSError, ValueError):
                 time.sleep(0.5)
@@ -431,11 +442,17 @@ class ProtectedRuntimeHost:
         snapshot = self.current(); self.verify_snapshot(snapshot)
         if snapshot.kind == 'keyless':
             return locked_legacy_call(self.native, 'admit', (), held_lock_probe=lambda: self.locked)
-        from .manual_runtime_rollout import idle_state
-        state = self._wait_ready(snapshot, closed=False)
-        boot = idle_state(state, snapshot, now=time.time(), closed=False)
+        from .manual_runtime_rollout import idle_state, ready_state
+        state = self._wait_ready(snapshot, closed=False, allow_active=True)
+        boot = ready_state(state, snapshot, now=time.time())
         if state['acceptingNewGames']:
             return {'state': 'already-open', 'runtimeId': snapshot.runtime_id}
-        boot = idle_state(state, snapshot, now=time.time(), closed=True)
+        if state.get('drainAcknowledged') is True:
+            # An explicit drain is still an idle-only barrier. Health recovery
+            # must never undo a drain while games or callbacks are outstanding.
+            boot = idle_state(state, snapshot, now=time.time(), closed=True)
+        else:
+            require(state.get('drainAcknowledged') is False and state.get('drainId', '') == '',
+                    'admission_drain_state')
         self.resume(boot, snapshot.runtime_id)
         return {'state': 'admitted-current', 'runtimeId': snapshot.runtime_id}

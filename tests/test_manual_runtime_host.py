@@ -72,6 +72,54 @@ class ManualRuntimeHostTests(unittest.TestCase):
                 self.host._wait_ready(self.snapshot, closed=True)
         self.host.base.rpc.assert_not_called()
 
+    def test_idle_startup_establishes_drain_then_waits_for_recorder_barrier(self):
+        initial = {**self.state, 'drainAcknowledged': False, 'recordingDrainComplete': False}
+        waiting = {**self.state, 'recordingDrainComplete': False}
+        self.host.base.status.side_effect = [initial, waiting, self.state]
+        with patch.object(host_module.time, 'time', return_value=1000), patch.object(host_module.time, 'sleep'):
+            self.assertEqual(self.host._wait_ready(self.snapshot, closed=True), self.state)
+        self.host.base.rpc.assert_called_once_with('drain', bootId='qa-boot')
+
+    def test_startup_never_drains_a_busy_or_unhealthy_server(self):
+        for changes in ({'activeGames': 1}, {'pendingActivities': 1}, {'pendingRecordWrites': 1},
+                        {'recordingHealthy': False}, {'releaseId': '9'*64}):
+            with self.subTest(changes=changes):
+                self.host.base.status.return_value = {**self.state, 'drainAcknowledged': False, **changes}
+                with patch.object(host_module.time, 'time', return_value=1000), patch.object(host_module.time, 'sleep'), patch.object(host_module.time, 'monotonic', side_effect=[0, 1, 601]):
+                    with self.assertRaisesRegex(ManualRuntimeError, 'runtime_readiness_timeout'):
+                        self.host._wait_ready(self.snapshot, closed=True)
+                self.host.base.rpc.assert_not_called()
+
+    def admission_host(self, state):
+        snapshot = RuntimeSnapshot(self.snapshot.runtime_id, 1, 'manual-luna-v1',
+                                   self.snapshot.engine_sha, self.snapshot.gym_sha, 1)
+        self.host.current = Mock(return_value=snapshot)
+        self.host.verify_snapshot = Mock()
+        self.host.assert_no_unfinished_transaction = Mock()
+        self.host.base.status.return_value = state
+        self.host.resume = Mock()
+
+    def test_health_recovery_reopens_same_release_with_existing_game_and_lobby(self):
+        self.admission_host({**self.state, 'activeGames': 1, 'pendingActivities': 2,
+            'pendingRecordWrites': 1, 'drainAcknowledged': False, 'drainId': '', 'recordingDrainComplete': False})
+        with patch.object(host_module.time, 'time', return_value=1000):
+            self.assertEqual(self.host.admit_current()['state'], 'admitted-current')
+        self.host.resume.assert_called_once_with('qa-boot', self.snapshot.runtime_id)
+        self.host.base.rpc.assert_not_called()
+
+    def test_open_active_game_does_not_wait_for_idle(self):
+        self.admission_host({**self.state, 'activeGames': 1, 'acceptingNewGames': True})
+        with patch.object(host_module.time, 'time', return_value=1000):
+            self.assertEqual(self.host.admit_current()['state'], 'already-open')
+        self.host.resume.assert_not_called()
+
+    def test_admission_does_not_override_explicit_busy_drain(self):
+        self.admission_host({**self.state, 'activeGames': 1})
+        with patch.object(host_module.time, 'time', return_value=1000):
+            with self.assertRaisesRegex(ManualRuntimeError, 'not_idle'):
+                self.host.admit_current()
+        self.host.resume.assert_not_called()
+
     def test_stop_proof_rejects_previous_boot_runtime_nonce_and_boolean_counts(self):
         context = stop_context(self.snapshot, self.state, {'original.jsonl': 'a'*64}, nonce='1'*32, now=1000)
         proof = {**context, 'reconciled': True, 'pendingRecordWrites': 0, 'verifiedUnix': 1000}

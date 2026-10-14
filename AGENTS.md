@@ -1,8 +1,8 @@
 # Current delivery scope
 
-The owner's October 13, 2026 instruction makes persistent human-versus-Luna gameplay on Tolaria the only active milestone. Read `docs/human-luna-milestone.md` before selecting work. This supersedes older statements that all of #77 must finish before human gameplay.
+The owner's October 14, 2026 instruction expands the next release to roadmap stages 1–3: reliable human play and automatic recovery, one-command installation/updates, and validated Git-backed binding reloads. Read `docs/human-luna-milestone.md` before selecting work. This supersedes the earlier single-milestone scope and older statements that all of #77 must finish before human gameplay.
 
-Use one pinned native/Gym pair and separate development and production directories. Preserve other work. Fix failures necessary to qualify this release; defer unrelated training, model research, card expansion, automated update systems, and optional Redis QA.
+Use one pinned native/Gym pair and separate development and production directories. Preserve other work. Protect interactive games during updates and catalog changes. Defer unrelated training, model research, local providers, batch workers, card expansion, and optional Redis QA.
 
 Do not treat source tests, mocked controllers, a running process, or HTTP 200 as a completed human game. Record exactly what each check demonstrates. Preserve failed and incomplete game evidence. Never weaken native legality, seat masking, credential isolation, or recorder integrity to make a check pass.
 
