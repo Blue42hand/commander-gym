@@ -238,6 +238,7 @@ class AllUnaffordablePassHandler:
     name: str = "native-all-unaffordable-pass"
     version: str = "1"
     allow_unaffordable_cycling: bool = False
+    allow_unaffordable_exile_land: bool = False
 
     def choose(self, observation: Mapping[str, Any]) -> PilotChoice | None:
         seat = observation.get("agentToAct")
@@ -264,6 +265,8 @@ class AllUnaffordablePassHandler:
         }
         if self.allow_unaffordable_cycling:
             native_types["CycleCard"] = "CycleCard"
+        if self.allow_unaffordable_exile_land:
+            native_types["PlayLand"] = "PlayLand"
         for offer in legal:
             if not isinstance(offer, Mapping):
                 return None
@@ -299,6 +302,32 @@ class AllUnaffordablePassHandler:
                 or type(offer.get("isManaAbility")) is not bool
             ):
                 return None
+            if kind == "PlayLand":
+                # Permission effects can keep an exiled land in the native menu
+                # after its land play becomes illegal. Trust only the engine's
+                # explicit false certificates and a confined, plain exile play.
+                card_id = action.get("cardId")
+                zones = state.get("zones")
+                if (
+                    offer.get("affordable") is not False
+                    or offer.get("isAffordable") is not False
+                    or offer.get("isManaAbility") is not False
+                    or offer.get("sourceZone") != "EXILE"
+                    or offer.get("parameterSpec") != {"allowedFields": {}}
+                    or set(action) != {"type", "playerId", "cardId", "asBackFace"}
+                    or action.get("asBackFace") is not False
+                    or not isinstance(card_id, str) or not card_id
+                    or not isinstance(zones, list)
+                    or sum(
+                        zone.get("cardIds", []).count(card_id)
+                        for zone in zones
+                        if isinstance(zone, Mapping)
+                        and isinstance(zone.get("zoneId"), Mapping)
+                        and zone["zoneId"].get("zoneType") == "Exile"
+                        and isinstance(zone.get("cardIds"), list)
+                    ) != 1
+                ):
+                    return None
             if kind == "CycleCard":
                 # Argentum's CyclingEnumerator certifies affordability with its
                 # mana solver; LegalActionEnricher copies the same fact into
