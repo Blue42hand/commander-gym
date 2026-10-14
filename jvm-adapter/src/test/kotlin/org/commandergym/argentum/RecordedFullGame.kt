@@ -106,6 +106,7 @@ fun main() {
             check(++sameTurnActions <= 300) { "Native game stopped advancing" }
             val actor = state.pendingDecision?.let { state.actorFor(it.playerId) }
                 ?: requireNotNull(state.priorityPlayerId)
+            session.clearLastSentState(actor) // fixture consumes full masked views, not transport deltas
             val update = session.createStateUpdate(actor, emptyList(), useEngineDecisionIds=true) as ServerMessage.StateUpdate
             val result = if (actor == lathril) {
                 val evidence = requireNotNull(session.beginAiCallbackEvidence(actor, update.state,
