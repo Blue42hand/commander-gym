@@ -175,6 +175,9 @@ Before=argentum-recorder.service argentum-luna-sidecar.service argentum-play.ser
 [Service]
 Type=oneshot
 User=root
+RuntimeDirectory=argentum-luna-runtime
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
 ExecStart={dispatch} preflight
 UMask=0077
 ''',

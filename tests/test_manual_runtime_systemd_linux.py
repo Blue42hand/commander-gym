@@ -37,6 +37,7 @@ class ManualRuntimeSystemdTests(unittest.TestCase):
             Path('/run/systemd/system',unit).unlink(missing_ok=True)
         self.systemctl('daemon-reload',check=False)
         self.systemctl('reset-failed',*self.units,check=False)
+        shutil.rmtree(Path('/run',self.prefix+'-precredential'),ignore_errors=True)
 
     def install(self, *, preflight_ok):
         preflight, recorder, sidecar=self.units
@@ -99,13 +100,21 @@ ExecStart=/usr/bin/touch {self.root}/sidecar-started
         units = service_units(launcher_root='/srv/argentum-luna/artifacts/launcher/'+'a'*64,
             dependency_root='/srv/argentum-luna/artifacts/dependencies/'+'b'*64,
             python_relative='python/bin/python3.12', tailnet_only=True)
+        gate=Path('/run',self.prefix+'-precredential','gate')
         replacements = {'argentum-play.service':native, 'argentum-recorder.service':recorder,
             'argentum-luna-sidecar.service':sidecar, 'argentum-manual-preflight.service':preflight,
-            '/run/argentum-luna-runtime/precredential.json':str(self.root/'gate')}
+            '/run/argentum-luna-runtime/precredential.json':str(gate)}
         def unit_part(text):
             text=text.split('[Service]',1)[0]
             for old,new in replacements.items():text=text.replace(old,new)
             return text
+        preflight_dirs=[line.replace('argentum-luna-runtime',self.prefix+'-precredential')
+                        for line in units['units/argentum-manual-preflight.service'].splitlines()
+                        if line.startswith(('RuntimeDirectory=','RuntimeDirectoryMode=','RuntimeDirectoryPreserve='))]
+        Path('/run/systemd/system',preflight).write_text(unit_part(units['units/argentum-manual-preflight.service'])+
+            '[Service]\nType=oneshot\n'+'\n'.join(preflight_dirs)+f'\nExecStart=/usr/bin/touch {gate}\n')
+        sidecar_path=Path('/run/systemd/system',sidecar)
+        sidecar_path.write_text(sidecar_path.read_text().replace(str(self.root/'gate'),str(gate)))
         # Exercise the actual rendered dependency graph with harmless commands.
         # A legacy recorder After=native edge would create a cycle here.
         recorder_text=unit_part(units['units/argentum-recorder.service'])+unit_part(units['units/argentum-recorder.conf'])
@@ -120,4 +129,5 @@ ExecStart=/usr/bin/touch {self.root}/sidecar-started
         self.systemctl('start',native)
         self.assertTrue((self.root/'native-started').exists())
         self.assertTrue((self.root/'sidecar-started').exists())
+        self.assertTrue(gate.exists(), 'oneshot completion must retain the boot attestation directory')
         self.assertEqual(Path('/run',self.prefix+'-ipc').stat().st_mode & 0o777,0o750)
