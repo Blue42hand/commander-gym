@@ -19,7 +19,7 @@ Owner decision, October 13, 2026: this is the only active milestone. The impleme
 3. Build server, embedded adapter, and matching frontend. Verify manifest pins and byte-identical adapter embedding; inspect the actual packaged lobby catalog.
 4. Exercise the real native writer with deterministic provider answers and verify recorder reopening. Report fixture scope separately from a full game and from production qualification.
 5. Run isolated synthetic service qualification with real role separation, recorder IPC, ingress checks and cleanup. Correct mismatched production-reference/QA inputs; never replace the expected identity with the observed wrong identity.
-6. Prepare the exact production service/configuration diff, private catalog identity, existing credential-source reference, startup ordering, storage checks, and rollback originals. Keep secrets out of source, command output, and public artifacts.
+6. Run the exact candidate recording inventory reader read-only against the existing production tree, including large captures, declared ancestor ownership, and root-written analysis sidecars. Require unchanged metadata and matching hashes; an empty synthetic tree does not establish production compatibility. Prepare the exact production service/configuration diff, private catalog identity, existing credential-source reference, startup ordering, storage checks, and rollback originals. Keep secrets out of source, command output, and public artifacts.
 7. Obtain owner approval of that concrete deployment package. Preparation does not activate production or start paid games.
 
 ## Acceptance after approved deployment

@@ -208,6 +208,15 @@ class ProtectedRuntimeHost:
         self.pending = {'previous': previous, 'candidate': candidate, 'bank': bank}
         atomic_root(STATE / 'transaction.json', canonical({'phase': 'activation-intent', 'previousRuntimeId': previous.runtime_id, 'candidateRuntimeId': candidate.runtime_id, 'sequence': candidate.sequence, 'bankSha256': digest(entries)}))
 
+    def recording_inventory(self):
+        root = Path(self.anchor['paths']['recordingRoot'])
+        # The fixed production layout lives beneath the declared Gym service's
+        # state directories. Native captures themselves must remain native-owned.
+        owners = ({Path('/var/lib/commander-gym'): self.anchor['identities']['sidecarUid'],
+                   Path('/var/lib/commander-gym/runs'): self.anchor['identities']['sidecarUid']}
+                  if root == Path('/var/lib/commander-gym/runs/native') else {})
+        return capture_inventory(root, uid=self.anchor['identities']['nativeUid'], ancestor_owners=owners)
+
     def stop_closure(self):
         self._locked(); require(self.pending is not None, 'transaction_required')
         # Exact stopped generation is latched BEFORE any stop. A recent previous
@@ -216,8 +225,7 @@ class ProtectedRuntimeHost:
         state = self.status()
         from .manual_runtime_rollout import idle_state
         boot = idle_state(state, snapshot, now=time.time(), closed=True)
-        root = Path(self.anchor['paths']['recordingRoot'])
-        inventory = capture_inventory(root, uid=self.anchor['identities']['nativeUid'])
+        inventory = self.recording_inventory()
         state = self.status()
         require(state.get('bootId') == boot, 'stop_boot_changed')
         context = stop_context(snapshot, state, inventory, nonce=uuid.uuid4().hex, now=time.time())
@@ -242,7 +250,7 @@ class ProtectedRuntimeHost:
         require(self.pending is not None and 'stopContext' in self.pending, 'stop_context_required')
         context = self.pending['stopContext']
         require(root_json(STATE / 'stop-request.json') == context, 'stop_request_changed')
-        inventory = capture_inventory(Path(self.anchor['paths']['recordingRoot']), uid=self.anchor['identities']['nativeUid'])
+        inventory = self.recording_inventory()
         if inventory != self.pending['stopInventory']: return False
         proof = {**context, 'reconciled': True, 'pendingRecordWrites': 0, 'verifiedUnix': time.time()}
         atomic_root(STATE / ('recorder-quiescence-' + context['stopNonce'] + '.json'), canonical(proof))
