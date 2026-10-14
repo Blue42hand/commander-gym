@@ -93,6 +93,39 @@ def runtime(client, component=BUILTIN_NATIVE_CERTIFIED_FORCED_PASS_COMPONENT_REF
 
 
 class NativeForcedPassTests(unittest.TestCase):
+    def test_binding_knowledge_preserves_certificate_without_recertifying_mutation(self):
+        from commander_gym.binding_resolver import _KnowledgeBoundPilot, BindingResolutionError
+        from commander_gym.native_forced_pass import _VerifiedNativeMenu
+        state, actions = fixture()
+        client = FakeClient()
+        adapter = GameServerSeatAdapter(_KnowledgeBoundPilot(runtime(client), 'Synthetic primer'), 'seat')
+        result = adapter.choose_action(state, actions, None, decision_evidence=evidence(state, actions))
+        self.assertEqual(client.calls, 0)
+        self.assertEqual(result.metadata['routing']['attempts'][0]['metadata']['reason'], 'native-only-affordable-pass')
+
+        observation = _VerifiedNativeMenu(json.loads(evidence(state, actions)['observationBody']))
+        enriched = observation.with_deck_knowledge('Synthetic primer')
+        self.assertEqual({k: v for k, v in enriched.items() if k != 'deckKnowledge'}, observation)
+        self.assertNotIn('deckKnowledge', observation)
+        enriched['deckKnowledge'] = 'Changed primer'
+        self.assertEqual(NativeForcedPassSubsystem().try_choose(enriched).reason, 'native-menu-evidence-mismatch')
+        for mutate in (lambda o: o['legalActions'].pop(),
+                       lambda o: o['state'].update(priorityPlayerId='other')):
+            changed = deepcopy(observation)
+            mutate(changed)
+            with self.assertRaisesRegex(BindingResolutionError, 'native-menu-evidence-mismatch'):
+                _KnowledgeBoundPilot(runtime(client), 'Synthetic primer').choose(changed)
+        with self.assertRaisesRegex(ValueError, 'already contains deckKnowledge'):
+            observation.with_deck_knowledge('Synthetic primer').with_deck_knowledge('Duplicate')
+
+        # A normal mapping cannot acquire native authority through enrichment.
+        plain = json.loads(json.dumps(observation))
+        class Inspect:
+            def choose(self, value):
+                return value
+        restored = _KnowledgeBoundPilot(Inspect(), 'Synthetic primer').choose(plain)
+        self.assertEqual(NativeForcedPassSubsystem().try_choose(restored).reason, 'native-menu-evidence-missing')
+
     def run_case(self, state, actions, *, certified=True, client=None, version=2):
         client = client or FakeClient()
         records = []
