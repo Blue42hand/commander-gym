@@ -185,7 +185,7 @@ def install(root, manifest):
     for name, text in bootstrap_units(profile).items():
         path = Path('/etc/systemd/system') / name
         atomic_root(path, text.encode(), mode=0o644)
-    nginx = b'pid /run/argentum-web/nginx.pid;\nerror_log /dev/null;\nevents {}\nhttp { types { text/html html; text/css css; application/javascript js mjs; application/json json; image/svg+xml svg; image/png png; image/webp webp; font/woff2 woff2; } include /etc/argentum-play/argentum-play.nginx.conf; }\n'
+    nginx = b'pid /run/argentum-web/nginx.pid;\nerror_log /dev/null;\nevents {}\nhttp { client_body_temp_path /run/argentum-web/client; proxy_temp_path /run/argentum-web/proxy; fastcgi_temp_path /run/argentum-web/fastcgi; uwsgi_temp_path /run/argentum-web/uwsgi; scgi_temp_path /run/argentum-web/scgi; types { text/html html; text/css css; application/javascript js mjs; application/json json; image/svg+xml svg; image/png png; image/webp webp; font/woff2 woff2; } include /etc/argentum-play/argentum-play.nginx.conf; }\n'
     atomic_root(Path('/etc/argentum-play/nginx.conf'), nginx, mode=0o644)
     atomic_root(CONFIG / 'current.json', canonical({'kind': 'manual-luna-v1', 'runtimeId': checked.runtime_id,
                 'sequence': 1, 'previousRuntimeId': checked.runtime_id}))

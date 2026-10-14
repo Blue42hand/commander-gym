@@ -62,7 +62,8 @@ class RuntimeInstallSystemdTests(unittest.TestCase):
         # Only this offline synthetic container; never collect production logs.
         for command in (['systemctl','--no-pager','--failed'],
                         ['journalctl','--no-pager','-n','80','-u','argentum-recorder.service',
-                         '-u','argentum-manual-preflight.service','-u','argentum-binding-catalog.service']):
+                         '-u','argentum-manual-preflight.service','-u','argentum-binding-catalog.service',
+                         '-u','argentum-luna-sidecar.service','-u','argentum-play.service','-u','argentum-web.service']):
             subprocess.run(command, check=False, timeout=15)
 
     def command(self, *args):

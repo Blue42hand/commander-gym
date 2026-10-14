@@ -293,6 +293,8 @@ Unit=argentum-binding-catalog.service
 [Install]
 WantedBy=timers.target
 '''
+        result['units/argentum-luna-sidecar.service'] = result['units/argentum-luna-sidecar.service'].replace(
+            '/etc/ssh /etc/ssl/private', '-/etc/ssh -/etc/ssl/private')
         result['units/argentum-luna-sidecar.service'] += '\n[Service]\nRestart=on-failure\nRestartSec=5\n'
         dependency = '[Unit]\nRequires=argentum-binding-catalog.service\nAfter=argentum-binding-catalog.service\n'
         for name in ('units/argentum-recorder.service', 'units/argentum-luna-sidecar.service'):
