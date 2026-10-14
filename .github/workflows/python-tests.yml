@@ -89,7 +89,7 @@ jobs:
         with:
           repository: Blue42hand/argentum-engine
           # Pinned native candidate for the human-versus-Luna milestone.
-          ref: 470ac86484f07086eec08e12c9bd8abc7bc34be5
+          ref: ba5a1c74442e078be2cf38917b31c3c4a43bc5dc
           path: argentum-engine
       - uses: actions/setup-java@v5
         with:
@@ -132,6 +132,17 @@ jobs:
           cp "$server_jar" matched-release/server.jar
           cp commander-gym/jvm-adapter/build/libs/commander-gym-argentum-adapter.jar matched-release/adapter.jar
           cp manual-luna-release.json canonical-v2-fixture.json matched-release/
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Package the frontend from the same engine commit
+        run: |
+          npm ci --prefix argentum-engine/web-client
+          npm run build --prefix argentum-engine/web-client
+          cp -r argentum-engine/web-client/dist matched-release/frontend
+          python commander-gym/scripts/matched_release_manifest.py \
+            --root matched-release --engine-sha "$(git -C argentum-engine rev-parse HEAD)" \
+            --gym-sha "$(git -C commander-gym rev-parse HEAD)"
       - name: Preserve matched source qualification artifacts
         uses: actions/upload-artifact@v6
         with:
