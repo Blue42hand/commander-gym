@@ -231,3 +231,14 @@ class ManualRuntimeHostTests(unittest.TestCase):
         with patch.object(host_module,'TARGETS',targets):
             with self.assertRaisesRegex(ManualRuntimeError,'service_config_incomplete'):
                 self.host._select_files(runtime)
+
+    def test_start_budget_reset_is_limited_to_managed_services(self):
+        with patch.object(host_module.subprocess, 'run') as command:
+            for unit in (*host_module.UNITS, 'argentum-manual-preflight.service', 'argentum-binding-catalog.service'):
+                self.host._service('reset-failed', unit)
+            self.assertEqual(command.call_count, len(host_module.UNITS)+2)
+            command.reset_mock()
+            for verb, unit in [('reset-failed','ssh.service'), ('start','argentum-binding-catalog.service'), ('restart','argentum-play.service')]:
+                with self.assertRaisesRegex(ManualRuntimeError,'fixed_service_operation'):
+                    self.host._service(verb,unit)
+            command.assert_not_called()

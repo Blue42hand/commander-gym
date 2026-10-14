@@ -185,7 +185,9 @@ class ProtectedRuntimeHost:
         return self.base.status()  # Return the actual fresh recording drain barrier.
 
     def _service(self, verb, unit):
-        require(verb in ('start', 'stop') and unit in UNITS, 'fixed_service_operation')
+        reset_units = (*UNITS, 'argentum-manual-preflight.service', 'argentum-binding-catalog.service')
+        require((verb in ('start', 'stop') and unit in UNITS)
+                or (verb == 'reset-failed' and unit in reset_units), 'fixed_service_operation')
         if verb == 'stop' and unit == 'argentum-luna-sidecar.service':
             load = subprocess.run(['/usr/bin/systemctl', 'show', unit, '-p', 'LoadState', '--value'],
                                   text=True, capture_output=True, timeout=10, check=False)
