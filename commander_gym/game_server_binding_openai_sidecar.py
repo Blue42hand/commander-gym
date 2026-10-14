@@ -100,6 +100,12 @@ BUILTIN_ALL_UNAFFORDABLE_CYCLE_PASS_COMPONENT_REF = ArtifactRef(
     version="2",
     digest="sha256:5a85e6b3bcc8ca8c0c76c29d4656a68fc97d049e0693f53645e7c1e70e2d6433",
 )
+BUILTIN_NATIVE_CERTIFIED_FORCED_PASS_COMPONENT_REF = ArtifactRef(
+    kind="deterministic-policy",
+    artifact_id="native-certified-forced-pass",
+    version="1",
+    digest="sha256:7600661e38c7df9224b5fe47c8356671ee6513b92808c2b1ec5e78a7f1844fb5",
+)
 BUILTIN_OPENAI_RESPONSES_COMPONENT_REF = ArtifactRef(
     kind="provider",
     artifact_id="openai-responses",
@@ -362,6 +368,12 @@ class OpenAIBindingPilotComponentResolver:
 
     def resolve(self, spec: PilotSubsystemSpec):
         key = spec.component_key()
+        if (
+            spec.role == "deterministic"
+            and key == _component_key(BUILTIN_NATIVE_CERTIFIED_FORCED_PASS_COMPONENT_REF)
+        ):
+            from .native_forced_pass import NativeForcedPassSubsystem
+            return NativeForcedPassSubsystem()
         if (
             spec.role == "deterministic"
             and key == _component_key(BUILTIN_FORCED_PARAMETERLESS_COMPONENT_REF)

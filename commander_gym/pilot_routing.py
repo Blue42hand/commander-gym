@@ -238,6 +238,7 @@ class AllUnaffordablePassHandler:
     name: str = "native-all-unaffordable-pass"
     version: str = "1"
     allow_unaffordable_cycling: bool = False
+    allow_unaffordable_flashback: bool = False
 
     def choose(self, observation: Mapping[str, Any]) -> PilotChoice | None:
         seat = observation.get("agentToAct")
@@ -264,6 +265,8 @@ class AllUnaffordablePassHandler:
         }
         if self.allow_unaffordable_cycling:
             native_types["CycleCard"] = "CycleCard"
+        if self.allow_unaffordable_flashback:
+            native_types["CastWithFlashback"] = "CastSpell"
         for offer in legal:
             if not isinstance(offer, Mapping):
                 return None
@@ -299,6 +302,29 @@ class AllUnaffordablePassHandler:
                 or type(offer.get("isManaAbility")) is not bool
             ):
                 return None
+            if kind == "CastWithFlashback":
+                # CastFromZoneEnumerator emits this unavailable alternative even
+                # when no ActionParams can be filled. The explicit native false
+                # flags, never missing targets/params, certify unavailability.
+                zones = state.get("zones")
+                card_id = action.get("cardId")
+                if (
+                    offer.get("affordable") is not False
+                    or offer.get("isAffordable") is not False
+                    or offer.get("isManaAbility") is not False
+                    or offer.get("sourceZone") != "GRAVEYARD"
+                    or action.get("useAlternativeCost") is not True
+                    or action.get("alternativeCostType") != "FLASHBACK"
+                    or not isinstance(card_id, str) or not card_id
+                    or not isinstance(zones, list)
+                ):
+                    return None
+                graveyards = [zone for zone in zones if isinstance(zone, Mapping)
+                              and zone.get("zoneId") == {"ownerId": seat, "zoneType": "Graveyard"}]
+                if (len(graveyards) != 1
+                        or not isinstance(graveyards[0].get("cardIds"), list)
+                        or graveyards[0]["cardIds"].count(card_id) != 1):
+                    return None
             if kind == "CycleCard":
                 # Argentum's CyclingEnumerator certifies affordability with its
                 # mana solver; LegalActionEnricher copies the same fact into
