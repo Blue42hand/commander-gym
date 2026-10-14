@@ -37,7 +37,7 @@ from commander_gym.game_server_openai_sidecar import (
     OpenAIGameServerSidecarConfigurationError,
 )
 from commander_gym.game_server_sidecar import UnknownProfileError
-from commander_gym.identity import Binding, Deck, Pilot
+from commander_gym.identity import Binding, Deck, DeckKnowledge, Pilot
 from commander_gym.pilot_composition import PilotContractError, PilotSubsystemSpec
 from commander_gym.delegated_autopass import DelegatedAutopassPilot
 from commander_gym.pilot_routing import AllUnaffordablePassHandler
@@ -69,6 +69,7 @@ def synthetic_catalog(
     *,
     active_binding: str = "seat-a",
     pilot: Pilot | None = None,
+    with_knowledge: bool = False,
 ) -> Path:
     payload = {
         "commander": "Synthetic Commander",
@@ -96,11 +97,17 @@ def synthetic_catalog(
             deterministic_policy=BUILTIN_FORCED_PARAMETERLESS_COMPONENT_REF,
             escalation_provider=BUILTIN_OPENAI_RESPONSES_COMPONENT_REF,
         )
+    knowledge = DeckKnowledge(
+        knowledge_id="synthetic-knowledge", revision="r1",
+        content=ArtifactRef(kind="primer", artifact_id="synthetic-primer", version="r1",
+                            digest="sha256:" + hashlib.sha256(b"Synthetic primer").hexdigest()),
+    ) if with_knowledge else None
     binding = Binding(
         binding_id="seat-a",
         revision="r1",
         deck=deck.ref(),
         pilot=pilot.ref(),
+        deck_knowledge=knowledge.ref() if knowledge else None,
         metadata={
             "display": {
                 "name": "Synthetic Binding",
@@ -113,6 +120,9 @@ def synthetic_catalog(
     write_json(root / "decks" / "deck.json", deck.to_dict())
     write_json(root / "decks" / "payload.json", payload)
     write_json(root / "pilots" / "pilot.json", pilot.to_dict())
+    if knowledge:
+        write_json(root / "knowledge.json", knowledge.to_dict())
+        (root / "primer.txt").write_text("Synthetic primer", encoding="utf-8")
     catalog = root / "instance" / "bindings.json"
     write_json(
         catalog,
@@ -126,7 +136,7 @@ def synthetic_catalog(
                 }
             ],
             "pilots": ["pilots/pilot.json"],
-            "deck_knowledge": [],
+            "deck_knowledge": [{"manifest": "knowledge.json", "payload": "primer.txt"}] if knowledge else [],
             "active_bindings": [active_binding],
         },
     )
@@ -160,7 +170,7 @@ class BindingOpenAIGameServerSidecarTests(unittest.TestCase):
                 deterministic_policy=BUILTIN_NATIVE_CERTIFIED_FORCED_PASS_COMPONENT_REF,
                 escalation_provider=BUILTIN_OPENAI_RESPONSES_COMPONENT_REF,
             )
-            catalog = synthetic_catalog(root, pilot=pilot)
+            catalog = synthetic_catalog(root, pilot=pilot, with_knowledge=True)
             config = BindingOpenAIGameServerConfig(
                 sidecar=OpenAIGameServerSidecarConfig(
                     token="fixture", api_key="fixture", port=free_port(),

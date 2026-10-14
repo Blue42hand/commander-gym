@@ -26,6 +26,11 @@ body to the callback state, legal actions, pending decision and log. A digest of
 complete resulting observation detects subsequent mutation. JSON fields, serialized
 receipts, unverified callbacks and pass-only shortlists cannot assert this marker.
 The marker adds no serialized observation fields and exposes no hidden state.
+The Binding's deck-knowledge wrapper preserves the certificate through its one
+allowed enrichment: it first rechecks the original digest, then attaches the
+already resolved knowledge without changing native fields. The enriched digest
+also detects later knowledge mutation. Plain mappings cannot gain a certificate
+through this wrapper; changed native evidence fails before enrichment.
 This is an integrity/completeness check within the existing trusted native callback
 transport, not an independent signature or a replacement for native enumeration.
 

@@ -12,6 +12,7 @@ from typing import Any, Callable, Mapping, Sequence
 from .deck_package import ArtifactRef
 from .identity import Binding, Deck, DeckKnowledge, IdentityError, IdentityRef, Pilot
 from .pilot import ArtificialPlayer
+from .native_forced_pass import _VerifiedNativeMenu
 
 
 class BindingResolutionError(IdentityError):
@@ -39,6 +40,12 @@ class _KnowledgeBoundPilot:
     def choose(self, observation: Mapping[str, Any]):
         if "deckKnowledge" in observation:
             raise BindingResolutionError("seat observation already contains deckKnowledge")
+        if isinstance(observation, _VerifiedNativeMenu):
+            try:
+                enriched = observation.with_deck_knowledge(self.content)
+            except ValueError as exc:
+                raise BindingResolutionError(str(exc)) from exc
+            return self.delegate.choose(enriched)
         return self.delegate.choose({**observation, "deckKnowledge": self.content})
 
 

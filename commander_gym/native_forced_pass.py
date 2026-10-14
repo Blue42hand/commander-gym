@@ -28,6 +28,17 @@ class _VerifiedNativeMenu(dict):
         super().__init__(observation)
         self.verified_digest = _digest(self)
 
+    def with_deck_knowledge(self, content: str) -> "_VerifiedNativeMenu":
+        """Preserve verified native bytes across the trusted Binding enrichment."""
+        if _digest(self) != self.verified_digest:
+            raise ValueError("native-menu-evidence-mismatch before deck knowledge attachment")
+        if "deckKnowledge" in self:
+            raise ValueError("seat observation already contains deckKnowledge")
+        # Only the declared knowledge field may be added. Native state, menu and
+        # evidence identities remain byte-for-byte equivalent; the new digest also
+        # protects the attached knowledge from later mutation.
+        return _VerifiedNativeMenu({**self, "deckKnowledge": content})
+
 
 @dataclass(frozen=True)
 class NativeForcedPassSubsystem:
