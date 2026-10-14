@@ -167,7 +167,12 @@ def verify_recorder_reopen(directory, socket_path, previous):
     extra=list(report['rows'][count:])
     _require(not extra or [row['kind'] for row in extra]==['resume','runtime_context'])
     if extra:
-        old_contexts=[row['payload'] for row in report['rows'][:count] if row['kind']=='runtime_context']
+        # Callback registration/closure also records runtime_context rows, under
+        # recorder-bridge. Reopen must preserve the latest recorder declaration,
+        # rather than compare that declaration with callback-specific metadata.
+        old_contexts=[row['payload'] for row in report['rows'][:count]
+                      if row['kind']=='runtime_context' and row['source']=='gym-runtime'
+                      and set(row['payload'])=={'declared_pins'}]
         _require(old_contexts and extra[1]['source']=='gym-runtime'
                  and extra[1]['payload']==old_contexts[-1])
     return current

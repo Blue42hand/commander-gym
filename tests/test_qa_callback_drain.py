@@ -30,6 +30,9 @@ class QACallbackDrainTests(unittest.TestCase):
         # Fresh synthetic fixture only: keep its genuine native prefix open before first scan.
         source.write_bytes(b''.join(lines[:-1]))
         capture.scan()
+        journal=capture._journals[directory.name]
+        journal.append('runtime_context', {'recorder_bridge': {'callbackId':'fixture-callback', 'op':'closed'}},
+                       source='recorder-bridge', source_sequence=journal.sources.get('recorder-bridge',0))
         receipt=_observe_callback_drain(directory,self.status)
         capture.close()
         resumed=NativeGameCapture(capture.root,capture.declared_pins)
@@ -40,6 +43,19 @@ class QACallbackDrainTests(unittest.TestCase):
             self.assertGreater(current['journalRows'],receipt['journalRows'])
             with self.assertRaises(JournalError):
                 verify_recorder_reopen(directory,'/fixture-only',{**receipt,'journalHead':'wrong'})
+
+    def test_reopen_rejects_changed_recorder_declaration(self):
+        capture,directory=self.fixture()
+        source=directory/'native-000000.ndjson'
+        source.write_bytes(b''.join(source.read_bytes().splitlines(keepends=True)[:-1]))
+        capture.scan()
+        receipt=_observe_callback_drain(directory,self.status)
+        capture.close()
+        resumed=NativeGameCapture(capture.root,{**capture.declared_pins,'config':{'changedForTest':True}})
+        self.addCleanup(resumed.close);resumed.scan()
+        with patch('commander_gym.qa_callback_drain.private_status',side_effect=lambda _:self.status()):
+            with self.assertRaises(JournalError):
+                verify_recorder_reopen(directory,'/fixture-only',receipt)
 
     def test_active_disabled_unpaused_changed_generation_or_failure_rejected(self):
         capture,directory=self.fixture();capture.scan()
