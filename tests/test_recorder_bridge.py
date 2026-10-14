@@ -131,13 +131,57 @@ class RecorderBridgeTests(unittest.TestCase):
         self.assertIn('input_tokens', json.dumps(projected))
         self.assertTrue(self.bridge.ingest(dict(self.identity, op='closed'), native=True)['ok'])
 
+    def test_live_receipts_do_not_rescan_growing_journal(self):
+        self.register()
+        journal = self.capture._journals['synthetic-game']
+        for i in range(80):
+            journal.append('coverage_gap', {'padding': 'x' * 100000, 'i': i})
+        with patch('commander_gym.recorder_bridge.inspect_journal', side_effect=AssertionError('full rescan')):
+            self.bridge.ingest(self.event(), native=False)
+            receipt = self.bridge.ingest(self.event('finished'), native=False)
+            self.assertEqual(self.bridge.ingest(self.event('finished'), native=False), receipt)
+        self.assertNotIn('viewingPlayerId', repr(journal._bridge_receipts))
+
+    def test_cached_receipt_rejects_external_segment_change(self):
+        self.register()
+        path = self.game / '000000.jsonl'
+        data = path.read_bytes()
+        path.write_bytes(data.replace(b'"manifest"', b'"manifesz"', 1))
+        with self.assertRaises(ValueError):
+            self.register()
+
+    def test_cached_receipt_rejects_identical_file_replacement(self):
+        self.register()
+        path = self.game / '000000.jsonl'
+        replacement = self.game / 'replacement'
+        replacement.write_bytes(path.read_bytes()); replacement.chmod(0o600)
+        replacement.replace(path)
+        with self.assertRaises(ValueError):
+            self.register()
+
+    def test_failed_writer_does_not_acknowledge_cached_receipt(self):
+        self.register()
+        journal = self.capture._journals['synthetic-game']
+        journal.failed = True
+        with self.assertRaises(ValueError):
+            self.register()
+
+    def test_removed_segment_latches_failure_even_if_restored(self):
+        self.register()
+        path = self.game / '000000.jsonl'
+        saved = self.game / 'saved'
+        path.rename(saved)
+        with self.assertRaises(ValueError): self.register()
+        saved.rename(path)
+        with self.assertRaises(ValueError): self.register()
+
     def test_client_deadline_covers_connect_send_and_read_together(self):
         connection = MagicMock()
         connection.__enter__.return_value = connection
         with patch('commander_gym.recorder_bridge._socket_path', return_value=self.bridge.sidecar_socket), \
              patch('commander_gym.recorder_bridge.peer_uid', return_value=os.getuid()), \
              patch('commander_gym.recorder_bridge.socket.socket', return_value=connection), \
-             patch('commander_gym.recorder_bridge.TIMEOUT', 1), \
+             patch('commander_gym.recorder_bridge.RECEIPT_TIMEOUT', 1), \
              patch('commander_gym.recorder_bridge.time.monotonic', side_effect=[100, 100, 100.7, 101.1]):
             with self.assertRaises(RecorderBridgeError):
                 exchange(self.bridge.sidecar_socket, {'callbackId': 'synthetic'}, recorder_uid=os.getuid())

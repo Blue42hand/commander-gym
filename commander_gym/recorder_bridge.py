@@ -33,6 +33,7 @@ from .game_server_sidecar import GameServerSidecarHandler
 PROTOCOL = 1
 MAX_BYTES = 4 * 1024 * 1024
 TIMEOUT = 2.0
+RECEIPT_TIMEOUT = 10.0
 CALLBACK_TTL = 130.0  # native 120s / sidecar 110s; bounded late cancellation receipts
 _ID = re.compile(r'[A-Za-z0-9_-]{1,128}')
 
@@ -130,7 +131,7 @@ def exchange(path: Path, request: Mapping[str, Any], *, recorder_uid: int) -> di
     data = _json(request) + b'\n'
     if len(data) > MAX_BYTES:
         raise RecorderBridgeError('recorder message exceeds limit')
-    deadline = time.monotonic() + TIMEOUT
+    deadline = time.monotonic() + RECEIPT_TIMEOUT
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
         client.settimeout(max(0.001, deadline - time.monotonic()))
         client.connect(str(path))
@@ -213,6 +214,8 @@ class RecorderBridge:
 
     @staticmethod
     def _receipt(rows, callback_id, op):
+        if isinstance(rows, dict):
+            return rows.get((callback_id, op))
         for row in rows:
             metadata = row['payload'].get('recorder_bridge')
             if isinstance(metadata, dict) and metadata.get('callbackId') == callback_id and metadata.get('op') == op:
@@ -245,10 +248,14 @@ class RecorderBridge:
             # Duplicate acknowledgments remain available after finalization/restart.
             if not directory.is_dir() or directory.is_symlink():
                 raise RecorderBridgeError('unknown native game')
-            report = inspect_journal(directory, cancel=self.capture.stop_requested)
-            if set(report['issues']) - {'missing_terminal'}:
-                raise RecorderBridgeError('invalid recorder journal')
-            rows = report['rows']
+            if journal is not None:
+                rows = journal.bridge_receipts()
+                report = {'closed': journal.terminal}
+            else:
+                report = inspect_journal(directory, cancel=self.capture.stop_requested)
+                if set(report['issues']) - {'missing_terminal'}:
+                    raise RecorderBridgeError('invalid recorder journal')
+                rows = report['rows']
             previous = self._receipt(rows, message['callbackId'], op)
             if previous:
                 if previous[1]['digest'] != digest:
@@ -293,16 +300,15 @@ class RecorderBridge:
                     age = time.time() - registered['registeredUnix']
                     if not 0 <= age <= CALLBACK_TTL:
                         raise RecorderBridgeError('native callback registration expired')
-                    expected, event = registered['expected'], message['event']
+                    expected, event = registered['expectedHashes'], message['event']
                     if not isinstance(event, dict) or set(event) != set(expected):
                         raise RecorderBridgeError('invalid callback event schema')
-                    if any(event[k] != expected[k] for k in set(expected) - {'choice'}):
+                    if any(hashlib.sha256(_json(event[k])).hexdigest() != expected[k] for k in set(expected) - {'choice'}):
                         raise RecorderBridgeError('callback differs from native masked input')
                     if op == 'started' and (event['choice'] != {} or self._receipt(rows, message['callbackId'], 'closed')):
                         raise RecorderBridgeError('native callback no longer pending')
                     start = self._receipt(rows, message['callbackId'], 'started')
-                    decision_id = (expected['decision_evidence']['correlationId']
-                                   if expected['decision_evidence'] is not None else message['callbackId'])
+                    decision_id = registered['decisionId']
                     if op == 'finished' and (start is None or (seat, decision_id) not in journal.pending_decisions):
                         raise RecorderBridgeError('completion has no durable pending start')
                     if op == 'started' and any(p[0] == seat for p in journal.pending_decisions):

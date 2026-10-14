@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import threading
 import time
 import uuid
@@ -251,6 +252,8 @@ class PrivateGameJournal:
         self._fd = os.open(directory / ".writer.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
         try:
             fcntl.flock(self._fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self._segment_seals = self._segment_inventory()
+            self._bridge_receipts = {}
             self.sequence, self.previous, self.sources = 0, ZERO, {}
             self.terminal, self.failed = False, False
             self.pending_decisions: set[tuple[str, str]] = set()
@@ -269,6 +272,7 @@ class PrivateGameJournal:
                 self.sequence, self.previous = len(report["rows"]), report["root_sha256"]
                 self.sources = report["sources"]
                 for row in report["rows"]:
+                    self._index_bridge_receipt(row)
                     if row['kind'] == 'decision_started':
                         self.pending_decisions.add((row['seat_id'], row['payload']['decision_id']))
                     elif row['kind'] == 'seat_callback':
@@ -285,12 +289,63 @@ class PrivateGameJournal:
             self._fd = -1
             raise
 
+    @staticmethod
+    def _segment_seal(st):
+        return (st.st_dev, st.st_ino, st.st_mode, st.st_uid, st.st_gid,
+                st.st_nlink, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+
+    def _segment_inventory(self):
+        """Custody seal for bytes verified at open or fsynced by this sole writer."""
+        result = {}
+        for index, path in enumerate(sorted(self.directory.glob('*.jsonl'))):
+            st = path.lstat()
+            if (path.name != f'{index:06d}.jsonl' or not stat.S_ISREG(st.st_mode)
+                    or st.st_nlink != 1 or st.st_uid != os.getuid() or st.st_mode & 0o077):
+                raise JournalError('journal segment custody changed')
+            result[path.name] = self._segment_seal(st)
+        return result
+
+    def _check_segment_seals(self):
+        try:
+            if self._segment_inventory() != self._segment_seals:
+                raise JournalError('journal changed outside its sole writer')
+        except (OSError, ValueError):
+            self.failed = True
+            raise
+
+    def _index_bridge_receipt(self, row):
+        metadata = row['payload'].get('recorder_bridge')
+        if not isinstance(metadata, dict):
+            return
+        key = (metadata.get('callbackId'), metadata.get('op'))
+        # Bounded compact metadata only; never retain masked snapshots in memory.
+        if len(self._bridge_receipts) >= 100000 and key not in self._bridge_receipts:
+            raise JournalError('recorder receipt index limit')
+        compact = {k: v for k, v in metadata.items() if k != 'expected'}
+        if 'expected' in metadata:
+            compact['expectedHashes'] = {k: hashlib.sha256(_json(v)).hexdigest()
+                                         for k, v in metadata['expected'].items()}
+            evidence = metadata['expected'].get('decision_evidence')
+            compact['decisionId'] = evidence['correlationId'] if evidence is not None else metadata['callbackId']
+        value = ({'sha256': row['sha256']}, compact)
+        if key in self._bridge_receipts and self._bridge_receipts[key] != value:
+            raise JournalError('duplicate recorder receipt')
+        self._bridge_receipts[key] = value
+
+    def bridge_receipts(self):
+        with self._lock:
+            if self._fd < 0 or self.failed:
+                raise JournalError('journal is closed or failed')
+            self._check_segment_seals()
+            return self._bridge_receipts
+
     def append(self, kind: str, payload: Mapping[str, Any], *, seat_id: str | None = None,
                source: str | None = None, source_sequence: int | None = None) -> str:
         with self._lock:
             check_cancelled(self.cancel)
             if self._fd < 0 or self.terminal or self.failed:
                 raise JournalError("journal is closed or failed")
+            self._check_segment_seals()
             if kind not in {"manifest", "resume", "native_transition", "native_replay",
                             "seat_callback", "decision_started", "terminal", "coverage_gap", "raw_evidence",
                             "native_source", "native_seat_observation", "runtime_context"}:
@@ -351,19 +406,36 @@ class PrivateGameJournal:
             check_cancelled(self.cancel)
             fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
             try:
+                opened = self._segment_seal(os.fstat(fd))
                 if os.fstat(fd).st_mode & 0o077:
                     raise JournalError("segment permissions are not private")
+                if path.name in self._segment_seals and opened != self._segment_seals[path.name]:
+                    raise JournalError('journal segment changed before append')
                 with os.fdopen(fd, "ab", closefd=False) as handle:
                     handle.write(data)
                     handle.flush()
                     os.fsync(fd)
                 if created:
                     _sync_dir(self.directory)
+                written = self._segment_seal(os.fstat(fd))
             except BaseException:
                 self.failed = True  # no further writes after uncertain partial write
                 raise
             finally:
                 os.close(fd)
+            after = self._segment_inventory()
+            if (after.get(path.name) != written
+                    or set(after) != set(self._segment_seals) | {path.name}
+                    or any(after[name] != seal for name, seal in self._segment_seals.items() if name != path.name)
+                    or after[path.name][6] != self._segment_seals.get(path.name, (0,) * 9)[6] + len(data)):
+                self.failed = True
+                raise JournalError('journal changed during durable append')
+            self._segment_seals = after
+            try:
+                self._index_bridge_receipt({**row, 'sha256': digest})
+            except BaseException:
+                self.failed = True
+                raise
             self.used += len(data)
             self.sequence += 1
             self.previous = digest
