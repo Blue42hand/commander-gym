@@ -576,7 +576,13 @@ class QAFileHost:
             require(raw_digest(root_bytes(ROOT/name)) == sha, 'qa_execution_changed')
         for role, unit in self.units.items():
             fields = self._show(unit,('FragmentPath','DropInPaths','NeedDaemonReload'))
-            require(fields['FragmentPath'] == str(ROOT/'units'/f'{role}.service')
+            expected = ROOT/'units'/f'{role}.service'
+            fragment = Path(fields['FragmentPath'])
+            # Newer systemd reports the installed link rather than its target.
+            # Accept only our exact unit link resolving to the indexed bytes.
+            require((fragment == expected or
+                     (fragment == Path('/etc/systemd/system')/unit
+                      and fragment.resolve(strict=True) == expected))
                     and fields['DropInPaths'] == '' and fields['NeedDaemonReload'] == 'no', 'qa_loaded_unit_mismatch')
             if role == 'redis':
                 memory = self._show(unit, ('MemoryMax', 'MemorySwapMax'))

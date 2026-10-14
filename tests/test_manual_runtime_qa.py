@@ -102,6 +102,17 @@ class QAContractTests(unittest.TestCase):
         def imported(name):return types.SimpleNamespace(__code__=types.SimpleNamespace(co_filename=str(implementation/name)))
         with patch.object(qa,'_promote',imported('manual_runtime_rollout.py')),patch.object(qa,'validate_profile',imported('manual_runtime_profile.py')),patch.object(qa,'capture_inventory',imported('manual_runtime_quiescence.py')),patch.object(qa,'root_bytes',side_effect=lambda path:Path(path).read_bytes()):
             host._inventory()
+            host._show.return_value['FragmentPath']='/etc/systemd/system/nonce-native'
+            original_resolve=Path.resolve
+            def resolve_link(path, strict=False):
+                return self.root/'units/native.service' if str(path)=='/etc/systemd/system/nonce-native' else original_resolve(path, strict=strict)
+            with patch.object(Path,'resolve',autospec=True,side_effect=resolve_link):
+                host._inventory()
+            def resolve_foreign(path, strict=False):
+                return self.root/'units/foreign.service' if str(path)=='/etc/systemd/system/nonce-native' else original_resolve(path, strict=strict)
+            with patch.object(Path,'resolve',autospec=True,side_effect=resolve_foreign):
+                with self.assertRaisesRegex(ManualRuntimeError,'qa_loaded_unit_mismatch'):host._inventory()
+            host._show.return_value['FragmentPath']=str(self.root/'units/native.service')
             host._show.return_value['NeedDaemonReload']='yes'
             with self.assertRaisesRegex(ManualRuntimeError,'qa_loaded_unit_mismatch'):host._inventory()
             host._show.return_value['NeedDaemonReload']='no';extra=implementation/'unreviewed.py';extra.write_bytes(b'hold')
