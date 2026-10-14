@@ -357,6 +357,12 @@ class ProtectedRuntimeHost:
                 previous_id=approval['previousRuntimeId'], sequence=approval['sequence'], now=receipt['observedUnix'])
             require(runtime.runtime_id == snapshot.runtime_id, 'precredential_identity')
             self._attest_precredential(snapshot)
+            # A verified explicit transaction (including rollback) gets a fresh
+            # start budget. Rapid prior starts must not strand the known-good
+            # release; unattended process restarts retain systemd rate limits.
+            reset_units = (*UNITS, 'argentum-manual-preflight.service')
+            if 'liveCatalog' in profile: reset_units += ('argentum-binding-catalog.service',)
+            for unit in reset_units: self._service('reset-failed', unit)
             # No key source opened here; only after this gate can systemd start
             # the separately approved credential-bearing sidecar unit.
             for unit in ('argentum-recorder.service', 'argentum-luna-sidecar.service', 'argentum-play.service', 'argentum-web.service'):
