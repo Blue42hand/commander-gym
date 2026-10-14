@@ -11,6 +11,7 @@ from pathlib import Path
 from commander_gym.deck_package import ArtifactRef
 from commander_gym.bounded_provider_process import BoundedProcessClient
 from commander_gym.game_server_binding_openai_sidecar import (
+    BUILTIN_NATIVE_CERTIFIED_FORCED_PASS_COMPONENT_REF,
     BUILTIN_ALL_UNAFFORDABLE_PASS_COMPONENT_REF,
     BUILTIN_ALL_UNAFFORDABLE_CYCLE_PASS_COMPONENT_REF,
     BUILTIN_DELEGATED_AUTOPASS_COMPONENT_REF,
@@ -36,7 +37,7 @@ from commander_gym.game_server_openai_sidecar import (
     OpenAIGameServerSidecarConfigurationError,
 )
 from commander_gym.game_server_sidecar import UnknownProfileError
-from commander_gym.identity import Binding, Deck, Pilot
+from commander_gym.identity import Binding, Deck, DeckKnowledge, Pilot
 from commander_gym.pilot_composition import PilotContractError, PilotSubsystemSpec
 from commander_gym.delegated_autopass import DelegatedAutopassPilot
 from commander_gym.pilot_routing import AllUnaffordablePassHandler
@@ -68,6 +69,7 @@ def synthetic_catalog(
     *,
     active_binding: str = "seat-a",
     pilot: Pilot | None = None,
+    with_knowledge: bool = False,
 ) -> Path:
     payload = {
         "commander": "Synthetic Commander",
@@ -95,11 +97,17 @@ def synthetic_catalog(
             deterministic_policy=BUILTIN_FORCED_PARAMETERLESS_COMPONENT_REF,
             escalation_provider=BUILTIN_OPENAI_RESPONSES_COMPONENT_REF,
         )
+    knowledge = DeckKnowledge(
+        knowledge_id="synthetic-knowledge", revision="r1",
+        content=ArtifactRef(kind="primer", artifact_id="synthetic-primer", version="r1",
+                            digest="sha256:" + hashlib.sha256(b"Synthetic primer").hexdigest()),
+    ) if with_knowledge else None
     binding = Binding(
         binding_id="seat-a",
         revision="r1",
         deck=deck.ref(),
         pilot=pilot.ref(),
+        deck_knowledge=knowledge.ref() if knowledge else None,
         metadata={
             "display": {
                 "name": "Synthetic Binding",
@@ -112,6 +120,9 @@ def synthetic_catalog(
     write_json(root / "decks" / "deck.json", deck.to_dict())
     write_json(root / "decks" / "payload.json", payload)
     write_json(root / "pilots" / "pilot.json", pilot.to_dict())
+    if knowledge:
+        write_json(root / "knowledge.json", knowledge.to_dict())
+        (root / "primer.txt").write_text("Synthetic primer", encoding="utf-8")
     catalog = root / "instance" / "bindings.json"
     write_json(
         catalog,
@@ -125,7 +136,7 @@ def synthetic_catalog(
                 }
             ],
             "pilots": ["pilots/pilot.json"],
-            "deck_knowledge": [],
+            "deck_knowledge": [{"manifest": "knowledge.json", "payload": "primer.txt"}] if knowledge else [],
             "active_bindings": [active_binding],
         },
     )
@@ -149,6 +160,36 @@ class BindingOpenAIGameServerSidecarTests(unittest.TestCase):
         ).resolve(spec).player
         self.assertFalse(default.strategic_pilot.cache_friendly_history)
         self.assertTrue(opted_in.strategic_pilot.cache_friendly_history)
+
+    def test_certified_forced_pass_binding_preserves_identity_and_native_evidence(self):
+        from test_native_forced_pass import fixture, evidence
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            pilot = Pilot(
+                pilot_id="synthetic-certified-pass", revision="r1",
+                deterministic_policy=BUILTIN_NATIVE_CERTIFIED_FORCED_PASS_COMPONENT_REF,
+                escalation_provider=BUILTIN_OPENAI_RESPONSES_COMPONENT_REF,
+            )
+            catalog = synthetic_catalog(root, pilot=pilot, with_knowledge=True)
+            config = BindingOpenAIGameServerConfig(
+                sidecar=OpenAIGameServerSidecarConfig(
+                    token="fixture", api_key="fixture", port=free_port(),
+                ), catalog_path=catalog, instance_root=root,
+            )
+            server = build_binding_openai_game_server_sidecar(config, client=FakeClient())
+            try:
+                state, actions = fixture()
+                seat = server.resolve_seat("seat", "seat-a")
+                result = seat.choose_action(state, actions, None,
+                                           decision_evidence=evidence(state, actions))
+                self.assertEqual(result.action, actions[0]["action"])
+                self.assertEqual(result.metadata["binding"]["artifact_id"], "seat-a")
+                self.assertEqual(result.metadata["pilot"]["artifact_id"], pilot.pilot_id)
+                self.assertEqual(result.metadata["routing"]["handledBy"]["component"]["artifactId"],
+                                 "native-certified-forced-pass")
+                self.assertFalse(result.metadata["routing"]["escalated"])
+            finally:
+                server.server_close()
 
     def test_all_unaffordable_pass_requires_exact_new_component_ref(self):
         config = OpenAIGameServerSidecarConfig(
