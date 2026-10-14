@@ -155,6 +155,12 @@ class GameServerSeatAdapter:
             if not isinstance(pending, Mapping) or pending.get("kind") != "SelectManaSourcesDecision":
                 raise GameServerSeatError("payment correction requires the current native mana decision")
             observation["nativePaymentError"] = native_payment_error
+        if decision_evidence is not None:
+            # The complete enumerated native body and callback were matched above.
+            # A process-local marker cannot be asserted by JSON; its digest also
+            # prevents reuse after a state/menu change. No new model input fields.
+            from .native_forced_pass import _VerifiedNativeMenu
+            observation = _VerifiedNativeMenu(observation)
         choice = self._choose_with_failure_receipt("chooseAction", observation, decision_evidence)
 
         if isinstance(choice, ArgentumActionChoice):
