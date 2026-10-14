@@ -136,6 +136,39 @@ StandardError=null
 '''
     entry = f'{python} -I -S -B {launcher_root}'
     result = {
+        # Tolaria's keyless recorder is ordered After=argentum-play.service.
+        # systemd dependencies cannot be removed by an empty drop-in assignment.
+        # Replace the base unit and bank its original during the transaction.
+        'units/argentum-recorder.service': f'''[Unit]
+Description=Private manual-game recorder and authenticated callback bridge
+PartOf=argentum-play.service
+[Service]
+Type=exec
+User=argentum-play
+Group=commander-prod
+WorkingDirectory=/var/lib/argentum-play
+RuntimeDirectory=argentum-play argentum-luna-ipc
+RuntimeDirectoryMode=0750
+ExecStart={entry}/recorder_entry.py
+UMask=0077
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=150
+KillMode=control-group
+SendSIGKILL=no
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ReadWritePaths=/var/lib/commander-gym/runs/native /run/argentum-play /run/argentum-luna-ipc
+InaccessiblePaths=/srv/commander-runtime /var/lib/commander-gym/state /var/lib/commander-gym/imports
+RestrictAddressFamilies=AF_UNIX
+MemoryMax=1G
+TasksMax=32
+StandardOutput=null
+StandardError=null
+''',
         'units/argentum-manual-preflight.service': f'''[Unit]
 Description=Verify exact approved runtime before loading private credentials
 Before=argentum-recorder.service argentum-luna-sidecar.service argentum-play.service

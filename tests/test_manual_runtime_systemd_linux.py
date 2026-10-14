@@ -89,3 +89,35 @@ ExecStart=/usr/bin/touch {self.root}/sidecar-started
         (self.root/'gate').write_text('qa-root-attested-promotion')
         self.systemctl('start',self.units[2])
         self.assertTrue((self.root/'sidecar-started').exists())
+
+    def test_rendered_recorder_cold_boot_has_no_native_ordering_cycle(self):
+        from commander_gym.manual_runtime_config import service_units
+        self.install(preflight_ok=True)
+        preflight, recorder, sidecar = self.units
+        native = self.prefix+'-native.service'
+        self.units.append(native)
+        units = service_units(launcher_root='/srv/argentum-luna/artifacts/launcher/'+'a'*64,
+            dependency_root='/srv/argentum-luna/artifacts/dependencies/'+'b'*64,
+            python_relative='python/bin/python3.12', tailnet_only=True)
+        replacements = {'argentum-play.service':native, 'argentum-recorder.service':recorder,
+            'argentum-luna-sidecar.service':sidecar, 'argentum-manual-preflight.service':preflight,
+            '/run/argentum-luna-runtime/precredential.json':str(self.root/'gate')}
+        def unit_part(text):
+            text=text.split('[Service]',1)[0]
+            for old,new in replacements.items():text=text.replace(old,new)
+            return text
+        # Exercise the actual rendered dependency graph with harmless commands.
+        # A legacy recorder After=native edge would create a cycle here.
+        recorder_text=unit_part(units['units/argentum-recorder.service'])+unit_part(units['units/argentum-recorder.conf'])
+        runtime_dirs=[line for line in units['units/argentum-recorder.service'].splitlines()
+                      if line.startswith(('RuntimeDirectory=','RuntimeDirectoryMode='))]
+        runtime_dirs=[line.replace('argentum-play',self.prefix+'-native').replace('argentum-luna-ipc',self.prefix+'-ipc') for line in runtime_dirs]
+        recorder_text+='[Service]\nType=oneshot\nRemainAfterExit=yes\n'+'\n'.join(runtime_dirs)+f'\nExecStart=/usr/bin/test -d /run/{self.prefix}-ipc\n'
+        Path('/run/systemd/system',recorder).write_text(recorder_text)
+        native_text=unit_part(units['units/argentum-play.conf'])+f'[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/usr/bin/touch {self.root}/native-started\n'
+        Path('/run/systemd/system',native).write_text(native_text)
+        self.systemctl('daemon-reload')
+        self.systemctl('start',native)
+        self.assertTrue((self.root/'native-started').exists())
+        self.assertTrue((self.root/'sidecar-started').exists())
+        self.assertEqual(Path('/run',self.prefix+'-ipc').stat().st_mode & 0o777,0o750)

@@ -41,6 +41,7 @@ TARGETS = {
     'nginx.conf': Path('/etc/argentum-play/argentum-play.nginx.conf'),
     'units/argentum-play.conf': Path('/etc/systemd/system/argentum-play.service.d/manual-runtime.conf'),
     'units/argentum-recorder.conf': Path('/etc/systemd/system/argentum-recorder.service.d/manual-runtime.conf'),
+    'units/argentum-recorder.service': Path('/etc/systemd/system/argentum-recorder.service'),
     'units/argentum-web.conf': Path('/etc/systemd/system/argentum-web.service.d/manual-runtime.conf'),
     'units/argentum-source-feeder.conf': Path('/etc/systemd/system/argentum-source-feeder.service.d/manual-runtime.conf'),
     'units/argentum-updater.conf': Path('/etc/systemd/system/argentum-updater.service.d/manual-runtime.conf'),
@@ -54,8 +55,10 @@ def selected_targets(profile):
     # Keep TARGETS complete for rollback custody; the sealed one-Origin mode
     # does not install or require a LAN certificate.
     tailnet_only = len(profile["ingress"]["origins"]) == 1
+    config_files = profile['artifacts']['config']['files']
     return {name: path for name, path in TARGETS.items()
-            if not (tailnet_only and name == "lan-server.crt")}
+            if not (tailnet_only and name == "lan-server.crt")
+            and not (name == 'units/argentum-recorder.service' and name not in config_files)}
 
 
 def root_json(path: Path) -> dict:
