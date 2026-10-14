@@ -16,6 +16,9 @@ from .native_game_capture import NativeCursor, iter_native_source
 from .recorder_bridge import peer_uid
 
 MAX_BYTES = 16 * 1024 * 1024
+# Expanded journal rows repeat masked state and callback evidence. A complete
+# 100-card Commander fixture can exceed 16 MiB while its native source is small.
+MAX_JOURNAL_BYTES = 32 * 1024 * 1024
 MAX_CALLBACKS = 128
 
 
@@ -63,7 +66,7 @@ def _observe_callback_drain(directory, read_status):
     cursor=NativeCursor();starts={};callbacks={};inputs={};results={};previous=None;total=0;pins=None;state_digest=None;awaiting_resume=False;checkpoint=False
     imported=(r for r in report['rows'] if r.get('source')=='native')
     for row in report['rows']:
-        total+=len(_json(row));_require(total<=MAX_BYTES)
+        total+=len(_json(row));_require(total<=MAX_JOURNAL_BYTES)
         if pins is None:
             pins=row['payload'].get('pins');_require(row['kind']=='manifest' and not row['payload'].get('unavailable_pins'))
         _require(row['kind']!='coverage_gap')

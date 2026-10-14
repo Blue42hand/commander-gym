@@ -67,6 +67,18 @@ class QACallbackDrainTests(unittest.TestCase):
         statuses=iter([self.status(),{**self.status(),'qaCallbackGeneration':2}])
         with self.assertRaises(JournalError):_observe_callback_drain(directory,lambda:next(statuses))
 
+    def test_expanded_journal_and_native_source_have_independent_bounds(self):
+        from commander_gym.game_journal import inspect_journal, _json
+        capture,directory=self.fixture();capture.scan()
+        journal_bytes=sum(len(_json(row)) for row in inspect_journal(directory)['rows'])
+        native_bytes=(directory/'native-000000.ndjson').stat().st_size
+        with patch('commander_gym.qa_callback_drain.MAX_JOURNAL_BYTES',journal_bytes):
+            self.assertEqual(_observe_callback_drain(directory,self.status)['callbacks'],4)
+        with patch('commander_gym.qa_callback_drain.MAX_JOURNAL_BYTES',journal_bytes-1):
+            with self.assertRaises(JournalError):_observe_callback_drain(directory,self.status)
+        with patch('commander_gym.qa_callback_drain.MAX_BYTES',native_bytes-1):
+            with self.assertRaises(JournalError):_observe_callback_drain(directory,self.status)
+
     def test_failed_stale_cancelled_missing_and_mismatched_never_drain(self):
         for variant in ('failed','stale','cancelled','missing_result','unmatched','bad_resume','duplicate_resume_checkpoint','callback_before_resume'):
             capture,directory=self.fixture(variant);capture.scan()
