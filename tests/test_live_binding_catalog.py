@@ -71,6 +71,16 @@ class LiveBindingCatalogTests(unittest.TestCase):
         self.assertEqual((self.store/'current.json').read_bytes(), before)
         self.assertEqual(len(self.reader().profile_payloads()), 1)
 
+    def test_old_snapshot_resolves_after_bounded_cache_eviction(self):
+        first=self.publish();reader=self.reader();old=reader.profile_payloads()[0]['id']
+        for index in range(6):
+            (self.repo/'note.txt').write_text(str(index));self.commit();self.publish();reader.profile_payloads()
+        self.assertLessEqual(len(reader._loaded),4)
+        self.assertNotIn(first['snapshot'],reader._loaded)
+        self.assertTrue(reader.contains(old))
+        seat=reader.create_seat('old-seat',old)
+        self.assertEqual(seat._recording_lineage['catalog']['sha256'],first['snapshot'])
+
     def test_native_deck_rejection_keeps_last_good_snapshot(self):
         self.publish(); before = (self.store/'current.json').read_bytes(); self.change_binding()
         def reject(registry): raise ValueError('unsupported_card_fixture')

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections import OrderedDict
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -202,7 +203,7 @@ class LiveBindingRegistry:
         self.store = Path(store).resolve()
         self.pilot_factory = pilot_factory
         self.allowed_pilots = frozenset(allowed_pilots)
-        self._loaded = {}
+        self._loaded = OrderedDict()
         self._metadata = {}
         self._current = None
         self._lock = threading.RLock()
@@ -219,6 +220,10 @@ class LiveBindingRegistry:
                     raise CatalogReloadError('snapshot_bindings')
                 self._loaded[snapshot] = registry
                 self._metadata[snapshot] = metadata
+                while len(self._loaded) > 4:
+                    evicted, _ = self._loaded.popitem(last=False)
+                    self._metadata.pop(evicted)
+            self._loaded.move_to_end(snapshot)
             return self._loaded[snapshot]
 
     def refresh(self):
@@ -250,7 +255,8 @@ class LiveBindingRegistry:
         except (OSError, ValueError, KeyError, TypeError): return False
 
     def create_seat(self, player_id, profile_id, **kwargs):
-        registry, binding_id = self.selection(profile_id)
-        snapshot = PROFILE.fullmatch(profile_id).group(1)
-        return registry.create_seat(player_id, binding_id,
-            catalog_snapshot={'sha256': snapshot, 'commit': self._metadata[snapshot]['commit']}, **kwargs)
+        with self._lock:
+            registry, binding_id = self.selection(profile_id)
+            snapshot = PROFILE.fullmatch(profile_id).group(1)
+            lineage = {'sha256': snapshot, 'commit': self._metadata[snapshot]['commit']}
+        return registry.create_seat(player_id, binding_id, catalog_snapshot=lineage, **kwargs)

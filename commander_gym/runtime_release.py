@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import shutil
 import stat
+import subprocess
 import tempfile
 import time
 
@@ -214,4 +215,25 @@ def diagnostics(host):
         from .manual_runtime_rollout import ready_state
         ready_state(status, current, now=time.time()); result['ready'] = True
     except (OSError, ValueError): result['ready'] = False
+    from .manual_runtime_host import UNITS
+    services = {}
+    for unit in UNITS:
+        try:
+            response = subprocess.run(['/usr/bin/systemctl','show',unit,'-p','ActiveState','--value'],
+                capture_output=True,text=True,timeout=5,check=True)
+            state = response.stdout.strip()
+            services[unit] = state if state in ('active','inactive','failed','activating','deactivating') else 'unknown'
+        except (OSError, subprocess.SubprocessError): services[unit] = 'unknown'
+    result['services'] = services
+    result['ready'] = result['ready'] and all(state == 'active' for state in services.values())
+    result['providerApi'] = 'not-probed'
+    try:
+        from .manual_runtime_host import root_json, load_bundle
+        profile = load_bundle(current.runtime_id)[0]
+        if 'liveCatalog' in profile:
+            row = root_json(Path(profile['liveCatalog']['snapshotRoot']) / 'status.json')
+            state = row.get('state')
+            if state in ('published','unchanged','catalog-update-rejected'):
+                result['catalog'] = {'state':state}
+    except (OSError, ValueError, KeyError): pass
     return result

@@ -71,7 +71,9 @@ def inspect_catalog(profile: dict) -> dict:
         resolved = loaded.resolver.resolve(binding_id)
         require(resolved.binding.fingerprint == profile["catalog"]["bindings"][binding_id]
                 and resolved.pilot.fingerprint == profile["catalog"]["pilotFingerprint"], "canonical_fingerprint_mismatch")
-    pilot_files = [name for name in artifact["files"] if name.startswith("pilots/") and name.endswith("/pilot.json")]
+    roster = decode(protected_bytes(root / profile["catalog"]["roster"], uid=artifact["uid"]))
+    pilot_files = roster.get("pilots", [])
+    require(isinstance(pilot_files, list) and all(isinstance(name, str) and name in artifact["files"] for name in pilot_files), "roster_pilot_seals")
     require(len(pilot_files) == 1, "single_pilot_required")
     pilot = decode(protected_bytes(root / pilot_files[0], uid=artifact["uid"]))
     require(pilot.get("fingerprint") == profile["catalog"]["pilotFingerprint"]

@@ -57,9 +57,19 @@ class RuntimeInstallSystemdTests(unittest.TestCase):
         self.assertTrue(Path('/run/systemd/system').is_dir()); self.assertEqual(os.getuid(),0)
         self.assertFalse(Path('/etc/argentum-luna/current.json').exists())
         self.addCleanup(self.fixture_diagnostics)
+        timeout=patch('commander_gym.manual_runtime_host.READINESS_TIMEOUT_SECONDS',15)
+        timeout.start();self.addCleanup(timeout.stop)
+        for unit in ('argentum-play','argentum-luna-sidecar','argentum-recorder'):
+            override=Path('/run/systemd/system')/(unit+'.service.d')/'fixture-diagnostics.conf'
+            override.parent.mkdir(parents=True);override.write_text('[Service]\nStandardError=journal\n')
 
     def fixture_diagnostics(self):
         # Only this offline synthetic container; never collect production logs.
+        try:
+            from commander_gym.manual_runtime_host import ProtectedRuntimeHost, CONFIG, root_json
+            host=ProtectedRuntimeHost(root_json(CONFIG/'anchor-profile.json'))
+            print('fixture lifecycle:',host.status(),flush=True)
+        except Exception as error: print('fixture lifecycle unavailable:',str(error),flush=True)
         for command in (['systemctl','--no-pager','--failed'],
                         ['journalctl','--no-pager','-n','80','-u','argentum-recorder.service',
                          '-u','argentum-manual-preflight.service','-u','argentum-binding-catalog.service',

@@ -172,6 +172,9 @@ def validate_profile(profile: Mapping[str, Any]) -> dict:
         if profile['purpose'] == 'native-manual-play':
             require(live['checkoutRoot'] == '/srv/commander-bindings/checkout'
                     and live['snapshotRoot'] == '/var/lib/commander-bindings', 'live_catalog_layout')
+        else:
+            require(all(Path(live[k]).is_relative_to('/opt/commander-gym-qa/qa')
+                        for k in ('checkoutRoot', 'snapshotRoot')), 'qa_live_catalog_layout')
     policy = profile["credentialPolicy"]
     require(policy == {"providerReaders": ["sidecar"], "tokenReaders": ["native", "sidecar"],
                        "providerSource": "existing-private-env", "delivery": "systemd-credentials",

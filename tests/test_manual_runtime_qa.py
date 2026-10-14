@@ -53,6 +53,27 @@ class QAContractTests(unittest.TestCase):
             q=copy.deepcopy(self.q);mutation(q)
             with self.assertRaises(ManualRuntimeError):qa.match_profiles(self.p,q)
 
+    def test_live_catalog_paths_are_remapped_without_disabling_live_mode(self):
+        from commander_gym.manual_runtime_config import service_units, shared_https_nginx
+        p,q=copy.deepcopy(self.p),copy.deepcopy(self.q)
+        p['liveCatalog']={'checkoutRoot':'/srv/commander-bindings/checkout',
+                          'snapshotRoot':'/var/lib/commander-bindings','roster':'roster.json','pollSeconds':5}
+        q['liveCatalog']={**p['liveCatalog'],'checkoutRoot':'/opt/commander-gym-qa/qa/binding-checkout',
+                          'snapshotRoot':'/opt/commander-gym-qa/qa/binding-snapshots'}
+        a=p['artifacts']
+        config=service_units(launcher_root=a['launcher']['root'],dependency_root=a['dependencies']['root'],
+                             python_relative='python/bin/python3.12',tailnet_only=True,live_catalog=p['liveCatalog'])
+        config['nginx.conf']=shared_https_nginx(frontend_root=a['frontend']['root'],tailnet_origin=p['ingress']['origins'][0],
+            lan_address=p['ingress']['lanAddress'],lan_subnet=p['ingress']['lanSubnet'],tailnet_only=True)
+        inventory={n:hashlib.sha256(t.encode()).hexdigest() for n,t in config.items()}
+        p['artifacts']['config']['files']=inventory;q['artifacts']['config']['files']=inventory
+        p['artifacts']['config']['root']='/srv/argentum-luna/artifacts/config/'+digest(inventory)
+        self.assertIn('liveCatalog.snapshotRoot',qa.match_profiles(p,q)['substitutions'])
+        q['liveCatalog']['snapshotRoot']='/var/lib/commander-bindings'
+        with self.assertRaisesRegex(ManualRuntimeError,'qa_live_catalog_layout'):qa.match_profiles(p,q)
+        q.pop('liveCatalog')
+        with self.assertRaisesRegex(ManualRuntimeError,'qa_live_catalog_mode'):qa.match_profiles(p,q)
+
     def test_scope_freshness_limits_nonce_and_exact_ci_fail_closed(self):
         for mutate in (lambda a:a.update(scope='activate-manual-runtime'),lambda a:a.update(sequence=True),lambda a:a.update(expiresUnix=1901),lambda a:a.update(nonce='../escape'),lambda a:a.update(qaProfileSha256='9'*64),lambda a:a.update(productionAuthoritySha256='9'*64),lambda a:a.update(qaAuthoritySha256='8'*64),lambda a:a['limits'].update(guestMemoryBytes=3*1024**3),lambda a:a.update(qaMinFreeBytes=True),lambda a:a['executionInventory'].update({'probes/foreign':'a'*64})):
             a=copy.deepcopy(self.authority);mutate(a)

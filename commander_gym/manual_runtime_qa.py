@@ -80,6 +80,11 @@ def match_profiles(production, qa):
             and qa['purpose'] == 'qualification', 'qa_profile_purposes')
     redis_qa = qa.get('profile') == 'manual-luna-redis-qa-v1'
     excluded = {'purpose', 'artifacts', 'paths', 'recordingAuthority'}
+    require(('liveCatalog' in production) == ('liveCatalog' in qa), 'qa_live_catalog_mode')
+    if 'liveCatalog' in production:
+        excluded.add('liveCatalog')
+        require(all(production['liveCatalog'][key] == qa['liveCatalog'][key]
+                    for key in ('roster', 'pollSeconds')), 'qa_live_catalog_contract')
     if redis_qa:
         from .qa_redis_variant import dependency_additions
         require(production['profile'] == 'manual-luna-v1', 'qa_redis_reference_profile')
@@ -104,7 +109,8 @@ def match_profiles(production, qa):
             'unchangedRoleInventories': {role: digest(qa['artifacts'][role]['files']) for role in sorted(ROLES) if not (redis_qa and role == 'dependencies')},
             **({'redisDependencyAdditions': additions} if redis_qa else {}),
             'substitutions': ['purpose', 'artifactRoots', 'runtimePaths', 'recordingAuthority'] +
-                (['profile','settings.redisEnabled','redisQa','redisDependencyAdditions'] if redis_qa else []),
+                (['profile','settings.redisEnabled','redisQa','redisDependencyAdditions'] if redis_qa else []) +
+                (['liveCatalog.checkoutRoot','liveCatalog.snapshotRoot'] if 'liveCatalog' in production else []),
             'productionQualificationIssued': False, 'activationEligible': False}
 
 
