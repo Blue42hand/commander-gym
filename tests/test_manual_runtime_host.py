@@ -54,6 +54,24 @@ class ManualRuntimeHostTests(unittest.TestCase):
         self.host.base.status.return_value = self.state
         self.assertEqual(self.host.drain('qa-boot'), self.state)
 
+    def test_readiness_waits_for_socket_and_recording_recovery(self):
+        recovering = {**self.state, 'recoveryComplete': False}
+        self.host.base.status.side_effect = [FileNotFoundError(), recovering, self.state]
+        with patch.object(host_module.time, 'time', return_value=1000), patch.object(host_module.time, 'sleep') as sleep:
+            self.assertEqual(self.host._wait_ready(self.snapshot, closed=True), self.state)
+        self.assertEqual(sleep.call_count, 2)
+        self.host.base.rpc.assert_not_called()
+
+    def test_readiness_never_accepts_wrong_release_or_open_admission(self):
+        self.host.base.status.side_effect = [
+            {**self.state, 'releaseId': '9'*64},
+            {**self.state, 'acceptingNewGames': True},
+        ]
+        with patch.object(host_module.time, 'time', return_value=1000), patch.object(host_module.time, 'sleep'), patch.object(host_module.time, 'monotonic', side_effect=[0, 1, 2, 601]):
+            with self.assertRaisesRegex(ManualRuntimeError, 'runtime_readiness_timeout'):
+                self.host._wait_ready(self.snapshot, closed=True)
+        self.host.base.rpc.assert_not_called()
+
     def test_stop_proof_rejects_previous_boot_runtime_nonce_and_boolean_counts(self):
         context = stop_context(self.snapshot, self.state, {'original.jsonl': 'a'*64}, nonce='1'*32, now=1000)
         proof = {**context, 'reconciled': True, 'pendingRecordWrites': 0, 'verifiedUnix': 1000}

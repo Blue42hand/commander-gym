@@ -244,6 +244,8 @@ ExecStart=
 ExecStart={dispatch} {operation}
 ReadWritePaths=/etc/argentum-luna /var/lib/argentum-updater/manual-runtime /run/argentum-luna-runtime
 '''
+        if operation == 'admit':
+            result['units/' + unit + '.conf'] += 'TimeoutStartSec=660\n'
     return result
 
 

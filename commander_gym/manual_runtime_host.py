@@ -304,6 +304,21 @@ class ProtectedRuntimeHost:
                 self._service('start', unit)
         else:
             for unit in ('argentum-recorder.service', 'argentum-play.service', 'argentum-web.service'): self._service('start', unit)
+        self._wait_ready(snapshot, closed=True)
+
+    def _wait_ready(self, snapshot, *, closed):
+        # Type=exec confirms execve, not JVM/recorder readiness. Keep admission
+        # closed while startup recovery finishes, including on a cold boot.
+        from .manual_runtime_rollout import idle_state
+        deadline = time.monotonic() + 600
+        while time.monotonic() < deadline:
+            try:
+                state = self.status()
+                idle_state(state, snapshot, now=time.time(), closed=closed)
+                return state
+            except (OSError, ValueError):
+                time.sleep(0.5)
+        require(False, 'runtime_readiness_timeout')
 
     def complete(self, runtime):
         self._locked()
@@ -409,7 +424,7 @@ class ProtectedRuntimeHost:
         if snapshot.kind == 'keyless':
             return locked_legacy_call(self.native, 'admit', (), held_lock_probe=lambda: self.locked)
         from .manual_runtime_rollout import idle_state
-        state = self.status()
+        state = self._wait_ready(snapshot, closed=False)
         boot = idle_state(state, snapshot, now=time.time(), closed=False)
         if state['acceptingNewGames']:
             return {'state': 'already-open', 'runtimeId': snapshot.runtime_id}
