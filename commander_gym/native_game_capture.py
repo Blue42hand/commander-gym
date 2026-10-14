@@ -331,6 +331,7 @@ class NativeGameCapture:
         # once a terminal has been imported and this game is reserved for sealing.
         gaps = []
         if self._initializations[game_id]['payload'].get('callbackEvidenceVersion') == 2:
+            envelope = attached = report = None
             try:
                 from .canonical_capture import build_capture_envelope
                 report = inspect_journal(directory, cancel=self.stop_requested)
@@ -343,6 +344,10 @@ class NativeGameCapture:
                     journal.raw_evidence(envelope)
             except (OSError, ValueError, KeyError, TypeError, IndexError):
                 gaps.append('canonical_v2_callback_or_lifecycle_unavailable')
+            finally:
+                # Sealing re-reads the durable evidence. Do not retain another
+                # full decoded envelope (or a recovered copy) across that pass.
+                envelope = attached = report = None
         else:
             gaps.append('canonical_game_server_training_adapter_unavailable')
         if list(directory.glob('native-gap-*.json')):
