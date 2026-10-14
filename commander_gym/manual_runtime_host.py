@@ -197,8 +197,15 @@ class ProtectedRuntimeHost:
             load = subprocess.run(['/usr/bin/systemctl', 'show', unit, '-p', 'LoadState', '--value'],
                                   text=True, capture_output=True, timeout=10, check=False)
             if load.stdout.strip() == 'not-found': return
-        subprocess.run(['/usr/bin/systemctl', verb, unit], check=True, timeout=150,
-                       stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        result = subprocess.run(['/usr/bin/systemctl', verb, unit], check=verb != 'reset-failed', timeout=150,
+                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if verb == 'reset-failed' and result.returncode:
+            # systemd may garbage-collect an inactive successful unit between
+            # show and reset-failed. Such a unit has no retained start budget.
+            state = subprocess.check_output(['/usr/bin/systemctl', 'show', unit,
+                                             '-p', 'ActiveState', '-p', 'Result'], text=True, timeout=10)
+            require(dict(line.split('=', 1) for line in state.splitlines()) ==
+                    {'ActiveState': 'inactive', 'Result': 'success'}, 'service_reset_failed')
 
     def _catalog_timer(self, enabled):
         # A missing timer is normal for releases predating live catalogs.

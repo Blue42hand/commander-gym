@@ -233,7 +233,7 @@ class ManualRuntimeHostTests(unittest.TestCase):
                 self.host._select_files(runtime)
 
     def test_start_budget_reset_is_limited_to_managed_services(self):
-        with patch.object(host_module.subprocess, 'run', return_value=Mock(stdout='loaded\n')) as command:
+        with patch.object(host_module.subprocess, 'run', return_value=Mock(stdout='loaded\n',returncode=0)) as command:
             for unit in (*host_module.UNITS, 'argentum-manual-preflight.service', 'argentum-binding-catalog.service'):
                 self.host._service('reset-failed', unit)
             self.assertEqual(command.call_count, 2*(len(host_module.UNITS)+2))
@@ -242,3 +242,10 @@ class ManualRuntimeHostTests(unittest.TestCase):
                 with self.assertRaisesRegex(ManualRuntimeError,'fixed_service_operation'):
                     self.host._service(verb,unit)
             command.assert_not_called()
+
+    def test_collected_inactive_service_needs_no_start_budget_reset(self):
+        with patch.object(host_module.subprocess, 'run', side_effect=[Mock(stdout='loaded\n'), Mock(returncode=1)]), patch.object(host_module.subprocess, 'check_output', return_value='ActiveState=inactive\nResult=success\n'):
+            self.host._service('reset-failed', 'argentum-web.service')
+        with patch.object(host_module.subprocess, 'run', side_effect=[Mock(stdout='loaded\n'), Mock(returncode=1)]), patch.object(host_module.subprocess, 'check_output', return_value='ActiveState=failed\nResult=start-limit-hit\n'):
+            with self.assertRaisesRegex(ManualRuntimeError, 'service_reset_failed'):
+                self.host._service('reset-failed', 'argentum-web.service')
