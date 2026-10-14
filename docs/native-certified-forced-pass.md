@@ -14,6 +14,11 @@ alternativeCostType=FLASHBACK)`, with `affordable=false` and `sourceZone=GRAVEYA
 pass can fall through to the provider because of the offer kind. Source inspected
 at Argentum `470ac86484f07086eec08e12c9bd8abc7bc34be5`.
 
+At that engine pin, `GameSession.beginAiCallbackEvidence` compares the supplied
+menu to `getLegalActions(seat)` and checks the masked state, enriched pending
+decision and current interaction epoch before issuing evidence. The v1 evidence
+path has the same full-menu/state comparison.
+
 The new component requires the seat adapter's process-local certificate. The
 adapter issues it only after `verified_observation` checks the native enumerated
 v1/callback v2 schema, body hash and acting seat, and after matching the full native
