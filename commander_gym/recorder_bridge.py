@@ -243,6 +243,8 @@ class RecorderBridge:
             if self.capture.stop_requested():
                 raise RecorderBridgeError('recorder stopping')
             self.capture.scan()
+            if game_id in self.capture._finalizers:
+                raise RecorderBridgeError('native game finalization in progress')
             journal = self.capture._journals.get(game_id)
             directory = self.capture.root / game_id
             # Duplicate acknowledgments remain available after finalization/restart.

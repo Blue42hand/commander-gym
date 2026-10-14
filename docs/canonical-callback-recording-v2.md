@@ -64,6 +64,14 @@ required. Exceeding any limit preserves explicit recording incompleteness; no
 partial subset is certified. These finite limits leave headroom within the 1 GiB
 recorder service budget; they are not a promise that arbitrarily long games fit.
 
+Live capture queues terminal conversion/publication on one background worker,
+retaining that game's writer lock while releasing the shared capture lock. Other
+games' callbacks and health reports remain responsive. A finalizing game rejects
+new recorder operations; it is still pending drain until its manifest verifies.
+Shutdown cancels and joins the worker before closing writers; an interrupted
+conversion recovers from the durable prefix on restart. Explicit offline scans
+remain synchronous. This isolates the work; it does not make large exports instant.
+
 The optional full-game harness explicitly enables Commander rules, supplies each
 99-card library separately from its commander, and checks starting life and command
 zones. Earlier harness recordings made in Standard mode with 100 library cards

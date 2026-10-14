@@ -70,6 +70,112 @@ class RecorderBridgeTests(unittest.TestCase):
         if op == 'finished': event['choice'] = {'channel': 'action', 'actionId': 0, 'metadata': {'input_tokens': 17, 'cost_usd': 0}}
         return dict(self.identity, op=op, event=event)
 
+    def terminal_game(self, name):
+        directory = self.root / name
+        directory.mkdir(mode=0o700)
+        source = directory / 'native-000000.ndjson'
+        source.touch(mode=0o600)
+        previous = ZERO
+        events = [('initialization', {'setup': {'seed': 42, 'players': [
+            {'playerId': 'seat-a', 'deck': ['Forest']}]}, 'pinnedCards': ['Forest']}),
+            ('terminal', {'nativeGameOver': True, 'winnerId': 'seat-a', 'administrativeStall': None})]
+        for sequence, (kind, payload) in enumerate(events, 1):
+            body = dict(schemaVersion=1, gameId=name, sequence=sequence, previousSha256=previous,
+                        engineRevision='a' * 40, clockEpoch='synthetic-clock', kind=kind,
+                        visibility='admin', payload=payload)
+            exact = json.dumps(body, separators=(',', ':'))
+            previous = hashlib.sha256(exact.encode()).hexdigest()
+            with source.open('a') as stream:
+                stream.write(json.dumps({'body': exact, 'sha256': previous}) + '\n')
+        return directory
+
+    def test_background_export_keeps_other_game_receipts_and_health_responsive(self):
+        completed = self.terminal_game('completed-game')
+        queued = self.terminal_game('queued-game')
+        entered, release, answered = threading.Event(), threading.Event(), threading.Event()
+        errors, replies = [], []
+        finish = self.capture._finish_game
+        def blocked(*args):
+            entered.set()
+            if not release.wait(10):
+                raise TimeoutError('test export gate expired')
+            return finish(*args)
+        def request():
+            try:
+                replies.append(self.register())
+                replies.append(self.capture.operational_metrics())
+            except BaseException as error:
+                errors.append(error)
+            finally:
+                answered.set()
+        with patch.object(self.capture, '_finish_game', side_effect=blocked):
+            self.capture.start()
+            worker = threading.Thread(target=request, daemon=True)
+            try:
+                self.assertTrue(entered.wait(3))
+                worker.start()
+                self.assertTrue(answered.wait(2), 'unrelated callback blocked behind export')
+                self.assertFalse(errors)
+                self.assertTrue(replies[0]['ok'])
+                self.assertTrue(replies[1]['healthy'])
+                self.assertGreater(replies[1]['pendingRecordWrites'], 0)
+                self.assertEqual(len(self.capture._finalizers), 1)
+                self.assertFalse((queued / 'manifest.json').exists())
+                with self.assertRaisesRegex(RecorderBridgeError, 'finalization in progress'):
+                    self.bridge.ingest(dict(self.identity, gameId='completed-game', op='register',
+                        request={**self.request, 'gameSessionId': 'completed-game'}), native=True)
+            finally:
+                release.set()
+                if worker.ident is not None:
+                    worker.join(5)
+            deadline = time.monotonic() + 5
+            while (self.capture._finalizers or not (queued / 'manifest.json').exists()) and time.monotonic() < deadline:
+                time.sleep(.01)
+            self.assertFalse(self.capture._finalizers)
+            self.assertTrue((completed / 'manifest.json').exists())
+            self.assertTrue((queued / 'manifest.json').exists())
+            self.assertFalse(self.capture.errors)
+
+    def test_background_export_verification_failure_remains_unhealthy_until_verified(self):
+        completed = self.terminal_game('verify-export')
+        self.capture._background_finalization = True
+        with patch('commander_gym.native_game_capture.verify_finalized_manifest', side_effect=OSError('fixture')):
+            self.capture.scan()
+            deadline = time.monotonic() + 5
+            while self.capture._finalizers and time.monotonic() < deadline:
+                time.sleep(.01)
+            self.assertFalse(self.capture._finalizers)
+            self.assertTrue((completed / 'manifest.json').exists())
+            self.assertFalse(self.capture.operational_metrics()['healthy'])
+            self.capture.scan()
+            self.assertFalse(self.capture.operational_metrics()['healthy'])
+        self.capture.scan()
+        self.assertTrue(self.capture.operational_metrics()['healthy'])
+        self.assertNotIn('verify-export', self.capture._journals)
+        self.assertIn('verify-export', self.capture._finalized_bytes)
+
+    def test_background_export_cancellation_releases_writer_without_inventing_terminal(self):
+        from commander_gym.record_codec import ScanCancelled
+        completed = self.terminal_game('cancelled-export')
+        entered = threading.Event()
+        def cancelled(*args):
+            entered.set()
+            while not self.capture.stop_requested():
+                time.sleep(.01)
+            raise ScanCancelled()
+        with patch.object(self.capture, '_finish_game', side_effect=cancelled):
+            self.capture.start()
+            self.assertTrue(entered.wait(3))
+            self.capture.close()
+        self.assertFalse(self.capture._finalizers)
+        self.assertFalse((completed / 'manifest.json').exists())
+        self.assertFalse(inspect_journal(completed)['closed'])
+        # A new owner can recover the durable prefix and complete normal sealing.
+        self.capture = NativeGameCapture(self.root, self.pins)
+        self.bridge.capture = self.capture
+        self.capture.scan()
+        self.assertTrue((completed / 'manifest.json').exists())
+
     def test_fsync_ack_idempotent_conflicting_duplicates_and_restart(self):
         self.register()
         event = self.event()

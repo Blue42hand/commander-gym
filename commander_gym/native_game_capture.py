@@ -130,7 +130,8 @@ class NativeGameCapture:
     engine/decks/config/RNG rather than guessing them from the selected profile.
     """
     def __init__(self, root: Path, declared_pins: Mapping[str, Any], *, terminal_grace_seconds: int = 600,
-                 acknowledged_incomplete_registry: Path | None = None) -> None:
+                 acknowledged_incomplete_registry: Path | None = None,
+                 background_finalization: bool = False) -> None:
         _private_dir(root)
         if set(declared_pins) != set(PIN_KEYS):
             raise JournalError('recording pins require every explicit pin key')
@@ -152,6 +153,10 @@ class NativeGameCapture:
         self._stop_requested = False
         self.errors: dict[str, str] = {}
         self._thread: threading.Thread | None = None
+        if type(background_finalization) is not bool:
+            raise JournalError('invalid background finalization mode')
+        self._background_finalization = background_finalization
+        self._finalizers: dict[str, threading.Thread] = {}
         self._historical = (HistoricalIncompleteRegistry(self.root, acknowledged_incomplete_registry, cancel=self.stop_requested)
                             if acknowledged_incomplete_registry is not None else None)
 
@@ -231,6 +236,8 @@ class NativeGameCapture:
                 if directory.is_symlink() or not directory.is_dir() or not (directory / 'native-000000.ndjson').exists():
                     continue
                 game_id = directory.name
+                if game_id in self._finalizers:
+                    continue
                 if self._historical is not None and self._historical.contains(game_id):
                     continue
                 try:
@@ -239,6 +246,8 @@ class NativeGameCapture:
                         if game_id not in self._finalized_bytes:
                             manifest = verify_finalized_manifest(directory, cancel=self.stop_requested)
                             self._finalized_bytes[game_id] = manifest['storage_bytes']
+                        self._journals.pop(game_id, None)
+                        self.errors.pop(game_id, None)
                         continue
                     if game_id not in self._journals and (directory / '000000.jsonl').exists() and inspect_journal(directory, cancel=self.stop_requested)['closed']:
                         publish_finalized_manifest(directory, cancel=self.stop_requested)
@@ -300,38 +309,13 @@ class NativeGameCapture:
                             since = self._terminal_since.setdefault(game_id, time.monotonic())
                             if journal.pending_decisions and time.monotonic() - since < self.terminal_grace_seconds:
                                 continue  # preserve later paid-response/usage receipts during concession
-                            gaps = []
-                            if self._initializations[game_id]['payload'].get('callbackEvidenceVersion') == 2:
-                                try:
-                                    from .canonical_capture import build_capture_envelope
-                                    report = inspect_journal(directory, cancel=self.stop_requested)
-                                    envelope = build_capture_envelope(directory, report, cancel=self.stop_requested)
-                                    attached = [row['payload']['envelope'] for row in report['rows'] if row['kind'] == 'raw_evidence']
-                                    if attached:
-                                        if len(attached) != 1 or attached[0] != envelope:
-                                            raise JournalError('recovered canonical envelope differs from verified source')
-                                    else:
-                                        journal.raw_evidence(envelope)
-                                except (OSError, ValueError, KeyError, TypeError, IndexError):
-                                    gaps.append('canonical_v2_callback_or_lifecycle_unavailable')
-                            else:
-                                gaps.append('canonical_game_server_training_adapter_unavailable')
-                            if list(directory.glob('native-gap-*.json')):
-                                gaps.append('native_capture_gap_marker')
-                            if len(cursor.revisions) > 1:
-                                gaps.append('native_engine_revision_changed')
-                            if terminal.get('administrativeStall'):
-                                gaps.append('administrative_stall_not_native_rules_outcome')
-                            if journal.pending_decisions:
-                                gaps.append('callback_completion_unavailable_after_terminal_timeout')
-                            journal.finish({'kind': ('finalized_aborted' if terminal.get('administrativeStall') else
-                                         'native_terminal' if terminal['source_kind'] == 'terminal' else 'session_closed'), 'game_id': game_id,
-                                'winner_id': terminal['winnerId'], 'administrative_stall': terminal.get('administrativeStall')},
-                                expected_sources=dict(journal.sources),
-                                gaps=gaps)
-                            journal.close()
-                            self._journals.pop(game_id, None)
-                    self.errors.pop(game_id, None)
+                            if not self._background_finalization:
+                                self._finish_game(directory, game_id, journal, cursor, terminal)
+                                self._journals.pop(game_id, None)
+                            elif not self._finalizers:
+                                self._start_finalizer(directory, game_id, journal, cursor, terminal)
+                    if game_id not in self._terminals or not self._background_finalization:
+                        self.errors.pop(game_id, None)
                 except ScanCancelled:
                     # A verified cursor may be ahead of the durable import. Retry
                     # from the journal prefix if this object is ever inspected again.
@@ -342,6 +326,74 @@ class NativeGameCapture:
                     self.errors[game_id] = type(error).__name__
                     self._cursors.pop(game_id, None)  # retry from durable prefix after uncertain import
 
+    def _finish_game(self, directory, game_id, journal, cursor, terminal):
+        # Caller owns this game's writer lock. No shared capture lock is needed
+        # once a terminal has been imported and this game is reserved for sealing.
+        gaps = []
+        if self._initializations[game_id]['payload'].get('callbackEvidenceVersion') == 2:
+            try:
+                from .canonical_capture import build_capture_envelope
+                report = inspect_journal(directory, cancel=self.stop_requested)
+                envelope = build_capture_envelope(directory, report, cancel=self.stop_requested)
+                attached = [row['payload']['envelope'] for row in report['rows'] if row['kind'] == 'raw_evidence']
+                if attached:
+                    if len(attached) != 1 or attached[0] != envelope:
+                        raise JournalError('recovered canonical envelope differs from verified source')
+                else:
+                    journal.raw_evidence(envelope)
+            except (OSError, ValueError, KeyError, TypeError, IndexError):
+                gaps.append('canonical_v2_callback_or_lifecycle_unavailable')
+        else:
+            gaps.append('canonical_game_server_training_adapter_unavailable')
+        if list(directory.glob('native-gap-*.json')):
+            gaps.append('native_capture_gap_marker')
+        if len(cursor.revisions) > 1:
+            gaps.append('native_engine_revision_changed')
+        if terminal.get('administrativeStall'):
+            gaps.append('administrative_stall_not_native_rules_outcome')
+        if journal.pending_decisions:
+            gaps.append('callback_completion_unavailable_after_terminal_timeout')
+        journal.finish({'kind': ('finalized_aborted' if terminal.get('administrativeStall') else
+                     'native_terminal' if terminal['source_kind'] == 'terminal' else 'session_closed'), 'game_id': game_id,
+            'winner_id': terminal['winnerId'], 'administrative_stall': terminal.get('administrativeStall')},
+            expected_sources=dict(journal.sources),
+            gaps=gaps)
+        journal.close()
+
+    def _start_finalizer(self, directory, game_id, journal, cursor, terminal):
+        # At most one export may allocate its bounded envelope/SQLite cache.
+        # The scanner and callback path skip this reserved terminal game, while
+        # callbacks for other games and health probes keep the shared lock briefly.
+        def finish():
+            storage = None
+            error = None
+            try:
+                with journal._lock:
+                    self._finish_game(directory, game_id, journal, cursor, terminal)
+                storage = verify_finalized_manifest(directory, cancel=self.stop_requested)['storage_bytes']
+            except ScanCancelled:
+                pass  # Durable prefix is recovered on the next recorder start.
+            except Exception as failure:
+                error = type(failure).__name__
+            finally:
+                with self._lock:
+                    if storage is not None:
+                        self._journals.pop(game_id, None)
+                        self._finalized_bytes[game_id] = storage
+                        self.errors.pop(game_id, None)
+                    else:
+                        self._cursors.pop(game_id, None)
+                        if error is not None:
+                            self.errors[game_id] = error
+                    self._finalizers.pop(game_id, None)
+        worker = threading.Thread(target=finish, name='private-game-finalizer', daemon=True)
+        self._finalizers[game_id] = worker
+        try:
+            worker.start()
+        except RuntimeError:
+            self._finalizers.pop(game_id, None)
+            raise JournalError('finalizer thread unavailable') from None
+
     def start(self) -> None:
         if self._thread is not None:
             raise JournalError('capture scanner already started')
@@ -349,6 +401,7 @@ class NativeGameCapture:
             while not self.stop_requested():
                 self.scan()
                 self._stop.wait(1)
+        self._background_finalization = True
         self._thread = threading.Thread(target=loop, name='private-game-capture', daemon=True)
         self._thread.start()
 
@@ -380,6 +433,9 @@ class NativeGameCapture:
                     if cursor.terminal:
                         pending += 1  # terminal import is not drained until immutable manifest verifies
                 journal = self._journals.get(directory.name)
+                if directory.name in self._finalizers:
+                    pending += 1
+                    continue  # Never wait on a terminal export's per-game writer lock.
                 if journal is not None:
                     with journal._lock:
                         pending += len(journal.pending_decisions)
@@ -416,6 +472,10 @@ class NativeGameCapture:
         deadline = time.monotonic() + 5
         if self._thread is not None:
             self._thread.join(timeout=max(0, deadline - time.monotonic()))
+        for worker in list(self._finalizers.values()):
+            worker.join(timeout=max(0, deadline - time.monotonic()))
+            if worker.is_alive():
+                raise TimeoutError('capture finalization did not stop within close deadline')
         if not self._lock.acquire(timeout=max(0, deadline - time.monotonic())):
             raise TimeoutError('capture scan did not stop within close deadline')
         try:

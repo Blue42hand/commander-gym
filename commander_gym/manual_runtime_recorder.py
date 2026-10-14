@@ -20,7 +20,8 @@ def run_recorder(runtime, *, sidecar_gid: int, stopping, capture_factory=None,
     catalog = Path(profile['artifacts']['catalog']['root'])
     root = Path(profile['paths']['recordingRoot'])
     ipc = Path(profile['paths']['recorderSocket']).parent
-    capture = capture_factory(root, recorder_pins(runtime), acknowledged_incomplete_registry=Path(profile['paths']['registryPath']))
+    capture = capture_factory(root, recorder_pins(runtime), acknowledged_incomplete_registry=Path(profile['paths']['registryPath']),
+                              background_finalization=True)
     reporter, bridge = None, None
     try:
         registry = registry_factory(catalog / profile['catalog']['roster'], catalog)
