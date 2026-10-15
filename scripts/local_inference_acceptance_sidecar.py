@@ -10,7 +10,7 @@ import threading
 
 from commander_gym.deck_package import ArtifactRef
 from commander_gym.game_server_binding_lmstudio_sidecar import LocalBindingConfig, build_binding_lmstudio_sidecar, local_component_ref
-from commander_gym.game_server_binding_openai_sidecar import BUILTIN_FORCED_PARAMETERLESS_COMPONENT_REF
+from commander_gym.game_server_binding_openai_sidecar import BUILTIN_NATIVE_CERTIFIED_FORCED_PASS_COMPONENT_REF
 from commander_gym.game_server_sidecar import GameServerSidecarConfig
 from commander_gym.identity import Deck, Pilot, Binding
 from commander_gym.lmstudio_pilot import load_lmstudio_pilot
@@ -23,6 +23,9 @@ def main():
     parser.add_argument("--config", type=Path, required=True)
     args = parser.parse_args()
     settings = json.loads(args.config.read_text())
+    budget = settings.get("gameBudgetSeconds", 300)
+    if type(budget) is not int or not 60 <= budget <= 900:
+        raise ValueError("synthetic game budget must be 60..900 seconds")
     root = Path(settings["fixtureRoot"])
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
     inference = load_lmstudio_pilot(settings["inferenceConfig"]).config
@@ -32,7 +35,7 @@ def main():
                 deck_artifact=ArtifactRef(kind="decklist", artifact_id="synthetic-eight-plains", version="1",
                                           digest="sha256:" + hashlib.sha256(raw.encode()).hexdigest()))
     pilot = Pilot(pilot_id="local-qualification", revision="1", generalist_base=local_component_ref(inference),
-                  deterministic_policy=BUILTIN_FORCED_PARAMETERLESS_COMPONENT_REF)
+                  deterministic_policy=BUILTIN_NATIVE_CERTIFIED_FORCED_PASS_COMPONENT_REF)
     binding = Binding(binding_id="local-qualification", revision="1", deck=deck.ref(), pilot=pilot.ref(),
                       metadata={"display": {"name": inference.model + " synthetic eight-Plains", "deck_name": "Synthetic eight-Plains"}})
     def write(name, value):
@@ -45,7 +48,9 @@ def main():
           "pilots": ["pilot.json"], "deck_knowledge": [], "active_bindings": [binding.binding_id]})
     pins = dict(engine=settings["engineSha"], gym=settings["gymSha"], models=asdict(inference),
                 decks=deck.to_dict(), bindings=binding.to_dict(), config="synthetic-eight-Plains-local-only", rng="native-recorded")
-    capture = NativeGameCapture(Path(settings["recordingRoot"]), pins)
+    recording_root = Path(settings["recordingRoot"])
+    recording_root.mkdir(mode=0o700, exist_ok=True)
+    capture = NativeGameCapture(recording_root, pins)
     server = build_binding_lmstudio_sidecar(LocalBindingConfig(
         GameServerSidecarConfig(Path(settings["tokenPath"]).read_text().strip(), port=settings["sidecarPort"]),
         inference, root / "catalog.json", root,
@@ -57,20 +62,21 @@ def main():
     capture.start(); thread.start()
     print("Isolated local native acceptance sidecar ready", flush=True)
     try:
-        stop.wait(600)  # Fixture cannot become a persistent service.
+        stop.wait(budget + 120)  # Bounded startup/finalization allowance, never a persistent service.
     finally:
         server.shutdown(); server.server_close(); thread.join()
         capture.scan()
         health = capture.operational_metrics()
         capture.close()
         result = json.loads(Path(settings["resultPath"]).read_text())
-        if result.get("status") != "native-terminal" or capture.errors:
+        if result.get("status") != "native-terminal" or result.get("terminalSnapshotRestoreVerified") is not True or capture.errors:
             raise RuntimeError("local game or capture failed; preserve incomplete fixture evidence")
         manifest = verify_finalized_manifest(Path(settings["recordingRoot"]) / result["gameId"])
         if not manifest["recording_complete"] or health["pendingRecordWrites"]:
             raise RuntimeError("local native terminal has incomplete recording")
         receipt = {"gameId": result["gameId"], "recordingComplete": True,
-                   "pendingRecordWrites": health["pendingRecordWrites"], "captureErrors": capture.errors}
+                   "pendingRecordWrites": health["pendingRecordWrites"], "captureErrors": capture.errors,
+                   "terminalSnapshotRestoreVerified": True}
         write("recording-qualification.json", receipt)
         print(json.dumps(receipt), flush=True)
 

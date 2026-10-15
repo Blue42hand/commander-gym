@@ -13,7 +13,7 @@ from commander_gym.lmstudio_provider import LMStudioTransport, LMStudioError
 from commander_gym.local_prompt_layout import local_observation_input
 from commander_gym.lmstudio_pilot import LMStudioPilot
 from commander_gym.evidence import _model_io
-from test_evidence import RawEvidenceTests
+import test_evidence
 from commander_gym.openai_responses_pilot import _without_live_routing
 from test_lmstudio import config, FakeTransport, action_observation
 
@@ -100,7 +100,7 @@ class StreamTests(unittest.TestCase):
         self.assertEqual(json.loads(request["messages"][1]["content"]),
                          _without_live_routing(obs))
         self.assertEqual(request["reasoning_effort"], "none")
-        record = RawEvidenceTests().make_record()
+        record = test_evidence.RawEvidenceTests().make_record()
         record = replace(record, metadata={**record.metadata, "pilot_metadata": choice.metadata})
         exported = _model_io(record)["attempts"][0]["response"]
         self.assertIn("discoveryWallTimeMs", exported)

@@ -11,6 +11,9 @@ import com.wingedsheep.engine.core.SubmitDecision
 import com.wingedsheep.gameserver.config.GameBeansConfig
 import com.wingedsheep.gameserver.config.GameProperties
 import com.wingedsheep.gameserver.protocol.ServerMessage
+import com.wingedsheep.gameserver.persistence.toPersistent
+import com.wingedsheep.gameserver.persistence.persistenceJson
+import com.wingedsheep.gameserver.persistence.dto.PersistentGameSession
 import com.wingedsheep.gameserver.recording.PrivateGameEvidence
 import com.wingedsheep.gameserver.session.GameSession
 import com.wingedsheep.gameserver.session.PlayerSession
@@ -57,16 +60,23 @@ fun main() {
             it.setDeckList(deck)
         }
     }
-    val deadline = System.nanoTime() + Duration.ofMinutes(5).toNanos()
+    val budgetSeconds = config["gameBudgetSeconds"]?.jsonPrimitive?.int ?: 300
+    require(budgetSeconds in 60..900) { "Synthetic game budget must be 60..900 seconds" }
+    val started = System.nanoTime()
+    val deadline = started + Duration.ofSeconds(budgetSeconds.toLong()).toNanos()
     var actions = 0
     var lastTurn = 0
     var sameTurnActions = 0
+    var restoreVerified = false
     fun summary(status: String) {
         val state = session.getStateSnapshot()
         val value = buildJsonObject {
             put("status", status); put("gameId", gameId); put("actions", actions)
+            put("gameBudgetSeconds", budgetSeconds)
+            put("elapsedSeconds", (System.nanoTime() - started) / 1_000_000_000.0)
             put("turn", state?.turnNumber ?: 0); put("nativeTerminal", state?.gameOver == true)
             put("winnerId", state?.winnerId?.value?.let(::JsonPrimitive) ?: JsonNull)
+            put("terminalSnapshotRestoreVerified", restoreVerified)
             put("inference", "local-only-both-seats"); put("concessionUsed", false)
             put("format", "synthetic-eight-Plains"); put("libraryCardsPerSeat", 8)
         }
@@ -124,6 +134,24 @@ fun main() {
             actions++
         }
         check(writer.healthy()) { "Native evidence unhealthy" }
+        // A real disk/serialization round trip through the native persistence seam.
+        // Keep the restored session detached from the finalized evidence journal.
+        val snapshot = root.resolve("$gameId-terminal-snapshot.json")
+        Files.writeString(snapshot, persistenceJson.encodeToString(PersistentGameSession.serializer(), session.toPersistent(null)))
+        Files.setPosixFilePermissions(snapshot, java.nio.file.attribute.PosixFilePermissions.fromString("rw-------"))
+        val saved = persistenceJson.decodeFromString(PersistentGameSession.serializer(), Files.readString(snapshot))
+        val restored = GameSession(sessionId=gameId, cardRegistry=registry, evidenceSink=null)
+        restored.restoreFromPersistence(saved.gameState,
+            saved.deckLists.mapKeys { EntityId(it.key) },
+            saved.gameLogs.mapKeys { EntityId(it.key) }.mapValues { it.value.toMutableList() },
+            saved.lastProcessedMessageId.mapKeys { EntityId(it.key) },
+            sideboardLists=saved.sideboards.mapKeys { EntityId(it.key) },
+            seatNames=saved.seatNames.mapKeys { EntityId(it.key) })
+        check(restored.isGameOver() && restored.getStateSnapshot() == session.getStateSnapshot()) { "Terminal native state restore mismatch" }
+        check(restored.getDeckListsForPersistence() == session.getDeckListsForPersistence())
+        check(restored.getLogsForPersistence() == session.getLogsForPersistence())
+        check(restored.getSeatNamesForPersistence() == session.getSeatNamesForPersistence())
+        restoreVerified = true
         summary("native-terminal")
     } catch (error: Throwable) {
         summary("failed-incomplete")
