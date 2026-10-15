@@ -7,7 +7,7 @@ Argentum's existing public spectator WebSocket protocol.
 
 ```sh
 python3 -m pip install websocket-client
-python3 -m commander_gym.console_spectator --server ws://127.0.0.1:8080/game --game GAME_SESSION_ID
+python3 -m commander_gym.console_spectator --server ws://127.0.0.1:18080/game --auto
 ```
 
 Use the actual **native Argentum game-server** address and active game session ID. For the current headless installation, the native endpoint was verified at `ws://127.0.0.1:18080/game`; the HTTP facade on port 8180 and bearer-protected gateway on 8082 are not interchangeable with it.
@@ -65,3 +65,25 @@ and `spectateGame` protocol error for a deliberately invalid session ID
 against the native port. The transport unit tests pass (3/3). An actual
 matching `spectatorStateUpdate` is covered by a simulated protocol test but
 has not yet been observed from a real match on the host.
+
+## Automatic game selection
+
+`--auto` polls the native Argentum public live-game APIs:
+`/api/quick-games/live` and `/api/tournaments/live`. It deterministically
+selects the first active match by game session ID and attaches the native
+spectator stream. Once a match ends, it resumes polling. When no match is
+available, VT7 displays an idle/waiting message.
+
+AI sandbox tournaments may be private and omitted from the public APIs.
+For one of those, specify its lobby ID:
+```sh
+python3 -m commander_gym.console_spectator --server ws://127.0.0.1:18080/game --auto --lobby LOBBY_ID
+```
+This polls the existing `/api/dev/ai-tournament/{lobbyId}` status endpoint,
+when the native server has dev endpoints enabled. It follows that lobby's active
+game rather than the general public list.
+
+Current limitations: no generic privileged enumeration of all private games,
+no automatic identification of a private AI tournament without its lobby ID,
+and no multiple-game split-screen. Game selection is read-only and does not
+start or alter matches.
