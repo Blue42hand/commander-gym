@@ -38,12 +38,15 @@ class LMStudioConfig:
     max_attempts: int = 2
     provider: str = "lmstudio"
     compact_observation: bool = False
+    stable_prompt_layout: bool = False
+    stream: bool = False
 
     def __post_init__(self):
         if self.provider != "lmstudio":
             raise ValueError("local configuration requires provider lmstudio")
-        if type(self.compact_observation) is not bool:
-            raise ValueError("compact_observation must be boolean")
+        for name in ("compact_observation", "stable_prompt_layout", "stream"):
+            if type(getattr(self, name)) is not bool:
+                raise ValueError(f"{name} must be boolean")
         try:
             url = urlsplit(self.endpoint)
             address = ipaddress.ip_address(url.hostname or "")
@@ -130,6 +133,11 @@ class LMStudioTransport:
             response = result.get("response")
             if not isinstance(response, dict):
                 raise LMStudioError("invalid_response")
+            # Worker-owned timing, never a server-supplied claim. No timing is
+            # interpreted as pure model prefill/decode or network latency.
+            response.pop("_localTransport", None)
+            if isinstance(result.get("transport"), dict):
+                response["_localTransport"] = result["transport"]
             return response
         finally:
             if child.poll() is None:
