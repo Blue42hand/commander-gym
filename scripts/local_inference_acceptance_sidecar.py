@@ -15,6 +15,7 @@ from commander_gym.game_server_sidecar import GameServerSidecarConfig
 from commander_gym.identity import Deck, Pilot, Binding
 from commander_gym.lmstudio_pilot import load_lmstudio_pilot
 from commander_gym.native_game_capture import NativeGameCapture
+from commander_gym.game_journal import verify_finalized_manifest
 
 
 def main():
@@ -59,8 +60,19 @@ def main():
         stop.wait(600)  # Fixture cannot become a persistent service.
     finally:
         server.shutdown(); server.server_close(); thread.join()
-        capture.scan(); capture.close()
-        print(json.dumps({"captureErrors": capture.errors}), flush=True)
+        capture.scan()
+        health = capture.operational_metrics()
+        capture.close()
+        result = json.loads(Path(settings["resultPath"]).read_text())
+        if result.get("status") != "native-terminal" or capture.errors:
+            raise RuntimeError("local game or capture failed; preserve incomplete fixture evidence")
+        manifest = verify_finalized_manifest(Path(settings["recordingRoot"]) / result["gameId"])
+        if not manifest["recording_complete"] or health["pendingRecordWrites"]:
+            raise RuntimeError("local native terminal has incomplete recording")
+        receipt = {"gameId": result["gameId"], "recordingComplete": True,
+                   "pendingRecordWrites": health["pendingRecordWrites"], "captureErrors": capture.errors}
+        write("recording-qualification.json", receipt)
+        print(json.dumps(receipt), flush=True)
 
 
 if __name__ == "__main__":

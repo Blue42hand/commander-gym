@@ -3,6 +3,7 @@ from pathlib import Path
 import socket
 import tempfile
 import threading
+import time
 import unittest
 from unittest.mock import patch
 
@@ -20,6 +21,34 @@ from test_lmstudio import config, FakeTransport, action_observation
 
 
 class LocalBindingTests(unittest.TestCase):
+    def test_shutdown_closes_trickling_incomplete_body_and_joins_handler(self):
+        with tempfile.TemporaryDirectory() as directory:
+            server = self.build(Path(directory))
+            server.handle_error = lambda *_: None  # Expected closed response connection.
+            serving = threading.Thread(target=server.serve_forever)
+            serving.start()
+            peer = socket.create_connection(server.server_address)
+            peer.sendall(b"POST /v1/choose-action HTTP/1.1\r\nHost: localhost\r\n"
+                         b"Authorization: Bearer local-fixture\r\nContent-Length: 10000\r\n\r\n{")
+            sending = threading.Event()
+            def trickle():
+                while not sending.wait(.02):
+                    try:
+                        peer.sendall(b" ")
+                    except OSError:
+                        break
+            writer = threading.Thread(target=trickle)
+            writer.start()
+            time.sleep(.05)
+            started = time.monotonic()
+            try:
+                server.shutdown()
+                server.server_close()
+                self.assertLess(time.monotonic() - started, 2)
+                self.assertFalse(any(t.is_alive() for t in server._threads))
+            finally:
+                sending.set(); peer.close(); writer.join(); serving.join()
+
     def build(self, root, *, pilot=None, inference=None, transport=None):
         inference = inference or config()
         pilot = pilot or Pilot(pilot_id="qwen-fixture", revision="1",

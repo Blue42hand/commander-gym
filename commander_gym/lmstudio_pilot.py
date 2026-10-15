@@ -172,7 +172,10 @@ class LMStudioPilot:
         started = monotonic()
         deadline = started + self.config.timeout_seconds
         attempts = []
-        schema_format = _local_native_format(observation)
+        try:
+            schema_format = _local_native_format(observation)
+        except (OpenAIResponsesPilotError, PilotContractError) as exc:
+            raise LMStudioPilotError(str(exc)) from exc
         if schema_format is None:
             raise LMStudioPilotError("llmster requires a supported native JSON schema; no JSON-mode downgrade")
         try:

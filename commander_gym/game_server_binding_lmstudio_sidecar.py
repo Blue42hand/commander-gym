@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import socket
 import threading
 
 from .binding_catalog import load_binding_catalog
@@ -91,6 +92,8 @@ def build_binding_lmstudio_sidecar(config: LocalBindingConfig, *, game_capture=N
                                     decision_start_sink=None if recording is None else recording.started)
 
     stopping = threading.Event()
+    connections = set()
+    connection_lock = threading.Lock()
 
     class LocalServer(GameServerSidecarServer):
         daemon_threads = False  # Reap cancelled inference before the service process exits.
@@ -98,10 +101,30 @@ def build_binding_lmstudio_sidecar(config: LocalBindingConfig, *, game_capture=N
         def get_request(self):
             connection, address = super().get_request()
             connection.settimeout(5)  # Bound incomplete HTTP request bodies on shutdown.
+            with connection_lock:
+                if stopping.is_set():
+                    connection.close()
+                    raise OSError("local service stopping")
+                connections.add(connection)
             return connection, address
+
+        def process_request_thread(self, request, client_address):
+            try:
+                super().process_request_thread(request, client_address)
+            finally:
+                with connection_lock:
+                    connections.discard(request)
 
         def server_close(self):
             stopping.set()
+            # Inactivity timeouts alone do not bound a trickling partial body.
+            # Close every accepted connection before joining callback threads.
+            with connection_lock:
+                for connection in connections:
+                    try:
+                        connection.shutdown(socket.SHUT_RDWR)
+                    except OSError:
+                        pass
             super().server_close()
 
     return LocalServer(
