@@ -218,7 +218,7 @@ class GameServerAcceptanceTest {
         for (mode in listOf("stale", "invalid", "provider-failure")) {
             setMode(mode)
             val evidenceOffset = evidenceLines().size
-            val client = startCommanderGame("Acceptance " + mode)
+            val client = startCommanderGame("Acceptance " + mode, expectedControllerFailure = true)
             try {
                 val seatId = awaitSeatCreated(evidenceOffset)
                 driveHumanUntil(client, Duration.ofSeconds(30)) {
@@ -229,6 +229,9 @@ class GameServerAcceptanceTest {
                     }
                 }
 
+                await(Duration.ofSeconds(10), "visible controller pause for " + mode) {
+                    client.errors().any { it.message.startsWith("The AI controller failed and this game is paused.") }
+                }
                 // Allow the callback exception / malformed response to propagate through the
                 // virtual AI session, then prove the game does not advance via a fallback choice.
                 Thread.sleep(500)
@@ -254,7 +257,7 @@ class GameServerAcceptanceTest {
         }
     }
 
-    private fun startCommanderGame(name: String): HumanClient {
+    private fun startCommanderGame(name: String, expectedControllerFailure: Boolean = false): HumanClient {
         val client = HumanClient(URI.create("ws://127.0.0.1:" + serverPort + "/game"), json)
         client.connect()
         client.send(ClientMessage.Connect(name))
@@ -298,7 +301,9 @@ class GameServerAcceptanceTest {
         await(Duration.ofSeconds(30), name + " initial game state") {
             client.stateMessageCount() > 0
         }
-        assertTrue(client.errors().isEmpty(), name + " errors before play: " + client.errors())
+        assertTrue(client.errors().all { expectedControllerFailure &&
+            it.message.startsWith("The AI controller failed and this game is paused.") },
+            name + " unexpected errors before play: " + client.errors())
         return client
     }
 

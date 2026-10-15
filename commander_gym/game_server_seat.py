@@ -396,9 +396,9 @@ class GameServerSeatAdapter:
                 )
                 self._record(callback, observation, {
                     "channel": "error",
-                    "errorType": "OpenAIResponsesPilotError",
+                    "errorType": type(exc).__name__,
                     "metadata": {
-                        "provider": "openai",
+                        "provider": model_io.get("provider", "openai"),
                         "retryCount": validation_retries,
                         "modelIo": model_io,
                     },

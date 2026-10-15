@@ -24,6 +24,66 @@ import kotlin.test.assertTrue
 
 class RecorderCallbackClientTest {
     @Test
+    fun `lost registration acknowledgment retries same bytes before one policy call`() {
+        val directory = Files.createTempDirectory(Path.of("/tmp").toRealPath(), "rc-").toRealPath()
+        val path = directory.resolve("native.sock")
+        val listener = ServerSocketChannel.open(StandardProtocolFamily.UNIX)
+        listener.bind(UnixDomainSocketAddress.of(path))
+        Files.setPosixFilePermissions(path, PosixFilePermissions.fromString("rw-------"))
+        val requests = CopyOnWriteArrayList<String>()
+        val worker = Executors.newSingleThreadExecutor()
+        val future = worker.submit {
+            repeat(3) { attempt ->
+                listener.accept().use { channel ->
+                    val buffer = ByteBuffer.allocate(65536)
+                    while (true) {
+                        assertTrue(channel.read(buffer) > 0)
+                        val data = buffer.array().copyOf(buffer.position())
+                        if (data.last() != 10.toByte()) continue
+                        val raw = data.toString(Charsets.UTF_8)
+                        requests.add(raw)
+                        val request = Json.parseToJsonElement(raw).jsonObject
+                        // First operation was durably accepted, but its reply is lost.
+                        if (attempt != 0) {
+                            val reply = buildJsonObject {
+                                put("protocol", 1); put("ok", true)
+                                put("callbackId", request.getValue("callbackId"))
+                                put("receiptSha256", "a".repeat(64))
+                            }
+                            channel.write(ByteBuffer.wrap((reply.toString() + "\n").toByteArray()))
+                        }
+                        break
+                    }
+                }
+            }
+        }
+        var calls = 0
+        val http = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        http.createContext("/v1/decide-mulligan") { exchange ->
+            calls++
+            val body = "{\"keep\":true}".toByteArray()
+            exchange.sendResponseHeaders(200, body.size.toLong())
+            exchange.responseBody.use { it.write(body) }
+        }
+        http.start()
+        try {
+            val controller = CommanderGymPlayerController(EntityId("seat-a"),
+                URI.create("http://127.0.0.1:${http.address.port}"), "literal-fake-bearer", Duration.ofSeconds(5),
+                profileId="binding-a", gameSessionId="game-a", manualHumanGame=true,
+                recorder=RecorderCallbackClient(path, Duration.ofSeconds(1)))
+            assertTrue(controller.decideMulligan(MulliganInfo(emptyList(), 0, 0)))
+            future.get(5, TimeUnit.SECONDS)
+            assertEquals(requests[0], requests[1])
+            assertEquals(1, calls)
+            assertEquals("closed", Json.parseToJsonElement(requests[2]).jsonObject["op"]?.jsonPrimitive?.content)
+        } finally {
+            http.stop(0); listener.close(); worker.shutdownNow()
+            assertTrue(worker.awaitTermination(2, TimeUnit.SECONDS))
+            Files.deleteIfExists(path); Files.delete(directory)
+        }
+    }
+
+    @Test
     fun `native registration precedes policy HTTP and close follows receipt`() {
         val directory = Files.createTempDirectory(Path.of("/tmp").toRealPath(), "rc-").toRealPath()
         val path = directory.resolve("native.sock")

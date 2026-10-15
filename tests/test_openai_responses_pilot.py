@@ -185,6 +185,7 @@ class OpenAIResponsesPilotTests(unittest.TestCase):
 
     def test_cache_friendly_retry_keeps_original_masked_history(self):
         obs = action_observation()
+        obs["deckKnowledge"] = "Immutable authorized knowledge for player-1"
         obs["state"] = {"gameLog": [{"description": "masked event"}]}
         valid = json.dumps({"channel": "action", "semanticId": "argentum-action-v1:pass",
                             "params": {}})

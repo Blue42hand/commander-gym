@@ -61,6 +61,7 @@ def inspect_catalog(profile: dict) -> dict:
     config = binding_openai_game_server_config_from_environment({
         "OPENAI_API_KEY": "qa-placeholder-never-a-credential", "COMMANDER_GYM_SIDECAR_TOKEN": "qa-placeholder-never-a-token",
         "COMMANDER_GYM_SIDECAR_PORT": "8083", "COMMANDER_GYM_MANUAL_UNCAPPED": "true",
+        "COMMANDER_GYM_CACHE_FRIENDLY_HISTORY": "true",
         "COMMANDER_GYM_INSTANCE_ROOT": str(root), "COMMANDER_GYM_BINDING_CATALOG": str(root / profile["catalog"]["roster"]),
         "COMMANDER_GYM_OPENAI_MODEL": "gpt-6-luna", "COMMANDER_GYM_OPENAI_TIMEOUT": "90", "COMMANDER_GYM_OPENAI_MAX_ATTEMPTS": "2"})
     resolver = OpenAIBindingPilotComponentResolver(config=config.sidecar, client=RejectingClient(), budget=None, cache_friendly_history=config.cache_friendly_history, manual_uncapped=True)
@@ -71,7 +72,9 @@ def inspect_catalog(profile: dict) -> dict:
         resolved = loaded.resolver.resolve(binding_id)
         require(resolved.binding.fingerprint == profile["catalog"]["bindings"][binding_id]
                 and resolved.pilot.fingerprint == profile["catalog"]["pilotFingerprint"], "canonical_fingerprint_mismatch")
-    pilot_files = [name for name in artifact["files"] if name.startswith("pilots/") and name.endswith("/pilot.json")]
+    roster = decode(protected_bytes(root / profile["catalog"]["roster"], uid=artifact["uid"]))
+    pilot_files = roster.get("pilots", [])
+    require(isinstance(pilot_files, list) and all(isinstance(name, str) and name in artifact["files"] for name in pilot_files), "roster_pilot_seals")
     require(len(pilot_files) == 1, "single_pilot_required")
     pilot = decode(protected_bytes(root / pilot_files[0], uid=artifact["uid"]))
     require(pilot.get("fingerprint") == profile["catalog"]["pilotFingerprint"]

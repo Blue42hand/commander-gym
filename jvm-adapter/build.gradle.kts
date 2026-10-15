@@ -58,3 +58,11 @@ tasks.register<JavaExec>("runLocalGuiServer") {
     mainClass.set("org.commandergym.argentum.LocalGuiGameServerKt")
     standardInput = System.`in`
 }
+
+// Explicit opt-in fixture: runtime config and credentials are never bundled.
+tasks.register<JavaExec>("runRecordedFullGame") {
+    group = "verification"
+    dependsOn(tasks.named("testClasses"))
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("org.commandergym.argentum.RecordedFullGameKt")
+}

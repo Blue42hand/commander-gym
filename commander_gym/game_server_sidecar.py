@@ -81,6 +81,8 @@ class GameServerSidecarServer(ThreadingHTTPServer):
         profile_seat_factory: ProfileSeatFactory | None = None,
         game_profile_seat_factory: GameProfileSeatFactory | None = None,
         callback_context: Callable[..., Any] | None = None,
+        profiles_supplier: Callable[[], Sequence[Mapping[str, Any]]] | None = None,
+        profile_exists: Callable[[str], bool] | None = None,
     ) -> None:
         self.sidecar_config = config
         self.seats = dict(seats or {})
@@ -88,6 +90,10 @@ class GameServerSidecarServer(ThreadingHTTPServer):
         self._profile_seat_factory = profile_seat_factory
         self._game_profile_seat_factory = game_profile_seat_factory
         self.callback_context = callback_context
+        if (profiles_supplier is None) != (profile_exists is None):
+            raise GameServerSidecarConfigurationError('live profiles require discovery and selection together')
+        self._profiles_supplier = profiles_supplier
+        self._profile_exists = profile_exists
         self._profile_seats: dict[tuple[str | None, str, str], GameServerSeatAdapter] = {}
         self._profiles = self._validate_profiles(profiles)
         if self._profiles and self._profile_seat_factory is None:
@@ -165,6 +171,8 @@ class GameServerSidecarServer(ThreadingHTTPServer):
 
     @property
     def controller_profiles(self) -> tuple[dict[str, Any], ...]:
+        if self._profiles_supplier is not None:
+            return tuple(self._validate_profiles(self._profiles_supplier()).values())
         return tuple(dict(profile) for profile in self._profiles.values())
 
     def resolve_seat(
@@ -181,7 +189,9 @@ class GameServerSidecarServer(ThreadingHTTPServer):
         """
 
         if profile_id is not None:
-            if profile_id not in self._profiles or self._profile_seat_factory is None:
+            exists = (self._profile_exists(profile_id) if self._profile_exists is not None
+                      else profile_id in self._profiles)
+            if not exists or self._profile_seat_factory is None:
                 raise UnknownProfileError(profile_id)
             if self._game_profile_seat_factory is not None and game_id is None:
                 raise ValueError("recorded callback requires gameSessionId")

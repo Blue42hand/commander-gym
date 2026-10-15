@@ -12,11 +12,13 @@ The end product is not a benchmark score or a self-play system. It is an artific
 
 For now, **general Magic competence is the unified development objective**. Better sequencing, planning, threat assessment, resource management, deck understanding, and multiplayer judgment improve both competitive strength and casual play. Separate casual/competitive policy branches should wait until pilots become strong enough that those objectives meaningfully diverge.
 
-## Active foundation milestone
+## Only active milestone: human versus Luna on Tolaria
 
-**#77 — Pilot/data foundation before further game testing** is the current next goal.
+**#72 — Persistent human-versus-Luna gameplay** is the only active milestone, per the owner's October 13, 2026 direction.
 
-Ordinary two-Luna, human-vs-Luna, gameplay-skill, and mass self-play testing is deferred until #77's identity, Binding, evidence, learning, storage/deployment, private-instance, and per-seat Argentum profile gates are complete. Narrow smoke tests required to implement or qualify the foundation remain appropriate.
+Deliver one matched Argentum/Gym release on Tolaria's existing private GUI: a human manually selects a qualified deck and Luna opponent, plays a complete game, reconnects, and can return after service restart. Preserve authoritative native legality, seat masking, existing recording and private credential boundaries. See [the milestone and acceptance checklist](docs/human-luna-milestone.md).
+
+The broader #77 foundation, training, transfer research, self-play, optional Redis QA, automated upgrades, and expanded card coverage are backlog. Work on them only when a concrete failure blocks this playable release. Development and synthetic qualification are authorized; production activation awaits the owner's approval of the final deployment package.
 
 ## Argentum relationship
 
@@ -128,7 +130,7 @@ The intended experimental sequence is:
   -> later RL where it adds measurable long-horizon value
 ```
 
-Research, licensing checks, artifact characterization, schema work, and benchmark fixture preparation may proceed in parallel with #77. Substantive transfer/game comparisons should not outrun the stable identity/evidence/pilot contracts or be dominated by unresolved #72 transport/schema failures.
+This sequence is a future research roadmap, not the active delivery schedule. Research and transfer experiments remain backlog until the human-versus-Luna milestone is accepted.
 
 Forge/XMage may be training provenance for an imported model, but they are not production dependencies. Imported models must still consume Commander Gym's seat-safe Argentum observation/legal-action contract.
 

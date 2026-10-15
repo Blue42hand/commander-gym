@@ -24,8 +24,10 @@ from .records import PilotProvenance
 from .run_records import RunRecord, RunParticipant, RunTermination, EngineProvenance
 
 
-# Conservative decoded budget, independent of compressed journal custody limits.
-MAX_CANONICAL_BYTES = 16 * 1024 * 1024
+# Disk-backed join traffic includes repeated authenticated observations. It is not
+# the size of the in-memory training envelope. Bound these resources separately.
+MAX_CANONICAL_JOIN_BYTES = 256 * 1024 * 1024
+MAX_CANONICAL_BYTES = 64 * 1024 * 1024
 MAX_CANONICAL_CALLBACKS = 4096
 
 
@@ -62,6 +64,30 @@ def build_capture_envelope(directory: Path, report, *, cancel=None):
             database.close()
 
 
+def _application_receipt(body):
+    # Continuity and native source hashes were verified before this join. Only
+    # application identity is needed here, never the administrative game state.
+    if body is None:
+        return None
+    if body['kind'] != 'native_transition':
+        return {'kind': body['kind']}
+    payload = body['payload']
+    return {'kind': body['kind'], 'payload': {'action': payload['action'],
+            'result': {'error': payload['result'].get('error')}}}
+
+
+def _bounded_json_size(value, limit, *, cancel):
+    size = 0
+    encoder = json.JSONEncoder(sort_keys=True, separators=(',', ':'),
+                               ensure_ascii=False, allow_nan=False)
+    for chunk in encoder.iterencode(value):
+        check_cancelled(cancel)
+        size += len(chunk.encode('utf-8'))
+        if size > limit:
+            raise JournalError('canonical aggregate decoded byte limit exceeded')
+    return size
+
+
 def _convert(report, database, *, cancel):
     join_bytes = 0
     def add(category, cid, row, ordinal):
@@ -70,7 +96,7 @@ def _convert(report, database, *, cancel):
         nonlocal join_bytes
         encoded = _json(row) + b'\n'
         join_bytes += len(encoded)
-        if join_bytes > MAX_CANONICAL_BYTES:
+        if join_bytes > MAX_CANONICAL_JOIN_BYTES:
             raise JournalError('canonical aggregate decoded join limit exceeded')
         database.execute('INSERT INTO joins VALUES(?,?,?,?)',
                          (category, cid, ordinal, encode_record(encoded)))
@@ -137,7 +163,7 @@ def _convert(report, database, *, cancel):
                 raise JournalError('canonical native callback must be seat-visible')
             category = {'ai_callback_input': 'inputs', 'ai_callback_result': 'results', 'ai_callback_disposition': 'dispositions'}[body['kind']]
             add(category, native['correlationId'], {'native': body, 'hash': payload['source_sha256'],
-                'transition': previous if category == 'results' else None}, row['sequence'])
+                'transition': _application_receipt(previous) if category == 'results' else None}, row['sequence'])
         previous = body
     if initialization is None or terminal is None or awaiting_resume:
         raise JournalError('canonical lifecycle is incomplete')
@@ -244,6 +270,8 @@ def _convert(report, database, *, cancel):
             'engineRevision': revision, 'gymRevision': pins['gym'], 'lineage': {k: v.to_dict() for k, v in refs.items()}}}
         # Mechanical routing has no provider metadata; classify actual callback delivery explicitly.
         metadata.setdefault('routing', {'path': 'native-callback', 'callback': callback_kind})
+        if 'catalog' in lineage:
+            metadata['recordingProvenance']['catalog'] = lineage['catalog']
         timing = {}
         if start['clock_id'] == callback['clock_id'] and callback['elapsed_ns'] >= start['elapsed_ns']:
             timing['pilot_elapsed_ms'] = (callback['elapsed_ns'] - start['elapsed_ns']) / 1_000_000
@@ -256,9 +284,7 @@ def _convert(report, database, *, cancel):
         record.metadata['timing']['submission_elapsed_ms'] = None
         if not timing:
             record.metadata['timing']['pilot_elapsed_ms'] = None
-        aggregate_bytes += len(_json(record.to_dict()))
-        if aggregate_bytes > MAX_CANONICAL_BYTES:
-            raise JournalError("canonical aggregate decoded byte limit exceeded")
+        aggregate_bytes += _bounded_json_size(record.to_dict(), MAX_CANONICAL_BYTES - aggregate_bytes, cancel=cancel)
         records.append(record)
         participants[record.seat] = RunParticipant(record.seat, record.pilot, record.deck_id, record.deck_version, binding=record.binding)
     # Human/non-Gym seats have native participation, without invented Binding identities.
@@ -272,4 +298,6 @@ def _convert(report, database, *, cancel):
         seed=initialization['payload']['setup']['seed'], decision_ids=[record.decision_id for record in records],
         metadata={'evidence_scope': 'native-transitions-and-recorded-ai-callbacks-v2',
                   'nativeTerminalHash': hashlib.sha256(_json(terminal)).hexdigest(), 'exact_replay_verified': False})
-    return build_raw_evidence_envelope(run, records, commander_gym_revision=pins['gym'], schema_version=2)
+    envelope = build_raw_evidence_envelope(run, records, commander_gym_revision=pins['gym'], schema_version=2)
+    _bounded_json_size(envelope, MAX_CANONICAL_BYTES, cancel=cancel)
+    return envelope

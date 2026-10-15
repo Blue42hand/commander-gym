@@ -1,0 +1,63 @@
+name: Daily upstream triage
+
+on:
+  schedule:
+    - cron: '17 8 * * *'
+      timezone: America/Los_Angeles
+  workflow_dispatch:
+    inputs:
+      since:
+        description: Review checkpoint (full SHA; defaults to today's owned integration target)
+        required: false
+        default: c18afc598e03bc3f2b610ec4868cbe4180db27b0
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: upstream-triage
+  cancel-in-progress: false
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Read upstream changes while preserving the current sync owner
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Keep the checkpoint fixed until reviewed; collecting never advances it.
+          # This target is still owned by the existing integration, not merged.
+          UPSTREAM_SINCE: ${{ inputs.since || 'c18afc598e03bc3f2b610ec4868cbe4180db27b0' }}
+        run: python -m commander_gym.upstream_triage --since "$UPSTREAM_SINCE" > upstream-triage.json
+      - name: Report review or collection holds
+        if: always()
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          report = json.loads(Path('upstream-triage.json').read_text())
+          state = report['state']
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write('Upstream triage: ' + state + '\n\n')
+              summary.write('New commits: ' + str(report.get('totalCommits', 'unknown')) + '\n\n')
+              summary.write(report.get('compareUrl', 'Comparison unavailable') + '\n\n')
+              summary.write('Weekly sync remains with integration/upstream-2026-10-15. '
+                            'No cursor, source, or deployment was changed.\n')
+          if state != 'unchanged':
+              raise SystemExit('Upstream changes or a collection hold need review; see the report artifact.')
+          PY
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: upstream-triage
+          path: upstream-triage.json
+          retention-days: 30

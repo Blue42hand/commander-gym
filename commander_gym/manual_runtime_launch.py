@@ -120,15 +120,19 @@ def sidecar_environment(runtime: ValidatedRuntime, *, credential_directory: Path
     # BoundedProcessClient launches a child with sys.executable -m. Supply only
     # byte-sealed source/dependency paths; exclude caller/CWD/user-site injection.
     python_path = [profile['artifacts']['sidecar']['root'], *[str(dependency_root / path) for path in lock['pythonPath']]]
-    return {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "OPENAI_API_KEY": key,
+    environment = {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "OPENAI_API_KEY": key,
             "PYTHONPATH": os.pathsep.join(python_path), "PYTHONNOUSERSITE": "1", "PYTHONSAFEPATH": "1", "PYTHONDONTWRITEBYTECODE": "1",
             "COMMANDER_GYM_SIDECAR_TOKEN": token, "COMMANDER_GYM_SIDECAR_HOST": "127.0.0.1",
             "COMMANDER_GYM_SIDECAR_PORT": "8083", "COMMANDER_GYM_OPENAI_MODEL": "gpt-6-luna",
             "COMMANDER_GYM_OPENAI_TIMEOUT": "90", "COMMANDER_GYM_OPENAI_MAX_ATTEMPTS": "2",
+            "COMMANDER_GYM_CACHE_FRIENDLY_HISTORY": "true",
             "COMMANDER_GYM_RECORDER_SOCKET": str(Path(profile["paths"]["recorderSocket"]).parent / "sidecar.sock"),
             "COMMANDER_GYM_RECORDER_UID": str(profile["identities"]["nativeUid"]),
             "COMMANDER_GYM_MANUAL_UNCAPPED": "true", "COMMANDER_GYM_INSTANCE_ROOT": catalog["root"],
             "COMMANDER_GYM_BINDING_CATALOG": str(Path(catalog["root"]) / profile["catalog"]["roster"])}
+    if 'liveCatalog' in profile:
+        environment['COMMANDER_GYM_LIVE_CATALOG_ROOT'] = profile['liveCatalog']['snapshotRoot']
+    return environment
 
 
 def sidecar_spec(runtime: ValidatedRuntime, environment: dict[str, str]) -> LaunchSpec:

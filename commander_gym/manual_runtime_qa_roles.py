@@ -181,7 +181,8 @@ def run_child(message):
         from .qa_legal_responses import NativeLegalFixtureClient
         catalog = Path(profile['artifacts']['catalog']['root'])
         config = BindingOpenAIGameServerConfig(OpenAIGameServerSidecarConfig(TOKEN, 'qa-no-provider',
-            timeout=90, max_attempts=2), catalog/profile['catalog']['roster'], catalog, manual_uncapped=True)
+            timeout=90, max_attempts=2), catalog/profile['catalog']['roster'], catalog, manual_uncapped=True,
+            live_catalog_root=Path(profile['liveCatalog']['snapshotRoot']) if 'liveCatalog' in profile else None)
         capture = RemoteCaptureSink(Path(profile['paths']['recorderSocket']).parent/'sidecar.sock',
                                     recorder_uid=profile['identities']['nativeUid'])
         server = build_binding_openai_game_server_sidecar(config, client=NativeLegalFixtureClient(), game_capture=capture)

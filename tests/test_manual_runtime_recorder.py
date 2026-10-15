@@ -14,7 +14,9 @@ class ManualRuntimeRecorderTests(unittest.TestCase):
             profile=fixture_profile(Path(tmp)); runtime=ValidatedRuntime(canonical(profile),digest(profile),2)
             events=[]; capture=object()
             class Capture:
-                def __init__(self,*args,**kwargs): events.append('capture'); self.marker=capture
+                def __init__(self,*args,**kwargs):
+                    assert kwargs['background_finalization'] is True
+                    events.append('capture'); self.marker=capture
                 def close(self):events.append('capture-close')
             class Reporter:
                 def __init__(self,owner,*args): self.owner=owner; events.append('reporter-compose')

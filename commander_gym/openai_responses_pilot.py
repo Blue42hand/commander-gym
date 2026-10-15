@@ -994,13 +994,14 @@ class OpenAIResponsesPilot:
         model_observation = _without_live_routing(observation)
         if self.compact_model_observation:
             model_observation = compact_seat_observation(model_observation)
-        base_input = "Return one JSON object for this observation:\n" + json.dumps(
-            model_observation,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
         if self.cache_friendly_history:
             base_input = cache_friendly_observation_input(model_observation)
+        else:
+            base_input = "Return one JSON object for this observation:\n" + json.dumps(
+                model_observation,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
         request = {
             "model": self.model,
             "instructions": self.instructions
