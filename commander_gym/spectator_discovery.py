@@ -25,8 +25,10 @@ def lobby_candidates(ws_url: str, lobby_id: str, *, ws_factory=None) -> list[str
     # Joining a waiting lobby would add a playing seat. Never do that.
     if status.get("state") != "TOURNAMENT_ACTIVE":
         return []
+    timeout_errors = (TimeoutError,)
     if ws_factory is None:
-        from websocket import create_connection
+        from websocket import create_connection, WebSocketTimeoutException
+        timeout_errors += (WebSocketTimeoutException,)
         ws_factory = create_connection
     ws = ws_factory(ws_url, timeout=3, enable_multithread=True)
     try:
@@ -34,7 +36,13 @@ def lobby_candidates(ws_url: str, lobby_id: str, *, ws_factory=None) -> list[str
         joined = False
         deadline = time.monotonic() + 6
         while time.monotonic() < deadline:
-            raw = ws.recv()
+            try:
+                raw = ws.recv()
+            except timeout_errors:
+                if joined:
+                    # FFA lobbies stay active between games and may send no game ID.
+                    return []
+                raise
             if not raw:
                 raise ConnectionError("Lobby spectator connection closed")
             msg = json.loads(raw)

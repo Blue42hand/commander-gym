@@ -30,7 +30,7 @@ class SpectatorDiscoveryTests(unittest.TestCase):
     def discover_lobby(self, messages, state="TOURNAMENT_ACTIVE"):
         from unittest.mock import Mock
         socket = Mock()
-        socket.recv.side_effect = [json.dumps(msg) for msg in messages]
+        socket.recv.side_effect = [msg if isinstance(msg, Exception) else json.dumps(msg) for msg in messages]
         factory = Mock(return_value=socket)
         with patch("commander_gym.spectator_discovery.urlopen", return_value=Response({"state": state})):
             result = lobby_candidates("ws://localhost:18080/game", "private-lobby", ws_factory=factory)
@@ -56,6 +56,19 @@ class SpectatorDiscoveryTests(unittest.TestCase):
                 result, _, factory = self.discover_lobby([], state)
                 self.assertEqual(result, [])
                 factory.assert_not_called()
+
+    def test_active_pod_between_games_returns_to_waiting(self):
+        result, socket, _ = self.discover_lobby([
+            {"type": "connected"},
+            {"type": "freeForAllGameComplete", "lobbyId": "private-lobby"},
+            TimeoutError(),
+        ])
+        self.assertEqual(result, [])
+        socket.close.assert_called_once()
+
+    def test_login_timeout_is_reported(self):
+        with self.assertRaises(TimeoutError):
+            self.discover_lobby([TimeoutError()])
 
     def test_bracket_matches_are_sorted_and_deduplicated(self):
         result, _, _ = self.discover_lobby([
