@@ -72,11 +72,29 @@ def run(source, output, refresh: float = 0.25) -> None:
             output.write(render(latest, events, os.get_terminal_size(output.fileno()).columns if is_tty else 90)+"\n")
             output.flush()
 
+def live(url: str, game_id: str, output) -> None:
+    """Render native public updates straight to the Linux virtual terminal."""
+    from .argentum_spectator_stream import watch
+    events: deque[str] = deque(maxlen=7)
+    previous = [None]
+    def draw(snapshot: dict) -> None:
+        signature = (snapshot.get("currentPhase"), snapshot.get("activePlayerId"), snapshot.get("priorityPlayerId"))
+        if previous[0] is not None and signature != previous[0]:
+            events.appendleft(f"{clean(signature[0])} / active {clean(signature[1])} / priority {clean(signature[2])}")
+        previous[0] = signature
+        tty = output.isatty()
+        if tty:
+            output.write("\\x1b[H\\x1b[2J")
+        width = os.get_terminal_size(output.fileno()).columns if tty else 90
+        output.write(render(snapshot, events, width) + "\\n")
+        output.flush()
+    watch(url, game_id, draw)
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Read-only Linux console spectator")
-    parser.add_argument("--input", default="-", help="NDJSON spectator snapshots; - for stdin")
+    parser.add_argument("--input", default="-", help="NDJSON public spectator snapshots, or - for stdin")\n    parser.add_argument("--server", help="Argentum game WebSocket URL (ws://host:port/game)")\n    parser.add_argument("--game", help="Game session ID to spectate")
     args = parser.parse_args()
-    if args.input == "-": run(sys.stdin, sys.stdout)
+    if args.server:\n        if not args.game: parser.error("--game is required with --server")\n        live(args.server, args.game, sys.stdout)\n    elif args.input == "-": run(sys.stdin, sys.stdout)
     else:
         with open(args.input, encoding="utf-8") as source: run(source, sys.stdout, refresh=0)
 
