@@ -131,3 +131,41 @@ ExecStart=/usr/bin/touch {self.root}/sidecar-started
         self.assertTrue((self.root/'sidecar-started').exists())
         self.assertTrue(gate.exists(), 'oneshot completion must retain the boot attestation directory')
         self.assertEqual(Path('/run',self.prefix+'-ipc').stat().st_mode & 0o777,0o750)
+
+    def test_local_readiness_failure_holds_native_start_and_success_unblocks(self):
+        from dataclasses import asdict
+        from commander_gym.manual_runtime_config import service_units
+        from test_lmstudio import config
+        self.install(preflight_ok=True)
+        preflight, recorder, sidecar = self.units
+        local = self.prefix+'-local.service'; native = self.prefix+'-native.service'
+        self.units.extend((local,native))
+        units = service_units(launcher_root='/srv/argentum-luna/artifacts/launcher/'+'a'*64,
+            dependency_root='/srv/argentum-luna/artifacts/dependencies/'+'b'*64,
+            python_relative='python/bin/python3.12', local_inference={'config':asdict(config())})
+        replacements = {'argentum-play.service':native, 'argentum-recorder.service':recorder,
+            'argentum-luna-sidecar.service':sidecar, 'argentum-local-sidecar.service':local,
+            'argentum-manual-preflight.service':preflight,
+            '/run/argentum-luna-runtime/precredential.json':str(self.root/'gate')}
+        def unit_sections(text):
+            keep=False; lines=[]
+            for line in text.splitlines():
+                if line.startswith('['):keep=line=='[Unit]'
+                if keep:lines.append(line)
+            text='\n'.join(lines)+'\n'
+            for old,new in replacements.items():text=text.replace(old,new)
+            return text
+        local_prefix=unit_sections(units['units/argentum-local-sidecar.service'])
+        native_text=unit_sections(units['units/argentum-play.conf'])+f'[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/usr/bin/touch {self.root}/local-native-started\n'
+        Path('/run/systemd/system',native).write_text(native_text)
+        local_path=Path('/run/systemd/system',local)
+        local_path.write_text(local_prefix+'[Service]\nType=notify\nTimeoutStartSec=5\nExecStart=/usr/bin/false\n')
+        self.systemctl('daemon-reload')
+        self.assertNotEqual(self.systemctl('start',native,check=False).returncode,0)
+        self.assertFalse((self.root/'local-native-started').exists())
+        script=self.root/'notify.py'
+        script.write_text("import os,socket,time\ns=socket.socket(socket.AF_UNIX,socket.SOCK_DGRAM)\np=os.environ['NOTIFY_SOCKET']\ns.connect('\\0'+p[1:] if p.startswith('@') else p)\ns.sendall(b'READY=1')\ntime.sleep(60)\n")
+        local_path.write_text(local_prefix+f'[Service]\nType=notify\nNotifyAccess=main\nTimeoutStartSec=5\nExecStart={sys.executable} {script}\n')
+        self.systemctl('daemon-reload');self.systemctl('reset-failed',local,native)
+        self.systemctl('start',native)
+        self.assertTrue((self.root/'local-native-started').exists())

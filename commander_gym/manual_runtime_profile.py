@@ -80,7 +80,8 @@ def _commit(value: Any) -> bool:
 
 def validate_profile(profile: Mapping[str, Any]) -> dict:
     redis_qa = type(profile) is dict and profile.get("profile") == "manual-luna-redis-qa-v1"
-    optional = ({"redisQa"} if redis_qa else set()) | ({"liveCatalog"} if type(profile) is dict and "liveCatalog" in profile else set())
+    local_enabled = type(profile) is dict and "localInference" in profile
+    optional = ({"localInference"} if local_enabled else set()) | ({"redisQa"} if redis_qa else set()) | ({"liveCatalog"} if type(profile) is dict and "liveCatalog" in profile else set())
     require(type(profile) is dict and set(profile) == PROFILE_FIELDS | optional, "profile_fields")
     require(type(profile["schemaVersion"]) is int and profile["schemaVersion"] == 1, "profile_schema")
     require((profile["profile"] == "manual-luna-v1" and profile["purpose"] in ("qualification", "native-manual-play"))
@@ -97,7 +98,7 @@ def validate_profile(profile: Mapping[str, Any]) -> dict:
         validate_settings(profile)
     require(profile["settings"] == expected and all(type(profile["settings"][k]) is type(v) for k, v in expected.items()), "manual_settings")
     artifacts = profile["artifacts"]
-    require(type(artifacts) is dict and set(artifacts) == ROLES, "artifact_roles")
+    require(type(artifacts) is dict and set(artifacts) == ROLES | ({"localConfig", "localCatalog"} if local_enabled else set()), "artifact_roles")
     for role, artifact in artifacts.items():
         require(type(artifact) is dict and set(artifact) == {"root", "uid", "files"}, "artifact_fields")
         absolute_path(artifact["root"])
@@ -179,6 +180,10 @@ def validate_profile(profile: Mapping[str, Any]) -> dict:
     require(policy == {"providerReaders": ["sidecar"], "tokenReaders": ["native", "sidecar"],
                        "providerSource": "existing-private-env", "delivery": "systemd-credentials",
                        "valueInManifest": False}, "credential_policy")
+    if local_enabled:
+        require(not redis_qa, "local_redis_qa_unsupported")
+        from .manual_runtime_local import validate_local
+        validate_local(profile)
     if profile['purpose'] == 'native-manual-play':
         from .manual_runtime_config import validate_config_contract
         validate_config_contract(profile)
@@ -214,8 +219,9 @@ def verify_artifacts(profile: dict, *, roles: frozenset | None = None) -> None:
         authority = profile['recordingAuthority']
         raw = protected_bytes(Path(profile['paths']['registryPath']), uid=authority['registryUid'])
         require(hashlib.sha256(raw).hexdigest() == authority['registrySha256'], 'recording_authority_changed')
-    selected = ROLES if roles is None else roles
-    require(type(selected) is frozenset and selected <= ROLES, "artifact_selection")
+    available = frozenset(profile["artifacts"])
+    selected = available if roles is None else roles
+    require(type(selected) is frozenset and selected <= available, "artifact_selection")
     for role in selected:
         artifact = profile["artifacts"][role]
         root = Path(artifact["root"])
@@ -243,7 +249,7 @@ def verify_artifacts(profile: dict, *, roles: frozenset | None = None) -> None:
 def validate_qualification(profile: dict, receipt: dict, *, now: float) -> None:
     require(set(receipt) == {"schemaVersion", "profileSha256", "gates", "sourceCi", "providerMode", "externalProviderCalls", "observedUnix"}, "qualification_fields")
     require(type(receipt["schemaVersion"]) is int and receipt["schemaVersion"] == 1 and receipt["profileSha256"] == digest(profile), "qualification_identity")
-    require(type(receipt["gates"]) is dict and set(receipt["gates"]) == GATES and all(value is True for value in receipt["gates"].values()), "qualification_gates")
+    require(type(receipt["gates"]) is dict and set(receipt["gates"]) == GATES | (frozenset({"localProviderIsolation", "localRecorderPeer", "localFailureCancellation"}) if "localInference" in profile else frozenset()) and all(value is True for value in receipt["gates"].values()), "qualification_gates")
     require(receipt["providerMode"] == "fake" and type(receipt["externalProviderCalls"]) is int and receipt["externalProviderCalls"] == 0, "keyless_qualification_required")
     observed = receipt["observedUnix"]
     require(type(observed) in (int, float) and math.isfinite(observed) and 0 <= now - observed <= 86400, "qualification_stale")
@@ -289,8 +295,12 @@ def precredential_validate(profile: dict, qualification: dict, approval: dict, *
 
 def recording_pins(profile: dict) -> dict:
     validate_profile(profile)
-    return {"engine": profile["engineSha"], "gym": profile["gymSha"], "models": {"provider": "openai-responses", "model": "gpt-6-luna"},
+    pins = {"engine": profile["engineSha"], "gym": profile["gymSha"], "models": {"provider": "openai-responses", "model": "gpt-6-luna"},
             "decks": None, "rng": None,
             "bindings": {"fingerprints": profile["catalog"]["bindings"], "pilotFingerprint": profile["catalog"]["pilotFingerprint"], "componentDigest": profile["catalog"]["componentDigest"]},
             "config": {"purpose": profile["purpose"], "paidProvidersEnabled": True, "gameAiMode": "engine", "manualOnly": True,
                        "manualUncapped": True, "accountsEnabled": False, "redisEnabled": profile["settings"]["redisEnabled"], "runtimeProfileSha256": digest(profile)}}
+    if 'localInference' in profile:
+        pins['models']['local'] = profile['localInference']['config']
+        pins['bindings']['local'] = profile['localInference']['catalog']
+    return pins

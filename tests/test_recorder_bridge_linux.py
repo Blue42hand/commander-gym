@@ -56,3 +56,9 @@ print(json.dumps({'denied':len(failed), 'receipt':response['ok'], 'registerRejec
             self.assertNotEqual(denied.returncode, 0)
         finally:
             fixture.tearDown()
+
+    def test_local_uid_has_its_own_socket_and_cannot_enter_luna_socket(self):
+        fixture = bridge_fixtures.RecorderBridgeTests()
+        fixture.setUp()
+        try: fixture.test_real_local_uid_can_only_connect_to_its_scoped_socket()
+        finally: fixture.tearDown()

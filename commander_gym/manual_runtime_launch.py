@@ -80,6 +80,10 @@ def native_spec(runtime: ValidatedRuntime, *, credential_directory: Path) -> Lau
            "ACCOUNTS_ENABLED": "false", "CACHE_REDIS_ENABLED": "false",
            "COMMANDER_GYM_ENABLED": "true", "COMMANDER_GYM_MANUAL_ONLY": "true",
            "COMMANDER_GYM_SIDECAR_URL": "http://127.0.0.1:8083", "COMMANDER_GYM_SIDECAR_TIMEOUT_MS": "120000"}
+    if 'localInference' in profile:
+        env.update(COMMANDER_GYM_LOCAL_ENABLED='true',
+                   COMMANDER_GYM_LOCAL_URL='http://127.0.0.1:' + str(profile['localInference']['port']),
+                   COMMANDER_GYM_LOCAL_TIMEOUT_MS='120000')
     args = (str(root / lock["java"]), "-Xms512m", "-Xmx6g",
             "-Dcommander-gym.recorder.socket=" + str(Path(profile["paths"]["recorderSocket"]).parent / "native.sock"),
             "-Dgame.recording.root=" + profile["paths"]["recordingRoot"],
