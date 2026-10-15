@@ -27,6 +27,7 @@ import re
 from time import perf_counter
 from typing import Any, Mapping
 
+from .records import native_bounce_offer, validate_bounce_payment, RecordValidationError
 from .pilot import ArgentumActionChoice, ArgentumDecisionChoice, PilotChoice
 from .openai_run_budget import OpenAIRunBudget, OpenAIRunBudgetError
 from .observation_projection import compact_seat_observation
@@ -461,6 +462,14 @@ def _native_attack_targets(action: Mapping[str, Any]) -> tuple[list[str], list[s
 
 
 def _native_action_field_schema(action: Mapping[str, Any], name: str, kind: str) -> dict[str, Any]:
+    if name == "bouncedPermanents" and kind == "ENTITY_ID_ARRAY":
+        try:
+            offer = native_bounce_offer(action)
+        except RecordValidationError as exc:
+            raise OpenAIResponsesPilotError(str(exc)) from exc
+        if offer is not None:
+            candidates, count = offer
+            return {**_offered_id_array_schema(candidates), "minItems": count, "maxItems": count}
     if name == "delvedCards" and kind == "ENTITY_ID_ARRAY":
         offer = _native_delve_offer(action)
         if offer is not None:
@@ -566,6 +575,7 @@ def _native_action_format(
                         for name, kind in fields.items()
                     },
                     "additionalProperties": False,
+                    **({"required": ["bouncedPermanents"]} if "bouncedPermanents" in fields else {}),
                 },
             },
             "required": ["semanticId", "params"],
@@ -885,6 +895,10 @@ def _validate_native_action_params(
                 raise OpenAIResponsesPilotError(
                     "ActionParams.delvedCards exceeds native maxDelveCards"
                 )
+    try:
+        validate_bounce_payment(params, action)
+    except RecordValidationError as exc:
+        raise OpenAIResponsesPilotError(str(exc)) from exc
     return dict(params)
 
 
@@ -1035,6 +1049,15 @@ class OpenAIResponsesPilot:
         if self.budget is not None:
             request["max_output_tokens"] = self.budget.MAX_OUTPUT_TOKENS
         pending = observation.get("pendingDecision")
+        if any("bouncedPermanents" in (action.get("parameterSpec") or {}).get("allowedFields", {})
+               for action in observation.get("legalActions", []) if isinstance(action, Mapping)):
+            request["instructions"] += (
+                "\n\nFor a native bouncedPermanents payment, use additionalCostInfo "
+                "(costChoices on training observations): select exactly bounceCount "
+                "distinct IDs from validBounceTargets. Return them only in "
+                "params.bouncedPermanents. The targets field selects ability or "
+                "spell targets, not cost payments."
+            )
         if action_format is not None:
             request["instructions"] += (
                 "\n\nFor this request, use the request-local schema's nested choice object "

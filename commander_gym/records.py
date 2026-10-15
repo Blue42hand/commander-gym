@@ -24,8 +24,47 @@ _ACTION_PARAM_KINDS = {
     "targets": "ENTITY_ID_ARRAY", "xValue": "INTEGER", "declaredCostTimes": "INTEGER",
     "tappedPermanents": "ENTITY_ID_ARRAY", "sacrificedPermanents": "ENTITY_ID_ARRAY",
     "discardedCards": "ENTITY_ID_ARRAY", "exiledCards": "ENTITY_ID_ARRAY",
-    "delvedCards": "ENTITY_ID_ARRAY",
+    "delvedCards": "ENTITY_ID_ARRAY", "bouncedPermanents": "ENTITY_ID_ARRAY",
 }
+
+
+def native_bounce_offer(offered: Mapping[str, Any]) -> tuple[list[str], int] | None:
+    """Read a current native return-cost offer; never infer rules or candidates."""
+    fields = offered.get("parameterSpec", {}).get("allowedFields", {})
+    if "bouncedPermanents" not in fields:
+        return None  # Preserve historical contracts that do not advertise the field.
+    info = (offered.get("additionalCostInfo") if "additionalCostInfo" in offered
+            else offered.get("costChoices"))
+    if not isinstance(info, Mapping):
+        raise RecordValidationError("native bounce payment offer is malformed")
+    if "additionalCostInfo" in offered and "costChoices" in offered:
+        training = offered["costChoices"]
+        if (not isinstance(training, Mapping)
+                or any(info.get(key) != training.get(key) for key in ("validBounceTargets", "bounceCount"))):
+            raise RecordValidationError("native bounce payment offers disagree")
+    ids, count = info.get("validBounceTargets"), info.get("bounceCount")
+    if (not isinstance(ids, list) or not ids
+            or any(not isinstance(value, str) or not value for value in ids)
+            or len(ids) != len(set(ids))
+            or type(count) is not int or count <= 0 or count > len(ids)):
+        raise RecordValidationError("native bounce payment offer is malformed")
+    return ids, count
+
+
+def validate_bounce_payment(params: Mapping[str, Any], offered: Mapping[str, Any]) -> None:
+    offer = native_bounce_offer(offered)
+    if offer is None:
+        return
+    ids, count = offer
+    selected = params.get("bouncedPermanents")
+    if (not isinstance(selected, list) or len(selected) != count
+            or any(not isinstance(value, str) for value in selected)
+            or len(selected) != len(set(selected))
+            or any(value not in ids for value in selected)):
+        raise RecordValidationError(
+            "ActionParams.bouncedPermanents requires exactly "
+            f"{count} distinct native offered IDs"
+        )
 
 
 def validate_action_params(params: Any, offered: Mapping[str, Any]) -> None:
@@ -60,6 +99,7 @@ def validate_action_params(params: Any, offered: Mapping[str, Any]) -> None:
                  isinstance(value, dict) and all(entity(k) and entities(v) for k, v in value.items()))
         if not valid:
             raise RecordValidationError(f"chosen_action_params.{name} requires {kind}")
+    validate_bounce_payment(params, offered)
 
 
 def _binding_ref_from_value(value: Any) -> Optional[IdentityRef]:
