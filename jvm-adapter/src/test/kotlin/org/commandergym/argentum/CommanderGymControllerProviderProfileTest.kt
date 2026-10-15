@@ -8,6 +8,8 @@ import com.wingedsheep.sdk.model.EntityId
 import java.net.InetSocketAddress
 import java.net.URI
 import java.nio.charset.StandardCharsets
+import java.time.Duration
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -103,11 +105,42 @@ class CommanderGymControllerProviderProfileTest {
         }
     }
 
-    private fun profileServer(): HttpServer {
+    @Test
+    fun `catalog reload preserves existing controller and rejects malformed replacements`() {
+        val body = AtomicReference(PROFILE_BODY)
+        val server = profileServer { body.get() }
+        try {
+            val provider = CommanderGymControllerProvider(
+                URI.create("http://127.0.0.1:${server.address.port}"), TOKEN,
+                catalogRefreshInterval = Duration.ZERO,
+            )
+            val old = provider.create(AiControllerContext(
+                playerId = EntityId("old-seat"), gameSessionId = "old-game",
+                profileId = "binding-alpha", snapshot = { null },
+            ))
+            body.set(PROFILE_BODY.replace("binding-alpha", "binding-beta").replace("Forest", "Island"))
+            assertEquals("binding-beta", provider.profiles.single().id)
+            old.setDeckList(mapOf("Forest" to 99))
+            assertFailsWith<IllegalArgumentException> { old.setDeckList(mapOf("Island" to 99)) }
+            val fresh = provider.create(AiControllerContext(
+                playerId = EntityId("new-seat"), gameSessionId = "new-game",
+                profileId = "binding-beta", snapshot = { null },
+            ))
+            fresh.setDeckList(mapOf("Island" to 99))
+            for (invalid in listOf("{", "{}", PROFILE_BODY.replace("99", "-1"))) {
+                body.set(invalid)
+                assertEquals("binding-beta", provider.profiles.single().id)
+            }
+            server.stop(0)
+            assertEquals("binding-beta", provider.profiles.single().id)
+        } finally { server.stop(0) }
+    }
+
+    private fun profileServer(catalog: () -> String = { PROFILE_BODY }): HttpServer {
         val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         server.createContext("/v1/controller-profiles") { exchange ->
             val authorized = exchange.requestHeaders.getFirst("Authorization") == "Bearer $TOKEN"
-            val body = if (authorized) PROFILE_BODY else "{\"error\":\"unauthorized\"}"
+            val body = if (authorized) catalog() else "{\"error\":\"unauthorized\"}"
             val status = if (authorized) 200 else 401
             val bytes = body.toByteArray(StandardCharsets.UTF_8)
             exchange.responseHeaders.add("Content-Type", "application/json")

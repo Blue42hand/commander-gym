@@ -9,6 +9,7 @@ from unittest.mock import patch
 from commander_gym.game_journal import (
     PIN_KEYS, JournalError, PrivateGameJournal, RecorderSeatSink,
     inspect_journal, publish_finalized_manifest, seat_projection,
+    verify_finalized_manifest,
 )
 from commander_gym.game_server_seat import GameServerSeatAdapter, SeatProvenance
 from commander_gym.pilot import ArgentumActionChoice
@@ -66,6 +67,33 @@ class JournalTests(unittest.TestCase):
         self.assertEqual(report['rows'][-1]['payload']['gaps'],
                          ['canonical_training_evidence_unavailable', 'human_menus_unavailable', 'non_native_terminal', 'pending_decisions', 'source_counts'])
         self.assertEqual(report['rows'][-1]['payload']['outcome']['kind'], 'operator_stop')
+
+    def test_finalized_verification_reads_the_journal_chain_once(self):
+        import commander_gym.game_journal as journal
+        with self.writer(segment_bytes=700) as w:
+            for seq in range(8):
+                w.append('native_transition', TRANSITION, source='native', source_sequence=seq)
+            w.finish({'kind': 'operator_stop'}, expected_sources={'native': 8}, gaps=['test'])
+        with patch.object(journal, '_iter_journal_rows', wraps=journal._iter_journal_rows) as scans:
+            manifest = verify_finalized_manifest(self.root)
+        self.assertEqual(scans.call_count, 1)
+        self.assertEqual(manifest['outcome']['kind'], 'operator_stop')
+        self.assertIn('test', manifest['gaps'])
+
+    def test_finalized_verification_rejects_bytes_changed_after_chain_inspection(self):
+        import commander_gym.game_journal as journal
+        with self.writer(compress_records=False) as w:
+            self.native(w)
+            w.finish({'kind': 'operator_stop'}, expected_sources={'native': 1}, gaps=['test'])
+        inspect = journal.inspect_journal
+        def inspect_then_change(directory, **kwargs):
+            report = inspect(directory, **kwargs)
+            path = sorted(directory.glob('*.jsonl'))[-1]
+            path.write_bytes(path.read_bytes().replace(b'operator_stop', b'operator_edit'))
+            return report
+        with patch.object(journal, 'inspect_journal', side_effect=inspect_then_change):
+            with self.assertRaisesRegex(JournalError, 'finalized artifact hash or size mismatch'):
+                verify_finalized_manifest(self.root)
     def test_crash_prefix_resumes_but_closed_journal_does_not(self):
         with self.writer() as w:
             self.native(w)

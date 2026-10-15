@@ -55,8 +55,28 @@ retain the unavailable-canonical-adapter gap and the closed-only v1 accepted-sub
 export retains its previous behavior.
 
 Conversion is bounded independently of compressed storage: at most 4,096 callbacks
-and 16 MiB of aggregate decoded join bytes and record bytes. Exceeding either limit
-preserves explicit recording incompleteness.
+and 256 MiB of decoded disk-backed join bytes, with a separate 64 MiB budget for
+both the aggregate decision records and the final serialized UTF-8 envelope.
+SQLite's cache remains 2 MiB; joins retain only the preceding action/error receipt,
+not its administrative state snapshot. Output size accounting is incremental and
+cancellable. All correlation, masking, source hashes, and acceptance checks remain
+required. Exceeding any limit preserves explicit recording incompleteness; no
+partial subset is certified. These finite limits leave headroom within the 1 GiB
+recorder service budget; they are not a promise that arbitrarily long games fit.
+
+Live capture queues terminal conversion/publication on one background worker,
+retaining that game's writer lock while releasing the shared capture lock. Other
+games' callbacks and health reports remain responsive. A finalizing game rejects
+new recorder operations; it is still pending drain until its manifest verifies.
+Shutdown cancels and joins the worker before closing writers; an interrupted
+conversion recovers from the durable prefix on restart. Explicit offline scans
+remain synchronous. This isolates the work; it does not make large exports instant.
+
+The optional full-game harness explicitly enables Commander rules, supplies each
+99-card library separately from its commander, and checks starting life and command
+zones. Earlier harness recordings made in Standard mode with 100 library cards
+remain historical incomplete evidence; increasing capacity does not repair their
+binding mismatch or rewrite their manifests.
 
 Qualification uses deterministic keyless protocol and native unit fixtures only.
 `CanonicalCallbackFixtureTest` exports a real native writer, actual native application

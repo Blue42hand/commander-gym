@@ -65,6 +65,8 @@ class GameServerBindingRegistry:
             raise GameServerBindingError("binding_ids must not be empty")
 
         profiles: dict[str, GameServerBindingProfile] = {}
+        pilot_fingerprints = set()
+        binding_fingerprints = {}
         for raw_id in binding_ids:
             if not isinstance(raw_id, str) or not raw_id.strip():
                 raise GameServerBindingError("binding_ids must contain non-empty strings")
@@ -74,12 +76,16 @@ class GameServerBindingRegistry:
             try:
                 resolved = resolver.resolve(binding_id)
                 profile = self._profile_for(resolved)
+                pilot_fingerprints.add(resolved.pilot.fingerprint)
+                binding_fingerprints[binding_id] = resolved.binding.fingerprint
             except (BindingResolutionError, BindingLaunchError) as exc:
                 raise GameServerBindingError(str(exc)) from exc
             profiles[binding_id] = profile
 
         self._resolver = resolver
         self._profiles = profiles
+        self.pilot_fingerprints = frozenset(pilot_fingerprints)
+        self.binding_fingerprints = binding_fingerprints
 
     @staticmethod
     def _profile_for(resolved: ResolvedSeatBinding) -> GameServerBindingProfile:
@@ -138,6 +144,7 @@ class GameServerBindingRegistry:
         *,
         provenance_sink: ProvenanceSink | None = None,
         decision_start_sink: ProvenanceSink | None = None,
+        catalog_snapshot: Mapping[str, Any] | None = None,
     ) -> GameServerSeatAdapter:
         if binding_id not in self._profiles:
             raise GameServerBindingError(f"unknown Binding profile {binding_id!r}")
@@ -152,7 +159,8 @@ class GameServerBindingRegistry:
             decision_start_sink=decision_start_sink,
             recording_lineage={'binding': resolved.binding.to_dict(), 'deck': resolved.deck.to_dict(),
                 'pilot': resolved.pilot.to_dict(), 'deck_cards': dict(self._profiles[binding_id].deck_list),
-                'pilot_name': resolved.artificial_player.name, 'pilot_version': resolved.artificial_player.version},
+                'pilot_name': resolved.artificial_player.name, 'pilot_version': resolved.artificial_player.version,
+                **({'catalog': dict(catalog_snapshot)} if catalog_snapshot is not None else {})},
         )
         # The canonical Binding already owns the exact library composition. The
         # JVM edge checks Argentum's delivered list against the same profile.

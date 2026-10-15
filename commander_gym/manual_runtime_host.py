@@ -29,6 +29,7 @@ from .manual_runtime_profile import (
 from .manual_runtime_rollout import RuntimeSnapshot
 from .manual_runtime_quiescence import capture_inventory, stop_context, matches_stop_proof
 
+READINESS_TIMEOUT_SECONDS = 600
 CONFIG = Path('/etc/argentum-luna')
 STATE = Path('/var/lib/argentum-updater/manual-runtime')
 GATE = Path('/run/argentum-luna-runtime/precredential.json')
@@ -41,12 +42,15 @@ TARGETS = {
     'nginx.conf': Path('/etc/argentum-play/argentum-play.nginx.conf'),
     'units/argentum-play.conf': Path('/etc/systemd/system/argentum-play.service.d/manual-runtime.conf'),
     'units/argentum-recorder.conf': Path('/etc/systemd/system/argentum-recorder.service.d/manual-runtime.conf'),
+    'units/argentum-recorder.service': Path('/etc/systemd/system/argentum-recorder.service'),
     'units/argentum-web.conf': Path('/etc/systemd/system/argentum-web.service.d/manual-runtime.conf'),
     'units/argentum-source-feeder.conf': Path('/etc/systemd/system/argentum-source-feeder.service.d/manual-runtime.conf'),
     'units/argentum-updater.conf': Path('/etc/systemd/system/argentum-updater.service.d/manual-runtime.conf'),
     'units/argentum-admission.conf': Path('/etc/systemd/system/argentum-admission.service.d/manual-runtime.conf'),
     'units/argentum-luna-sidecar.service': Path('/etc/systemd/system/argentum-luna-sidecar.service'),
     'units/argentum-manual-preflight.service': Path('/etc/systemd/system/argentum-manual-preflight.service'),
+    'units/argentum-binding-catalog.service': Path('/etc/systemd/system/argentum-binding-catalog.service'),
+    'units/argentum-binding-catalog.timer': Path('/etc/systemd/system/argentum-binding-catalog.timer'),
 }
 
 
@@ -54,8 +58,11 @@ def selected_targets(profile):
     # Keep TARGETS complete for rollback custody; the sealed one-Origin mode
     # does not install or require a LAN certificate.
     tailnet_only = len(profile["ingress"]["origins"]) == 1
+    config_files = profile['artifacts']['config']['files']
     return {name: path for name, path in TARGETS.items()
-            if not (tailnet_only and name == "lan-server.crt")}
+            if not (tailnet_only and name == "lan-server.crt")
+            and not (name in ('units/argentum-recorder.service', 'units/argentum-binding-catalog.service',
+                             'units/argentum-binding-catalog.timer') and name not in config_files)}
 
 
 def root_json(path: Path) -> dict:
@@ -113,11 +120,18 @@ class ProtectedRuntimeHost:
                 and policy['implementationApproved'] is True and policy['activationApproved'] is True
                 and type(policy['minFreeBytes']) is int and policy['minFreeBytes'] >= 32 * 1024**3, 'operator_activation_policy')
         self.policy = policy
-        # No environment-controlled import path; legacy trees were fully sealed.
-        for path in (NATIVE_LIB, SOURCE_LIB): sys.path.insert(0, str(path))
-        self.legacy = importlib.import_module('idle_updater')
-        self.native = importlib.import_module('host_adapter')
-        self.base = self.legacy.IdleHost()
+        # Standalone manual installs need no historical keyless deployment.
+        selector = root_json(CONFIG / 'current.json')
+        self.legacy = self.native = None
+        if selector.get('kind') == 'keyless':
+            for path in (NATIVE_LIB, SOURCE_LIB): sys.path.insert(0, str(path))
+            self.legacy = importlib.import_module('idle_updater')
+            self.native = importlib.import_module('host_adapter')
+            self.base = self.legacy.IdleHost()
+        else:
+            require(selector.get('kind') == 'manual-luna-v1', 'unknown_active_profile')
+            from .manual_runtime_control import ManualControl
+            self.base = ManualControl(anchor_profile['identities']['nativeUid'])
         self.locked = False
         self.pending = None
         self.anchor = anchor_profile
@@ -171,13 +185,39 @@ class ProtectedRuntimeHost:
         return self.base.status()  # Return the actual fresh recording drain barrier.
 
     def _service(self, verb, unit):
-        require(verb in ('start', 'stop') and unit in UNITS, 'fixed_service_operation')
+        reset_units = (*UNITS, 'argentum-manual-preflight.service', 'argentum-binding-catalog.service')
+        require((verb in ('start', 'stop') and unit in UNITS)
+                or (verb == 'reset-failed' and unit in reset_units), 'fixed_service_operation')
+        if verb == 'reset-failed':
+            # reset-failed does not load a unit that has never been started.
+            load = subprocess.run(['/usr/bin/systemctl', 'show', unit, '-p', 'LoadState', '--value'],
+                                  text=True, capture_output=True, timeout=10, check=True)
+            require(load.stdout.strip() == 'loaded', 'service_not_loaded')
         if verb == 'stop' and unit == 'argentum-luna-sidecar.service':
             load = subprocess.run(['/usr/bin/systemctl', 'show', unit, '-p', 'LoadState', '--value'],
                                   text=True, capture_output=True, timeout=10, check=False)
             if load.stdout.strip() == 'not-found': return
-        subprocess.run(['/usr/bin/systemctl', verb, unit], check=True, timeout=150,
-                       stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        result = subprocess.run(['/usr/bin/systemctl', verb, unit], check=verb != 'reset-failed', timeout=150,
+                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if verb == 'reset-failed' and result.returncode:
+            # systemd may garbage-collect an inactive successful unit between
+            # show and reset-failed. Such a unit has no retained start budget.
+            state = subprocess.check_output(['/usr/bin/systemctl', 'show', unit,
+                                             '-p', 'ActiveState', '-p', 'Result'], text=True, timeout=10)
+            require(dict(line.split('=', 1) for line in state.splitlines()) ==
+                    {'ActiveState': 'inactive', 'Result': 'success'}, 'service_reset_failed')
+
+    def _catalog_timer(self, enabled):
+        # A missing timer is normal for releases predating live catalogs.
+        unit = 'argentum-binding-catalog.timer'
+        if not Path('/etc/systemd/system/' + unit).exists(): return
+        subprocess.run(['/usr/bin/systemctl', 'enable' if enabled else 'disable', '--now', unit],
+                       check=True, timeout=30, stdin=subprocess.DEVNULL,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if not enabled:
+            subprocess.run(['/usr/bin/systemctl', 'stop', 'argentum-binding-catalog.service'],
+                           check=True, timeout=60, stdin=subprocess.DEVNULL,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def _reload(self):
         subprocess.run(['/usr/bin/systemctl', 'daemon-reload'], check=True, timeout=30,
@@ -190,7 +230,7 @@ class ProtectedRuntimeHost:
 
     def begin(self, previous, candidate):
         self._locked(); self._clear_gate()
-        bank = STATE / ('rollback-' + candidate.runtime_id)
+        bank = STATE / ('rollback-' + candidate.runtime_id + '-' + str(candidate.sequence))
         require(not bank.exists(), 'rollback_bank_exists')
         bank.mkdir(mode=0o700)
         entries = {}
@@ -205,6 +245,15 @@ class ProtectedRuntimeHost:
         self.pending = {'previous': previous, 'candidate': candidate, 'bank': bank}
         atomic_root(STATE / 'transaction.json', canonical({'phase': 'activation-intent', 'previousRuntimeId': previous.runtime_id, 'candidateRuntimeId': candidate.runtime_id, 'sequence': candidate.sequence, 'bankSha256': digest(entries)}))
 
+    def recording_inventory(self):
+        root = Path(self.anchor['paths']['recordingRoot'])
+        # The fixed production layout lives beneath the declared Gym service's
+        # state directories. Native captures themselves must remain native-owned.
+        owners = ({Path('/var/lib/commander-gym'): self.anchor['identities']['sidecarUid'],
+                   Path('/var/lib/commander-gym/runs'): self.anchor['identities']['sidecarUid']}
+                  if root == Path('/var/lib/commander-gym/runs/native') else {})
+        return capture_inventory(root, uid=self.anchor['identities']['nativeUid'], ancestor_owners=owners)
+
     def stop_closure(self):
         self._locked(); require(self.pending is not None, 'transaction_required')
         # Exact stopped generation is latched BEFORE any stop. A recent previous
@@ -213,8 +262,7 @@ class ProtectedRuntimeHost:
         state = self.status()
         from .manual_runtime_rollout import idle_state
         boot = idle_state(state, snapshot, now=time.time(), closed=True)
-        root = Path(self.anchor['paths']['recordingRoot'])
-        inventory = capture_inventory(root, uid=self.anchor['identities']['nativeUid'])
+        inventory = self.recording_inventory()
         state = self.status()
         require(state.get('bootId') == boot, 'stop_boot_changed')
         context = stop_context(snapshot, state, inventory, nonce=uuid.uuid4().hex, now=time.time())
@@ -222,7 +270,35 @@ class ProtectedRuntimeHost:
         self.pending['stopInventory'] = inventory
         atomic_root(STATE / 'stop-request.json', canonical(context))
         self._clear_gate()
+        self._catalog_timer(False)
         for unit in UNITS: self._service('stop', unit)
+
+    def stop_for_rollback(self):
+        """Stop an uncommitted candidate even when startup produced no socket.
+
+        The previous healthy drain inventory remains the required byte barrier.
+        No rollback across changed captures or any admitted candidate is allowed.
+        """
+        self._locked()
+        require(self.pending is not None and 'stopContext' in self.pending, 'rollback_stop_context')
+        record = root_json(STATE / 'transaction.json')
+        require(record.get('phase') == 'activation-intent', 'rollback_already_committed')
+        selected = self.current()
+        require(selected.runtime_id in (self.pending['previous'].runtime_id, self.pending['candidate'].runtime_id),
+                'rollback_runtime_changed')
+        try:
+            state = self.status()
+        except (OSError, ValueError):
+            state = None
+        if state is not None:
+            require(state.get('releaseId') == selected.runtime_id and state.get('acceptingNewGames') is False
+                    and all(type(state.get(k)) is int and state[k] == 0
+                            for k in ('activeGames', 'pendingActivities', 'pendingRecordWrites', 'inFlightAdmissions')),
+                    'rollback_candidate_not_idle')
+        self._clear_gate(); self._catalog_timer(False)
+        for unit in UNITS: self._service('stop', unit)
+        # quiescence_barrier checks every PID and reconciles the unchanged
+        # inventory against the original, acknowledged stop generation.
 
     def quiescence_barrier(self):
         self._locked()
@@ -239,7 +315,7 @@ class ProtectedRuntimeHost:
         require(self.pending is not None and 'stopContext' in self.pending, 'stop_context_required')
         context = self.pending['stopContext']
         require(root_json(STATE / 'stop-request.json') == context, 'stop_request_changed')
-        inventory = capture_inventory(Path(self.anchor['paths']['recordingRoot']), uid=self.anchor['identities']['nativeUid'])
+        inventory = self.recording_inventory()
         if inventory != self.pending['stopInventory']: return False
         proof = {**context, 'reconciled': True, 'pendingRecordWrites': 0, 'verifiedUnix': time.time()}
         atomic_root(STATE / ('recorder-quiescence-' + context['stopNonce'] + '.json'), canonical(proof))
@@ -295,12 +371,45 @@ class ProtectedRuntimeHost:
                 previous_id=approval['previousRuntimeId'], sequence=approval['sequence'], now=receipt['observedUnix'])
             require(runtime.runtime_id == snapshot.runtime_id, 'precredential_identity')
             self._attest_precredential(snapshot)
+            # A verified explicit transaction (including rollback) gets a fresh
+            # start budget. Rapid prior starts must not strand the known-good
+            # release; unattended process restarts retain systemd rate limits.
+            reset_units = (*UNITS, 'argentum-manual-preflight.service')
+            if 'liveCatalog' in profile: reset_units += ('argentum-binding-catalog.service',)
+            for unit in reset_units: self._service('reset-failed', unit)
             # No key source opened here; only after this gate can systemd start
             # the separately approved credential-bearing sidecar unit.
             for unit in ('argentum-recorder.service', 'argentum-luna-sidecar.service', 'argentum-play.service', 'argentum-web.service'):
                 self._service('start', unit)
         else:
             for unit in ('argentum-recorder.service', 'argentum-play.service', 'argentum-web.service'): self._service('start', unit)
+        self._wait_ready(snapshot, closed=True)
+        if snapshot.kind == 'manual-luna-v1': self._catalog_timer('liveCatalog' in profile)
+
+    def _wait_ready(self, snapshot, *, closed, allow_active=False):
+        # Type=exec confirms execve, not JVM/recorder readiness. Keep admission
+        # closed while startup recovery finishes, including on a cold boot.
+        from .manual_runtime_rollout import idle_state, ready_state
+        deadline = time.monotonic() + READINESS_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
+            try:
+                state = self.status()
+                if allow_active:
+                    require(not closed, 'active_drain_forbidden')
+                    ready_state(state, snapshot, now=time.time())
+                else:
+                    boot = idle_state(state, snapshot, now=time.time(), closed=False)
+                    if closed and not state['acceptingNewGames'] and state.get('drainAcknowledged') is False:
+                        # A new JVM starts closed, without a drain epoch. Establish
+                        # it only after exact identity, recovery and idle checks.
+                        self.base.rpc('drain', bootId=boot)
+                        time.sleep(0.5)
+                        continue
+                    idle_state(state, snapshot, now=time.time(), closed=closed)
+                return state
+            except (OSError, ValueError):
+                time.sleep(0.5)
+        require(False, 'runtime_readiness_timeout')
 
     def complete(self, runtime):
         self._locked()
@@ -405,11 +514,17 @@ class ProtectedRuntimeHost:
         snapshot = self.current(); self.verify_snapshot(snapshot)
         if snapshot.kind == 'keyless':
             return locked_legacy_call(self.native, 'admit', (), held_lock_probe=lambda: self.locked)
-        from .manual_runtime_rollout import idle_state
-        state = self.status()
-        boot = idle_state(state, snapshot, now=time.time(), closed=False)
+        from .manual_runtime_rollout import idle_state, ready_state
+        state = self._wait_ready(snapshot, closed=False, allow_active=True)
+        boot = ready_state(state, snapshot, now=time.time())
         if state['acceptingNewGames']:
             return {'state': 'already-open', 'runtimeId': snapshot.runtime_id}
-        boot = idle_state(state, snapshot, now=time.time(), closed=True)
+        if state.get('drainAcknowledged') is True:
+            # An explicit drain is still an idle-only barrier. Health recovery
+            # must never undo a drain while games or callbacks are outstanding.
+            boot = idle_state(state, snapshot, now=time.time(), closed=True)
+        else:
+            require(state.get('drainAcknowledged') is False and state.get('drainId', '') == '',
+                    'admission_drain_state')
         self.resume(boot, snapshot.runtime_id)
         return {'state': 'admitted-current', 'runtimeId': snapshot.runtime_id}
