@@ -1,6 +1,9 @@
 from dataclasses import replace
 from pathlib import Path
+import os
 import socket
+import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -21,6 +24,33 @@ from test_lmstudio import config, FakeTransport, action_observation
 
 
 class LocalBindingTests(unittest.TestCase):
+    def test_process_sigterm_runs_bounded_callback_cleanup(self):
+        # A real SIGTERM must take the same cleanup path as server_close, rather
+        # than bypassing cancellation and orphaning an inference worker.
+        script = '''
+import json, os, signal, sys, tempfile
+from pathlib import Path
+from unittest.mock import patch
+from commander_gym import game_server_binding_lmstudio_sidecar as local
+class Server:
+    def serve_forever(self):
+        os.kill(os.getpid(), signal.SIGTERM)
+    def server_close(self):
+        print("callbacks-reaped", flush=True)
+with tempfile.TemporaryDirectory() as root:
+    path=Path(root)/"inference.json"
+    path.write_text(json.dumps(dict(provider="lmstudio", endpoint="http://127.0.0.1:1234", model="fixture", context_window=8192, max_prompt_bytes=4096)))
+    sys.argv=["local", "--inference-config", str(path), "--catalog", str(path), "--instance-root", root, "--port", "48635"]
+    with patch.object(local, "build_binding_lmstudio_sidecar", return_value=Server()), patch("commander_gym.recorder_bridge.RemoteCaptureSink"):
+        local.main()
+'''
+        env = {**os.environ, "COMMANDER_GYM_LOCAL_SIDECAR_TOKEN": "fixture",
+               "COMMANDER_GYM_RECORDER_SOCKET": "/fixture-unused", "COMMANDER_GYM_RECORDER_UID": "1"}
+        result = subprocess.run([sys.executable, "-c", script], env=env,
+                                capture_output=True, text=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("callbacks-reaped", result.stdout)
+
     def test_shutdown_closes_trickling_incomplete_body_and_joins_handler(self):
         with tempfile.TemporaryDirectory() as directory:
             server = self.build(Path(directory))

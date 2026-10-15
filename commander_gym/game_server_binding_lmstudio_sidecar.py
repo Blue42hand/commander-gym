@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import signal
 import socket
 import threading
 
@@ -159,12 +160,17 @@ def main():
     capture = RemoteCaptureSink(Path(os.environ["COMMANDER_GYM_RECORDER_SOCKET"]),
                                 recorder_uid=int(os.environ["COMMANDER_GYM_RECORDER_UID"]))
     server = build_binding_lmstudio_sidecar(config, game_capture=capture)
+    def terminate(_signum, _frame):
+        # Leave serve_forever on its owning thread, then cancel/reap callbacks.
+        raise KeyboardInterrupt
+    previous_term = signal.signal(signal.SIGTERM, terminate)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
         server.server_close()
+        signal.signal(signal.SIGTERM, previous_term)
     return 0
 
 
