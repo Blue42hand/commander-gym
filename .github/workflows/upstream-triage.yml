@@ -1,0 +1,40 @@
+name: Upstream triage (manual preparation)
+
+on:
+  workflow_dispatch:
+    inputs:
+      since:
+        description: Last reviewed upstream commit (full SHA)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: upstream-triage
+  cancel-in-progress: false
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Read upstream changes while preserving the current sync owner
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_SINCE: ${{ inputs.since }}
+        run: python -m commander_gym.upstream_triage --since "$UPSTREAM_SINCE" > upstream-triage.json
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: upstream-triage
+          path: upstream-triage.json
+          retention-days: 30
