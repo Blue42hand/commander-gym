@@ -39,7 +39,7 @@ def handle_message(payload: str, game_id: str, emit: Callable[[dict[str, Any]], 
         return "connected"
     if kind == "spectatorStateUpdate" and msg.get("gameSessionId") == game_id:
         emit(msg)
-    elif kind == "gameOver" and msg.get("gameSessionId") == game_id:
+    elif kind == "gameOver" and msg.get("gameId") in (None, game_id):
         return "ended"
     elif kind == "error":
         raise SpectatorProtocolError("Argentum spectator error: " + str(msg.get("code") or msg.get("message") or "unknown"))
