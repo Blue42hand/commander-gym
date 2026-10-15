@@ -203,7 +203,9 @@ class SystemdCredentialTests(unittest.TestCase):
         self.ctl('daemon-reload')
         REPORT.unlink(missing_ok=True)
         self.ctl('reset-failed', UNITS[role], check=False)
-        self.ctl('start', UNITS[role])
+        started = self.ctl('start', UNITS[role], check=False)
+        if started.returncode:
+            self.fail(started.stderr + self.ctl('status', UNITS[role], check=False).stdout)
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
             if REPORT.exists() and REPORT.stat().st_size:
