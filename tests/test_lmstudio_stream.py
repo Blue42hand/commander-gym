@@ -1,4 +1,3 @@
-from copy import deepcopy
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
 import json
@@ -10,7 +9,6 @@ from dataclasses import replace
 
 from commander_gym.lmstudio_http_worker import read_chat_stream
 from commander_gym.lmstudio_provider import LMStudioTransport, LMStudioError
-from commander_gym.local_prompt_layout import local_observation_input
 from commander_gym.lmstudio_pilot import LMStudioPilot
 from commander_gym.evidence import _model_io
 import test_evidence
@@ -89,10 +87,10 @@ class StreamTests(unittest.TestCase):
         finally:
             release.set(); server.shutdown(); server.server_close(); serving.join()
 
-    def test_stream_and_layout_are_explicit_and_native_validation_is_unchanged(self):
+    def test_stream_is_explicit_and_native_validation_is_unchanged(self):
         obs = action_observation(); before = deepcopy(obs)
         transport = FakeTransport(self.parse(stream())[0])
-        choice = LMStudioPilot(config(stream=True, stable_prompt_layout=True), transport=transport).choose(obs)
+        choice = LMStudioPilot(config(stream=True), transport=transport).choose(obs)
         self.assertEqual(choice.action_id, 2)
         request = transport.calls[1][1]
         self.assertTrue(request["stream"])
@@ -105,24 +103,6 @@ class StreamTests(unittest.TestCase):
         exported = _model_io(record)["attempts"][0]["response"]
         self.assertIn("discoveryWallTimeMs", exported)
         self.assertIn("providerWallTimeMs", exported)
-
-
-class LayoutTests(unittest.TestCase):
-    def test_reorders_complete_masked_input_without_changing_values_or_native_arrays(self):
-        obs = {"perspectivePlayerId": "seat-a", "state": {"turn": 1,
-               "cards": {"visible": {"name": "Forest"}}, "gameLog": ["first", "second"]},
-               "legalActions": [{"semanticId": "current"}], "unknownNativeField": [3, 1]}
-        before = deepcopy(obs)
-        first = local_observation_input(obs)
-        changed = deepcopy(obs); changed["legalActions"] = [{"semanticId": "new"}]
-        second = local_observation_input(changed)
-        self.assertEqual(json.loads(first), obs)
-        self.assertEqual(obs, before)
-        self.assertEqual(first[:first.index('"legalActions"')], second[:second.index('"legalActions"')])
-        other = deepcopy(obs); other["perspectivePlayerId"] = "seat-b"
-        self.assertNotEqual(first[:40], local_observation_input(other)[:40])
-        wrapped = {"format": "argentum-seat-sparse-cards-v1", "cardDefaults": {"tapped": False}, "observation": obs}
-        self.assertEqual(json.loads(local_observation_input(wrapped)), wrapped)
 
 
 if __name__ == "__main__":

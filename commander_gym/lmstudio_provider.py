@@ -38,13 +38,12 @@ class LMStudioConfig:
     max_attempts: int = 2
     provider: str = "lmstudio"
     compact_observation: bool = False
-    stable_prompt_layout: bool = False
     stream: bool = False
 
     def __post_init__(self):
         if self.provider != "lmstudio":
             raise ValueError("local configuration requires provider lmstudio")
-        for name in ("compact_observation", "stable_prompt_layout", "stream"):
+        for name in ("compact_observation", "stream"):
             if type(getattr(self, name)) is not bool:
                 raise ValueError(f"{name} must be boolean")
         try:

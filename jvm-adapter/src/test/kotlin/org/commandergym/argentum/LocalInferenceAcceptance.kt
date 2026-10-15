@@ -11,6 +11,7 @@ import com.wingedsheep.engine.core.SubmitDecision
 import com.wingedsheep.gameserver.config.GameBeansConfig
 import com.wingedsheep.gameserver.config.GameProperties
 import com.wingedsheep.gameserver.protocol.ServerMessage
+import com.wingedsheep.gameserver.persistence.restoreGameSession
 import com.wingedsheep.gameserver.persistence.toPersistent
 import com.wingedsheep.gameserver.persistence.persistenceJson
 import com.wingedsheep.gameserver.persistence.dto.PersistentGameSession
@@ -140,17 +141,13 @@ fun main() {
         Files.writeString(snapshot, persistenceJson.encodeToString(PersistentGameSession.serializer(), session.toPersistent(null)))
         Files.setPosixFilePermissions(snapshot, java.nio.file.attribute.PosixFilePermissions.fromString("rw-------"))
         val saved = persistenceJson.decodeFromString(PersistentGameSession.serializer(), Files.readString(snapshot))
-        val restored = GameSession(sessionId=gameId, cardRegistry=registry, evidenceSink=null)
-        restored.restoreFromPersistence(saved.gameState,
-            saved.deckLists.mapKeys { EntityId(it.key) },
-            saved.gameLogs.mapKeys { EntityId(it.key) }.mapValues { it.value.toMutableList() },
-            saved.lastProcessedMessageId.mapKeys { EntityId(it.key) },
-            sideboardLists=saved.sideboards.mapKeys { EntityId(it.key) },
-            seatNames=saved.seatNames.mapKeys { EntityId(it.key) })
+        // The public native restorer uses the recording system property. This isolated
+        // fixture has no concurrent callbacks; detach recording only during restoration.
+        val recordingProperty = System.clearProperty("game.recording.root")
+        val restored = try { restoreGameSession(saved, registry).first }
+            finally { recordingProperty?.let { System.setProperty("game.recording.root", it) } }
         check(restored.isGameOver() && restored.getStateSnapshot() == session.getStateSnapshot()) { "Terminal native state restore mismatch" }
-        check(restored.getDeckListsForPersistence() == session.getDeckListsForPersistence())
-        check(restored.getLogsForPersistence() == session.getLogsForPersistence())
-        check(restored.getSeatNamesForPersistence() == session.getSeatNamesForPersistence())
+        check(restored.toPersistent(null) == saved) { "Native persisted session restore mismatch" }
         restoreVerified = true
         summary("native-terminal")
     } catch (error: Throwable) {

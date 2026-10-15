@@ -17,7 +17,6 @@ from typing import Any, Mapping
 
 from .lmstudio_provider import LMStudioConfig, LMStudioError, LMStudioTransport, require_loaded_model
 from .local_callback_context import current_cancel
-from .local_prompt_layout import local_observation_input
 from .observation_projection import compact_seat_observation
 from .openai_responses_pilot import (
     OpenAIResponsesPilot, OpenAIResponsesPilotError, _DEFAULT_INSTRUCTIONS,
@@ -210,8 +209,7 @@ class LMStudioPilot:
                 "fields or legal choices are omitted. Use semanticId from observation.legalActions."
             )
         instructions += "\nThe current native parameterSpec and response schema define all allowed fields, including additional cost payments."
-        base_input = (local_observation_input(model_observation) if self.config.stable_prompt_layout
-                      else json.dumps(model_observation, sort_keys=True, separators=(",", ":")))
+        base_input = json.dumps(model_observation, sort_keys=True, separators=(",", ":"))
         request = {
             "model": self.config.model,
             "messages": [{"role": "system", "content": instructions}, {"role": "user", "content": base_input}],
