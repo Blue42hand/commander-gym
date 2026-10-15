@@ -20,11 +20,38 @@ from .openai_responses_pilot import (
     OpenAIResponsesPilot, OpenAIResponsesPilotError, _DEFAULT_INSTRUCTIONS,
     _native_action_format, _native_decision_format, _without_live_routing,
 )
-from .pilot import PilotChoice, _require_observation
+from .pilot import PilotChoice, PilotContractError, _require_observation, validate_pilot_choice
 
 
 class LMStudioPilotError(OpenAIResponsesPilotError):
     """Uses the existing failure-receipt contract, carrying provider=lmstudio."""
+
+
+def _local_native_format(observation: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Compose existing native schemas without hiding either payment channel.
+
+    The OpenAI builders intentionally use JSON mode for mixed payment windows.
+    llmster needs a constrained union instead. Builder-only views isolate the two
+    branches; the model and final validator still receive the unchanged live offer.
+    """
+    pending = observation.get("pendingDecision")
+    spec = pending.get("responseSpec") if isinstance(pending, Mapping) else None
+    if (isinstance(pending, Mapping) and pending.get("requiresStructuredResponse") is True
+        and isinstance(spec, Mapping) and spec.get("responseType") == "ManaSourcesSelectedResponse"):
+        legal = observation.get("legalActions")
+        if not isinstance(legal, list) or any(not isinstance(action, Mapping) for action in legal):
+            return None
+        mana_actions = [action for action in legal
+                        if action.get("kind") == "ActivateAbility" and action.get("isManaAbility") is True]
+        if mana_actions:
+            decision_format = _native_decision_format({**observation, "legalActions": []})
+            action_format = _native_action_format({**observation, "pendingDecision": None,
+                                                  "legalActions": mana_actions})
+            if decision_format is None or action_format is None:
+                return None  # Never silently drop an unrepresentable native channel.
+            return {"type": "json_schema", "name": "commander_gym_native_mixed_payment", "strict": False,
+                    "schema": {"type": "object", "anyOf": [action_format["schema"], decision_format["schema"]]}}
+    return _native_decision_format(observation) or _native_action_format(observation)
 
 
 def _schema_check(schema, value=None, *, validate=False):
@@ -143,7 +170,7 @@ class LMStudioPilot:
         started = monotonic()
         deadline = started + self.config.timeout_seconds
         attempts = []
-        schema_format = _native_decision_format(observation) or _native_action_format(observation)
+        schema_format = _local_native_format(observation)
         if schema_format is None:
             raise LMStudioPilotError("llmster requires a supported native JSON schema; no JSON-mode downgrade")
         try:
@@ -151,8 +178,16 @@ class LMStudioPilot:
         except LMStudioError as exc:
             raise LMStudioPilotError(str(exc)) from exc
         instructions = _DEFAULT_INSTRUCTIONS
-        if schema_format["name"] == "commander_gym_native_action":
+        if schema_format["name"] in {"commander_gym_native_action", "commander_gym_native_mixed_payment"}:
             instructions += "\nUse the schema's nested choice object containing semanticId and params."
+        if schema_format["name"] == "commander_gym_native_mixed_payment":
+            instructions += (
+                "\nFor this payment window, choose either an explicitly offered native mana ability "
+                "via channel action and nested choice, or the pending native payment response via "
+                "channel decision and response. Use only availableSources for selectedSources. "
+                "If canAutoPayNow is false, do not use autoPay. If autoPay is true, selectedSources "
+                "must be empty. CancelDecisionResponse is allowed only when the schema permits it."
+            )
         base_input = json.dumps(_without_live_routing(observation), sort_keys=True, separators=(",", ":"))
         request = {
             "model": self.config.model,
@@ -225,7 +260,8 @@ class LMStudioPilot:
                 choice = validator._choice_from_response(
                     {"status": "completed", "output_text": content}, observation, retry_count=index,
                 )
-            except (LMStudioError, OpenAIResponsesPilotError) as exc:
+                choice = validate_pilot_choice(choice, observation)
+            except (LMStudioError, OpenAIResponsesPilotError, PilotContractError) as exc:
                 snapshot["validationError"] = str(exc)
                 if str(exc) in {"cancelled", "deadline_exceeded"}:
                     fail(str(exc))
