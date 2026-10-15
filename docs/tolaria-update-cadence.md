@@ -73,3 +73,40 @@ widen workflow permissions. Prepare and review a narrowly scoped operator-owned
 fetch/publication invocation before enabling it; transfer only immutable data
 through the existing validation boundary. Until that boundary, full exact-source
 qualification and the release-owner handoff are complete, promotion stays disabled.
+
+Authenticated source collection
+-------------------------------
+
+`python -m commander_gym.release_source_evidence --policy POLICY.json
+--policy-sha256 REVIEWED_SHA256` resolves Gym/private main once and derives engine
+from Gym's reviewed matched-artifact workflow. The engine may lag its main; it must
+be an ancestor with its own successful final-main push checks. A newer unrelated
+engine main is never substituted. New or changed workflows hold until reviewed.
+
+The policy pins immutable GitHub repository/workflow IDs and SHA-256 hashes of
+reviewed workflow bytes. Only the single literal engine checkout pin is normalized
+in Gym's workflow hash; all other commands and checkout semantics remain fixed.
+The policy digest is an independently reviewed input, not automatically trusted
+because its JSON and checksum happen to sit together. Keep the policy in existing private deployment evidence; it can contain private
+repository/workflow metadata and is not a public fixture. The collector uses existing `gh` access to
+fixed github.com GET endpoints, never executes downloaded source, and verifies the
+latest run, exact attempt, complete job list, run stability, required jobs and
+non-expired matched artifact identity/digest. A newer failed/pending run, truncated
+response or old-attempt artifact is a hold, not permission to select an older run.
+
+Output is authenticated source metadata, not a release approval. It still requires
+artifact byte/inventory verification, independent source review, exact private
+native catalog validation, fresh runtime qualification and owner approval. Keep
+outputs private because they name the private repository and candidate lineage.
+No scheduler, credential change, provider call or production operation is added.
+
+`python -m commander_gym.release_artifact_evidence --archive DOWNLOADED.zip
+--candidate SOURCE_EVIDENCE.json --candidate-sha256 REVIEWED_SHA256` verifies the
+archive offline. It checks the authenticated download digest, bounded ZIP paths and
+entry types, complete matched inventory, exact file digests and source/receipt
+identities. It never extracts or executes archive content. Its success establishes
+byte provenance, not runtime behavior or activation authority. Run qualification
+in the existing isolated environment without GitHub credentials, then retain the
+verified artifacts under the existing deployment custody contract. Source evidence
+is a snapshot: recollect run/attempt and artifact freshness before a future use;
+never treat a cached success as a permanent authorization.
