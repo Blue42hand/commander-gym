@@ -1,11 +1,43 @@
-# Console live spectator (headless)
+# Direct Linux console live spectator
 
-This is a **direct Linux terminal/TTY display**, not a web application. It needs no desktop environment, browser, X11, or Wayland.
+No desktop environment, browser, or web spectator is used. The display connects to
+Argentum's existing public spectator WebSocket protocol.
 
-Run: `python3 -m commander_gym.console_spectator --input /path/to/public-spectator.ndjson`
+## Install
 
-The input must be newline-delimited **Argentum SpectatorStateUpdate** messages, supplied by an authenticated spectator client/bridge. The console never consumes seat-masked policy provenance because that can contain private hands. It shows the published roster, first two legacy player summaries, visible battlefield names, phase, active/priority seats and changes.
+```sh
+python3 -m pip install websocket-client
+python3 -m commander_gym.console_spectator --server ws://127.0.0.1:8080/game --game GAME_SESSION_ID
+```
 
-**Integration still needed:** an authenticated Argentum WebSocket spectator bridge that writes these public snapshots to the console process. The existing server SpectatingHandler emits SpectatorStateUpdate, but this module deliberately does not invent authentication/session handshake details. It is a working console renderer and NDJSON reader, not yet an end-to-end live connection.
+Use the actual Argentum game-server address and active game session ID.
+The existing `/game` WebSocket endpoint accepts an anonymous `connect` message,
+returns `connected`, then accepts `spectateGame`. The console subscribes,
+renders each matching `spectatorStateUpdate` snapshot, and reconnects on
+transport loss. An explicit Argentum error fails visibly rather than silently
+pretending the game is available.
 
-Use a Linux virtual terminal for direct display, for example `openvt -c 2 -- python3 -m commander_gym.console_spectator --input /path/to/public-spectator.ndjson` (requires console permissions). No web spectator is included.
+For the built-in physical monitor, run from an existing Linux virtual console or
+launch it using `openvt`. The process writes ANSI terminal text directly to
+stdout; it needs neither X11 nor Wayland. Its WebSocket client is the only extra
+Python runtime dependency.
+
+## Privacy and boundaries
+
+Only spectator updates are accepted for rendering. Ordinary player state
+updates and pilot provenance are ignored; spectators never receive private hands.
+The display is read-only and does not submit game actions. The server-supplied
+public data determines which cards and fields can be shown.
+
+Currently the rich battlefield summary uses the server's first two legacy
+spectator seats; additional players are shown in the published seat roster.
+An extended 4-player board view can use the already-public `gameState` without
+changing the native game server.
+
+## Limitations
+
+This feature still requires the user or a launcher to supply an active
+`gameSessionId`. Automatic game discovery and switching between simultaneous
+matches have not been implemented. The transport tests simulate Argentum's
+protocol; physical-console deployment and live end-to-end testing on the server
+are separate verification steps.
