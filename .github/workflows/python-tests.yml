@@ -46,6 +46,22 @@ jobs:
           done
           docker exec -e PYTHONPATH=/opt/fixture:/opt/fixture/tests -e REQUIRE_SYSTEMD_CREDENTIALS=1 "$container" \
             python3 -B -m unittest discover -s /opt/fixture/tests -p test_manual_runtime_credentials_systemd.py -v
+  release-install:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build offline release installation fixture
+        run: docker build -f tests/release-install.Dockerfile -t release-install-fixture .
+      - name: Exercise clean install, reboot admission, busy updates and rollback
+        run: |
+          container=$(docker run -d --privileged --cgroupns=private --network=none --tmpfs /run --tmpfs /run/lock release-install-fixture)
+          trap 'docker logs "$container"; docker rm -f "$container"' EXIT
+          for attempt in $(seq 1 30); do
+            if docker exec "$container" systemctl list-units >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          docker exec -e PYTHONPATH=/opt/fixture:/opt/fixture/tests -e REQUIRE_RELEASE_INSTALL_SYSTEMD=1 "$container" \
+            python3 -B -m unittest discover -s /opt/fixture/tests -p test_runtime_install_systemd.py -v
   python:
     runs-on: ubuntu-latest
     steps:
@@ -72,8 +88,8 @@ jobs:
       - uses: actions/checkout@v6
         with:
           repository: Blue42hand/argentum-engine
-          # Exact reviewed Redis QA native merge; source qualification only.
-          ref: c56d1b336d024998cf193101bb12c50026df7537
+          # Pinned native candidate for the human-versus-Luna milestone.
+          ref: f04185e4ab38e42508b1fcf88a598d0e911d3c2a
           path: argentum-engine
       - uses: actions/setup-java@v5
         with:
@@ -116,6 +132,17 @@ jobs:
           cp "$server_jar" matched-release/server.jar
           cp commander-gym/jvm-adapter/build/libs/commander-gym-argentum-adapter.jar matched-release/adapter.jar
           cp manual-luna-release.json canonical-v2-fixture.json matched-release/
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Package the frontend from the same engine commit
+        run: |
+          npm ci --prefix argentum-engine/web-client
+          npm run build --prefix argentum-engine/web-client
+          cp -r argentum-engine/web-client/dist matched-release/frontend
+          python commander-gym/scripts/matched_release_manifest.py \
+            --root matched-release --engine-sha "$(git -C argentum-engine rev-parse HEAD)" \
+            --gym-sha "$(git -C commander-gym rev-parse HEAD)"
       - name: Preserve matched source qualification artifacts
         uses: actions/upload-artifact@v6
         with:

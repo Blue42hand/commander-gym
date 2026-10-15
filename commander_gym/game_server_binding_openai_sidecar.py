@@ -179,6 +179,7 @@ class BindingOpenAIGameServerConfig:
     prefix_guard: PrefixGuard | None = None
     human_gui_guard: HumanGuiSessionGuard | None = None
     manual_uncapped: bool = False
+    live_catalog_root: Path | None = None
 
     def __post_init__(self) -> None:
         if type(self.manual_uncapped) is not bool:
@@ -298,6 +299,8 @@ def binding_openai_game_server_config_from_environment(
         ),
         cache_friendly_history=cache_value == "true",
         manual_uncapped=manual_uncapped,
+        live_catalog_root=(Path(environment['COMMANDER_GYM_LIVE_CATALOG_ROOT']).expanduser().resolve()
+                           if environment.get('COMMANDER_GYM_LIVE_CATALOG_ROOT') else None),
         prefix_guard=guard,
         human_gui_guard=gui_guard,
     )
@@ -671,6 +674,10 @@ def build_binding_openai_game_server_sidecar(
             pilot_factory=pilot_factory,
         )
         registry = GameServerBindingRegistry(loaded.resolver, loaded.binding_ids)
+        if config.live_catalog_root is not None:
+            from .live_binding_catalog import LiveBindingRegistry
+            registry = LiveBindingRegistry(config.live_catalog_root, pilot_factory=pilot_factory,
+                                           allowed_pilots=registry.pilot_fingerprints)
     except (BindingCatalogError, GameServerBindingError, PilotContractError) as exc:
         raise OpenAIGameServerSidecarConfigurationError(str(exc)) from exc
 
@@ -708,6 +715,8 @@ def build_binding_openai_game_server_sidecar(
         (sidecar.bind_host, sidecar.port),
         sidecar,
         profiles=registry.profile_payloads(),
+        profiles_supplier=(registry.profile_payloads if config.live_catalog_root is not None else None),
+        profile_exists=(registry.contains if config.live_catalog_root is not None else None),
         profile_seat_factory=profile_seat_factory,
         callback_context=getattr(game_capture, "callback_context", None),
         game_profile_seat_factory=(None if game_capture is None else

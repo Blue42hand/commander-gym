@@ -35,6 +35,29 @@ class ManualRuntimeHostTests(unittest.TestCase):
                       'activeGames': 0, 'pendingActivities': 0, 'pendingRecordWrites': 0, 'inFlightAdmissions': 0,
                       'acceptingNewGames': False, 'drainAcknowledged': True, 'recordingDrainComplete': True}
 
+    def test_failed_candidate_without_socket_can_stop_before_inventory_barrier(self):
+        candidate = SimpleNamespace(runtime_id='a'*64)
+        self.host.pending = {'previous': self.snapshot, 'candidate': candidate, 'stopContext': {'qa': True}}
+        self.host.current = Mock(return_value=self.snapshot)
+        self.host.base.status.side_effect = FileNotFoundError()
+        self.host._clear_gate = Mock(); self.host._catalog_timer = Mock(); self.host._service = Mock()
+        with patch.object(host_module, 'root_json', return_value={'phase': 'activation-intent'}):
+            self.host.stop_for_rollback()
+        self.assertEqual(self.host._service.call_count, len(host_module.UNITS))
+        self.assertEqual(self.host.pending['stopContext'], {'qa': True})
+
+    def test_candidate_admission_or_commit_prevents_rollback_stop(self):
+        self.host.pending = {'previous': self.snapshot, 'candidate': SimpleNamespace(runtime_id='a'*64), 'stopContext': {}}
+        self.host.current = Mock(return_value=self.snapshot)
+        self.host._service = Mock()
+        for record, state in [({'phase':'completed'}, self.state),
+                              ({'phase':'activation-intent'}, {**self.state, 'acceptingNewGames':True}),
+                              ({'phase':'activation-intent'}, {**self.state, 'activeGames':1})]:
+            self.host.base.status.return_value = state
+            with patch.object(host_module, 'root_json', return_value=record), self.assertRaises(ManualRuntimeError):
+                self.host.stop_for_rollback()
+            self.host._service.assert_not_called()
+
     def test_previous_verification_never_calls_mutating_storage_helper(self):
         self.host.native.current_release.return_value = (Path('/qa/release'), {'releaseId': self.snapshot.runtime_id})
         with patch.object(host_module.os, 'statvfs', return_value=SimpleNamespace(f_bavail=40*1024**3, f_frsize=1)):
@@ -53,6 +76,72 @@ class ManualRuntimeHostTests(unittest.TestCase):
         self.host.base.drain.return_value = {'recordingDrainComplete': False}
         self.host.base.status.return_value = self.state
         self.assertEqual(self.host.drain('qa-boot'), self.state)
+
+    def test_readiness_waits_for_socket_and_recording_recovery(self):
+        recovering = {**self.state, 'recoveryComplete': False}
+        self.host.base.status.side_effect = [FileNotFoundError(), recovering, self.state]
+        with patch.object(host_module.time, 'time', return_value=1000), patch.object(host_module.time, 'sleep') as sleep:
+            self.assertEqual(self.host._wait_ready(self.snapshot, closed=True), self.state)
+        self.assertEqual(sleep.call_count, 2)
+        self.host.base.rpc.assert_not_called()
+
+    def test_readiness_never_accepts_wrong_release_or_open_admission(self):
+        self.host.base.status.side_effect = [
+            {**self.state, 'releaseId': '9'*64},
+            {**self.state, 'acceptingNewGames': True},
+        ]
+        with patch.object(host_module.time, 'time', return_value=1000), patch.object(host_module.time, 'sleep'), patch.object(host_module.time, 'monotonic', side_effect=[0, 1, 2, 601]):
+            with self.assertRaisesRegex(ManualRuntimeError, 'runtime_readiness_timeout'):
+                self.host._wait_ready(self.snapshot, closed=True)
+        self.host.base.rpc.assert_not_called()
+
+    def test_idle_startup_establishes_drain_then_waits_for_recorder_barrier(self):
+        initial = {**self.state, 'drainAcknowledged': False, 'recordingDrainComplete': False}
+        waiting = {**self.state, 'recordingDrainComplete': False}
+        self.host.base.status.side_effect = [initial, waiting, self.state]
+        with patch.object(host_module.time, 'time', return_value=1000), patch.object(host_module.time, 'sleep'):
+            self.assertEqual(self.host._wait_ready(self.snapshot, closed=True), self.state)
+        self.host.base.rpc.assert_called_once_with('drain', bootId='qa-boot')
+
+    def test_startup_never_drains_a_busy_or_unhealthy_server(self):
+        for changes in ({'activeGames': 1}, {'pendingActivities': 1}, {'pendingRecordWrites': 1},
+                        {'recordingHealthy': False}, {'releaseId': '9'*64}):
+            with self.subTest(changes=changes):
+                self.host.base.status.return_value = {**self.state, 'drainAcknowledged': False, **changes}
+                with patch.object(host_module.time, 'time', return_value=1000), patch.object(host_module.time, 'sleep'), patch.object(host_module.time, 'monotonic', side_effect=[0, 1, 601]):
+                    with self.assertRaisesRegex(ManualRuntimeError, 'runtime_readiness_timeout'):
+                        self.host._wait_ready(self.snapshot, closed=True)
+                self.host.base.rpc.assert_not_called()
+
+    def admission_host(self, state):
+        snapshot = RuntimeSnapshot(self.snapshot.runtime_id, 1, 'manual-luna-v1',
+                                   self.snapshot.engine_sha, self.snapshot.gym_sha, 1)
+        self.host.current = Mock(return_value=snapshot)
+        self.host.verify_snapshot = Mock()
+        self.host.assert_no_unfinished_transaction = Mock()
+        self.host.base.status.return_value = state
+        self.host.resume = Mock()
+
+    def test_health_recovery_reopens_same_release_with_existing_game_and_lobby(self):
+        self.admission_host({**self.state, 'activeGames': 1, 'pendingActivities': 2,
+            'pendingRecordWrites': 1, 'drainAcknowledged': False, 'drainId': '', 'recordingDrainComplete': False})
+        with patch.object(host_module.time, 'time', return_value=1000):
+            self.assertEqual(self.host.admit_current()['state'], 'admitted-current')
+        self.host.resume.assert_called_once_with('qa-boot', self.snapshot.runtime_id)
+        self.host.base.rpc.assert_not_called()
+
+    def test_open_active_game_does_not_wait_for_idle(self):
+        self.admission_host({**self.state, 'activeGames': 1, 'acceptingNewGames': True})
+        with patch.object(host_module.time, 'time', return_value=1000):
+            self.assertEqual(self.host.admit_current()['state'], 'already-open')
+        self.host.resume.assert_not_called()
+
+    def test_admission_does_not_override_explicit_busy_drain(self):
+        self.admission_host({**self.state, 'activeGames': 1})
+        with patch.object(host_module.time, 'time', return_value=1000):
+            with self.assertRaisesRegex(ManualRuntimeError, 'not_idle'):
+                self.host.admit_current()
+        self.host.resume.assert_not_called()
 
     def test_stop_proof_rejects_previous_boot_runtime_nonce_and_boolean_counts(self):
         context = stop_context(self.snapshot, self.state, {'original.jsonl': 'a'*64}, nonce='1'*32, now=1000)
@@ -142,3 +231,21 @@ class ManualRuntimeHostTests(unittest.TestCase):
         with patch.object(host_module,'TARGETS',targets):
             with self.assertRaisesRegex(ManualRuntimeError,'service_config_incomplete'):
                 self.host._select_files(runtime)
+
+    def test_start_budget_reset_is_limited_to_managed_services(self):
+        with patch.object(host_module.subprocess, 'run', return_value=Mock(stdout='loaded\n',returncode=0)) as command:
+            for unit in (*host_module.UNITS, 'argentum-manual-preflight.service', 'argentum-binding-catalog.service'):
+                self.host._service('reset-failed', unit)
+            self.assertEqual(command.call_count, 2*(len(host_module.UNITS)+2))
+            command.reset_mock()
+            for verb, unit in [('reset-failed','ssh.service'), ('start','argentum-binding-catalog.service'), ('restart','argentum-play.service')]:
+                with self.assertRaisesRegex(ManualRuntimeError,'fixed_service_operation'):
+                    self.host._service(verb,unit)
+            command.assert_not_called()
+
+    def test_collected_inactive_service_needs_no_start_budget_reset(self):
+        with patch.object(host_module.subprocess, 'run', side_effect=[Mock(stdout='loaded\n'), Mock(returncode=1)]), patch.object(host_module.subprocess, 'check_output', return_value='ActiveState=inactive\nResult=success\n'):
+            self.host._service('reset-failed', 'argentum-web.service')
+        with patch.object(host_module.subprocess, 'run', side_effect=[Mock(stdout='loaded\n'), Mock(returncode=1)]), patch.object(host_module.subprocess, 'check_output', return_value='ActiveState=failed\nResult=start-limit-hit\n'):
+            with self.assertRaisesRegex(ManualRuntimeError, 'service_reset_failed'):
+                self.host._service('reset-failed', 'argentum-web.service')

@@ -2,6 +2,9 @@ package org.commandergym.argentum
 
 import kotlinx.serialization.json.*
 import jdk.net.ExtendedSocketOptions
+import java.io.IOException
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.TimeoutException
 import java.net.StandardProtocolFamily
 import java.net.UnixDomainSocketAddress
 import java.nio.ByteBuffer
@@ -15,10 +18,23 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 /** Native identity registers masked callbacks; no pilot, journal or finalizer runs here. */
-class RecorderCallbackClient(private val path: Path, private val deadline: Duration = Duration.ofSeconds(3)) {
+class RecorderCallbackClient(private val path: Path, private val deadline: Duration = Duration.ofSeconds(10)) {
     private val maxBytes = 4 * 1024 * 1024
 
     fun exchange(message: JsonObject): String {
+        // Retrying the exact durable operation is safe even if its first reply was lost.
+        // Never retry policy HTTP or select a new callback identity here.
+        repeat(2) { attempt ->
+            try { return exchangeOnce(message) }
+            catch (error: TimeoutException) { if (attempt == 1) throw error }
+            catch (error: ExecutionException) {
+                if (error.cause !is IOException || attempt == 1) throw error
+            }
+        }
+        error("Recorder acknowledgment unavailable")
+    }
+
+    private fun exchangeOnce(message: JsonObject): String {
         // The 0600 native socket and owner-controlled parent exclude sidecar UID.
         val absolute = path.toAbsolutePath()
         require(!Files.isSymbolicLink(absolute)) { "Recorder socket must not be a symlink" }
@@ -49,7 +65,8 @@ class RecorderCallbackClient(private val path: Path, private val deadline: Durat
                 while (output.hasRemaining()) channel.write(output)
                 val buffer = ByteBuffer.allocate(4096)
                 while (true) {
-                    require(channel.read(buffer) > 0 && buffer.hasRemaining()) { "Invalid recorder response framing" }
+                    if (channel.read(buffer) < 0) throw IOException("Recorder disconnected before acknowledgment")
+                    require(buffer.hasRemaining()) { "Invalid recorder response framing" }
                     val bytes = buffer.array().copyOf(buffer.position())
                     if (bytes.contains(10.toByte())) {
                         require(bytes.last() == 10.toByte() && bytes.count { it == 10.toByte() } == 1) { "Invalid recorder response framing" }

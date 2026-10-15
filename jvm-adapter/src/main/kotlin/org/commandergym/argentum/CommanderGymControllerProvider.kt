@@ -49,12 +49,19 @@ class CommanderGymControllerProvider(
     private val http: HttpClient = HttpClient.newBuilder().connectTimeout(timeout).build(),
     private val requireHumanParticipant: Boolean = false,
     private val recorder: RecorderCallbackClient? = null,
+    private val catalogRefreshInterval: Duration = Duration.ofSeconds(5),
 ) : AiControllerProvider {
     override val mode: String = "commander-gym"
     override val supportsDefaultController: Boolean get() = !requireHumanParticipant
     private val base: String
-    private val profileConfigs: Map<String, BindingProfileConfig>
+    @Volatile private var profileConfigs: Map<String, BindingProfileConfig> = emptyMap()
+    @Volatile private var lastCatalogCheck = 0L
+    private val catalogLock = Any()
     override val profiles: List<AiControllerProfile>
+        get() {
+            refreshProfiles()
+            return profileConfigs.values.map(::profileView)
+        }
 
     init {
         require(endpoint.scheme == "http" && endpoint.host in setOf("127.0.0.1", "localhost", "::1")) {
@@ -64,22 +71,44 @@ class CommanderGymControllerProvider(
         require(token.isNotBlank()) { "Commander Gym policy token must not be blank" }
         base = endpoint.toString().trimEnd('/')
 
+        require(!catalogRefreshInterval.isNegative) { "Invalid catalog refresh interval" }
+        profileConfigs = loadProfiles()
+        lastCatalogCheck = System.nanoTime()
+    }
+
+    private fun profileView(profile: BindingProfileConfig) = AiControllerProfile(
+        id = profile.id,
+        displayName = if (requireHumanParticipant) "Luna — ${profile.displayName}" else profile.displayName,
+        description = profile.description,
+        deckSpec = AiDeckSpec.Fixed(profile.deckList, profile.deckLabel, profile.commander),
+    )
+
+    private fun loadProfiles(): Map<String, BindingProfileConfig> {
         val loaded = fetchProfiles()
-        require(loaded.map { it.id }.toSet().size == loaded.size) {
-            "Commander Gym sidecar advertised duplicate Binding profile ids"
+        require(loaded.size <= 256 && loaded.map { it.id }.toSet().size == loaded.size) {
+            "Commander Gym catalog has too many or duplicate profiles"
         }
-        profileConfigs = loaded.associateBy { it.id }
-        profiles = loaded.map { profile ->
-            AiControllerProfile(
-                id = profile.id,
-                displayName = if (requireHumanParticipant) "Luna — ${profile.displayName}" else profile.displayName,
-                description = profile.description,
-                deckSpec = AiDeckSpec.Fixed(
-                    deckList = profile.deckList,
-                    label = profile.deckLabel,
-                    commander = profile.commander,
-                ),
-            )
+        return loaded.associateBy { it.id }
+    }
+
+    private fun refreshProfiles() {
+        if (System.nanoTime() - lastCatalogCheck < catalogRefreshInterval.toNanos()) return
+        synchronized(catalogLock) {
+            if (System.nanoTime() - lastCatalogCheck < catalogRefreshInterval.toNanos()) return
+            lastCatalogCheck = System.nanoTime()
+            try {
+                // Publish only a fully validated map. Existing controllers already
+                // hold their exact immutable profile/deck and do not consult this map.
+                profileConfigs = loadProfiles()
+            } catch (_: java.io.IOException) {
+                // Keep the last valid catalog during a sidecar outage.
+            } catch (_: IllegalArgumentException) {
+                // A malformed update must not replace working selections.
+            } catch (_: IllegalStateException) {
+                // Missing required catalog fields also preserve the last good map.
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+            }
         }
     }
 
@@ -123,7 +152,7 @@ class CommanderGymControllerProvider(
 
     private fun fetchProfiles(): List<BindingProfileConfig> {
         val request = HttpRequest.newBuilder(URI.create("$base/v1/controller-profiles"))
-            .timeout(timeout)
+            .timeout(minOf(timeout, Duration.ofSeconds(3)))
             .header("Authorization", "Bearer $token")
             .GET()
             .build()
@@ -131,6 +160,7 @@ class CommanderGymControllerProvider(
         require(response.statusCode() == 200) {
             "Commander Gym profile catalog failed with HTTP ${response.statusCode()}"
         }
+        require(response.body().length <= 4 * 1024 * 1024) { "Commander Gym catalog exceeds limit" }
         val root = Json.parseToJsonElement(response.body()).jsonObject
         val entries = root["profiles"]?.jsonArray
             ?: error("Commander Gym profile catalog is missing profiles")

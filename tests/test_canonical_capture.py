@@ -20,7 +20,7 @@ def context(observation, cid):
 
 
 class CanonicalCaptureTests(unittest.TestCase):
-    def fixture(self, variant=None, *, recovery=False):
+    def fixture(self, variant=None, *, recovery=False, state_padding=""):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
@@ -85,6 +85,8 @@ class CanonicalCaptureTests(unittest.TestCase):
                 if variant == 'callback_before_resume':
                     add('seat_observation', {'unexpected': True}, 'seat-a')
                 add('callback_resume_state', {'version': 2, 'restoredStateDigest': 'f'*64 if variant == 'bad_resume' else native_state})
+            if state_padding and kind == 'chooseAction':
+                state = {**state, 'publicFixtureText': state_padding}
             before = {'type': 'GameServerSeat', 'callbackKind': kind, 'state': state, 'legalActions': legal,
                       'pendingDecision': pending, 'recentGameLog': [], 'perspectivePlayerId': 'seat-a', 'agentToAct': 'seat-a', 'terminated': False}
             evidence = context(before, f'synthetic-cid-{index}')
@@ -137,6 +139,48 @@ class CanonicalCaptureTests(unittest.TestCase):
             manifest = verify_finalized_manifest(game)
             self.assertFalse(manifest['recording_complete'])
             self.assertIn('canonical_v2_callback_or_lifecycle_unavailable', manifest['gaps'])
+
+    def test_join_budget_remains_incomplete(self):
+        with patch('commander_gym.canonical_capture.MAX_CANONICAL_JOIN_BYTES', 1):
+            capture, game = self.fixture()
+            capture.scan()
+            manifest = verify_finalized_manifest(game)
+            self.assertFalse(manifest['recording_complete'])
+            self.assertIn('canonical_v2_callback_or_lifecycle_unavailable', manifest['gaps'])
+
+    def test_full_export_over_old_limit_preserves_all_callbacks(self):
+        from commander_gym.game_journal import _json
+        capture, game = self.fixture(state_padding='visible ' * (9 * 1024 * 1024 // 8))
+        capture.scan()
+        manifest = verify_finalized_manifest(game)
+        self.assertTrue(manifest['recording_complete'], manifest['gaps'])
+        envelope = next(row['payload']['envelope'] for row in inspect_journal(game)['rows']
+                        if row['kind'] == 'raw_evidence')
+        self.assertGreater(len(_json(envelope)), 16 * 1024 * 1024)
+        self.assertEqual(len(envelope['decisions']), 4)
+        self.assertEqual([d['sequence_index'] for d in envelope['decisions']], list(range(4)))
+
+    def test_disk_join_excludes_administrative_transition_state(self):
+        from commander_gym.record_codec import encode_record
+        def checked_encode(raw):
+            self.assertNotIn(b'ADMIN-PRIVATE-MARKER', raw)
+            return encode_record(raw)
+        capture, game = self.fixture()
+        with patch('commander_gym.canonical_capture.encode_record', side_effect=checked_encode):
+            capture.scan()
+        self.assertTrue(verify_finalized_manifest(game)['recording_complete'])
+
+    def test_output_size_counts_utf8_and_cancellation(self):
+        from commander_gym.canonical_capture import _bounded_json_size
+        from commander_gym.game_journal import _json, JournalError
+        from commander_gym.record_codec import ScanCancelled
+        value = {'text': 'é🌳' * 100}
+        size = len(_json(value))
+        self.assertEqual(_bounded_json_size(value, size, cancel=None), size)
+        with self.assertRaises(JournalError):
+            _bounded_json_size(value, size - 1, cancel=None)
+        with self.assertRaises(ScanCancelled):
+            _bounded_json_size(value, size, cancel=lambda: True)
 
     def test_failed_stale_cancelled_missing_unmatched_remain_incomplete(self):
         for variant in ('failed', 'stale', 'cancelled', 'missing_result', 'unmatched', 'bad_resume', 'duplicate_resume_checkpoint', 'callback_before_resume'):

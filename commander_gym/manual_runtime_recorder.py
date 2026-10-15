@@ -20,10 +20,17 @@ def run_recorder(runtime, *, sidecar_gid: int, stopping, capture_factory=None,
     catalog = Path(profile['artifacts']['catalog']['root'])
     root = Path(profile['paths']['recordingRoot'])
     ipc = Path(profile['paths']['recorderSocket']).parent
-    capture = capture_factory(root, recorder_pins(runtime), acknowledged_incomplete_registry=Path(profile['paths']['registryPath']))
+    capture = capture_factory(root, recorder_pins(runtime), acknowledged_incomplete_registry=Path(profile['paths']['registryPath']),
+                              background_finalization=True)
     reporter, bridge = None, None
     try:
         registry = registry_factory(catalog / profile['catalog']['roster'], catalog)
+        if 'liveCatalog' in profile:
+            from .live_binding_catalog import LiveBindingRegistry
+            from .recorder_bridge import _RecordingPilot
+            registry = LiveBindingRegistry(profile['liveCatalog']['snapshotRoot'],
+                pilot_factory=lambda pilot, binding: _RecordingPilot(pilot),
+                allowed_pilots=registry.pilot_fingerprints)
         bridge = bridge_factory(capture, registry, native_socket=ipc / 'native.sock', sidecar_socket=ipc / 'sidecar.sock',
                                 native_uid=profile['identities']['nativeUid'], sidecar_uid=profile['identities']['sidecarUid'], sidecar_gid=sidecar_gid)
         reporter = reporter_factory(capture, Path(profile['paths']['lifecycleSocket']))

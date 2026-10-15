@@ -25,6 +25,22 @@ class ManualRuntimeConfigTests(unittest.TestCase):
         self.assertIn('Group=commander-prod',units['units/argentum-recorder.conf'])
         self.assertIn('After=argentum-manual-preflight.service',units['units/argentum-recorder.conf'])
         self.assertIn('SendSIGKILL=no',units['units/argentum-luna-sidecar.service'])
+    def test_live_publisher_is_bounded_and_has_no_provider_credentials(self):
+        units=service_units(launcher_root='/srv/argentum-luna/artifacts/launcher/'+'a'*64,
+            dependency_root='/srv/argentum-luna/artifacts/dependencies/'+'b'*64,
+            python_relative='python/bin/python3.12',tailnet_only=True,
+            live_catalog={'checkoutRoot':'/srv/commander-bindings/checkout',
+                          'snapshotRoot':'/var/lib/commander-bindings','pollSeconds':5})
+        publisher=units['units/argentum-binding-catalog.service']
+        self.assertNotIn('LoadCredential=',publisher)
+        self.assertIn('IPAddressDeny=any',publisher)
+        self.assertIn('IPAddressAllow=127.0.0.1',publisher)
+        self.assertIn('TimeoutStartSec=60',publisher)
+        self.assertIn('/etc/argentum-luna/sidecar.token -/etc/argentum-play/commander-gym.sidecar.token',publisher)
+        self.assertIn('Requires=argentum-binding-catalog.service',units['units/argentum-recorder.service'])
+        self.assertIn('OnUnitInactiveSec=5',units['units/argentum-binding-catalog.timer'])
+        self.assertIn('Restart=on-failure',units['units/argentum-luna-sidecar.service'])
+
     def test_unsafe_template_input_is_rejected(self):
         with self.assertRaises(ManualRuntimeError):
             shared_https_nginx(frontend_root='/srv/current; injected',tailnet_origin='https://tailnet.example',lan_address='192.168.0.178',lan_subnet='0.0.0.0/0')
