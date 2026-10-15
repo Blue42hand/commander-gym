@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import signal
 import threading
+import time
 
 from commander_gym.deck_package import ArtifactRef
 from commander_gym.game_server_binding_lmstudio_sidecar import LocalBindingConfig, build_binding_lmstudio_sidecar, local_component_ref
@@ -16,6 +17,21 @@ from commander_gym.identity import Deck, Pilot, Binding
 from commander_gym.lmstudio_pilot import load_lmstudio_pilot
 from commander_gym.native_game_capture import NativeGameCapture
 from commander_gym.game_journal import verify_finalized_manifest
+
+
+def drain_capture(capture, *, timeout_seconds=120):
+    """Wait for the existing background finalizer before close requests cancellation."""
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        capture.scan()
+        health = capture.operational_metrics()
+        if capture.errors:
+            raise RuntimeError("local capture failed; preserve fixture evidence")
+        if health["pendingRecordWrites"] == 0:
+            return health
+        if time.monotonic() >= deadline:
+            raise TimeoutError("local recording drain budget exhausted")
+        time.sleep(.1)
 
 
 def main():
@@ -65,12 +81,13 @@ def main():
         stop.wait(budget + 120)  # Bounded startup/finalization allowance, never a persistent service.
     finally:
         server.shutdown(); server.server_close(); thread.join()
-        capture.scan()
-        health = capture.operational_metrics()
-        capture.close()
-        result = json.loads(Path(settings["resultPath"]).read_text())
-        if result.get("status") != "native-terminal" or result.get("terminalSnapshotRestoreVerified") is not True or capture.errors:
-            raise RuntimeError("local game or capture failed; preserve incomplete fixture evidence")
+        try:
+            result = json.loads(Path(settings["resultPath"]).read_text())
+            if result.get("status") != "native-terminal" or result.get("terminalSnapshotRestoreVerified") is not True:
+                raise RuntimeError("local game failed; preserve incomplete fixture evidence")
+            health = drain_capture(capture)
+        finally:
+            capture.close()
         manifest = verify_finalized_manifest(Path(settings["recordingRoot"]) / result["gameId"])
         if not manifest["recording_complete"] or health["pendingRecordWrites"]:
             raise RuntimeError("local native terminal has incomplete recording")
