@@ -90,15 +90,43 @@ def live(url: str, game_id: str, output) -> None:
         output.flush()
     watch(url, game_id, draw)
 
+def auto_live(url: str, output, lobby_id: str | None = None) -> None:
+    """Automatically follow available games on a headless Linux console."""
+    from .spectator_discovery import follow
+    def status(text: str) -> None:
+        if output.isatty(): output.write("\x1b[H\x1b[2J")
+        output.write("COMMANDER GYM / LIVE SPECTATOR\n" + text + "\n")
+        output.flush()
+    events: deque[str] = deque(maxlen=7)
+    previous = [None]
+    def draw(snapshot: dict) -> None:
+        signature = (snapshot.get("currentPhase"), snapshot.get("activePlayerId"), snapshot.get("priorityPlayerId"))
+        if previous[0] is not None and signature != previous[0]:
+            events.appendleft(f"{clean(signature[0])} / active {clean(signature[1])} / priority {clean(signature[2])}")
+        previous[0] = signature
+        if output.isatty(): output.write("\x1b[H\x1b[2J")
+        width = os.get_terminal_size(output.fileno()).columns if output.isatty() else 90
+        output.write(render(snapshot, events, width) + "\n")
+        output.flush()
+    follow(url,draw,lobby_id=lobby_id,on_idle=lambda:status("Waiting for an active game…"),
+           on_game=lambda game:status("Following game "+clean(game)),
+           on_error=lambda exc:status("Spectator error: "+clean(type(exc).__name__)))
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Read-only Linux console spectator")
     parser.add_argument("--input", default="-", help="NDJSON public spectator snapshots, or - for stdin")
     parser.add_argument("--server", help="Argentum game WebSocket URL (ws://host:port/game)")
     parser.add_argument("--game", help="Game session ID to spectate")
+    parser.add_argument("--auto", action="store_true", help="Auto-select a live game")
+    parser.add_argument("--lobby", help="Optional AI tournament lobby ID for private-match discovery")
     args = parser.parse_args()
     if args.server:
-        if not args.game: parser.error("--game is required with --server")
-        live(args.server, args.game, sys.stdout)
+        if args.auto:
+            auto_live(args.server, sys.stdout, args.lobby)
+        elif args.game:
+            live(args.server, args.game, sys.stdout)
+        else:
+            parser.error("--auto or --game is required with --server")
     elif args.input == "-": run(sys.stdin, sys.stdout)
     else:
         with open(args.input, encoding="utf-8") as source: run(source, sys.stdout, refresh=0)
