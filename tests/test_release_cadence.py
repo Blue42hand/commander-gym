@@ -109,6 +109,34 @@ class ReleaseCadenceTests(unittest.TestCase):
         with self.assertRaisesRegex(ManualRuntimeError, 'cadence_feature_change'):
             self.run_preflight()
 
+    def test_new_frontend_and_generated_config_preserve_approved_policy(self):
+        from commander_gym.manual_runtime_config import shared_https_nginx
+        profile = self.fixture.manifest['profile']
+        artifact = profile['artifacts']['frontend']
+        name = next(iter(artifact['files']))
+        raw = b'new qualified frontend bytes'
+        key = 'artifacts/frontend/' + name
+        (self.fixture.bundle / key).write_bytes(raw)
+        artifact['files'][name] = hashlib.sha256(raw).hexdigest()
+        artifact['root'] = '/srv/argentum-luna/artifacts/frontend/' + digest(artifact['files'])
+        self.fixture.manifest['files'][key]['sha256'] = artifact['files'][name]
+        nginx = shared_https_nginx(frontend_root=artifact['root'],
+                                  tailnet_origin=profile['ingress']['origins'][0],
+                                  lan_address=profile['ingress']['lanAddress'],
+                                  lan_subnet=profile['ingress']['lanSubnet'], tailnet_only=True)
+        key = 'artifacts/config/nginx.conf'
+        (self.fixture.bundle / key).write_text(nginx)
+        sha = hashlib.sha256(nginx.encode()).hexdigest()
+        config = profile['artifacts']['config']
+        config['files']['nginx.conf'] = sha
+        config['root'] = '/srv/argentum-luna/artifacts/config/' + digest(config['files'])
+        self.fixture.manifest['files'][key]['sha256'] = sha
+        self.fixture.manifest['qualification'] = fixtures.qualification(profile)
+        self.fixture.manifest['approval'] = fixtures.approval(profile, self.fixture.manifest['qualification'])
+        self.fixture.save()
+        self.evidence['releaseSha256'] = self.fixture.review
+        self.assertTrue(self.run_preflight()['preflightPassed'])
+
     def test_stale_qualification_and_changed_bundle_rejected(self):
         with self.assertRaisesRegex(ManualRuntimeError, 'qualification_stale'):
             self.run_preflight(now=100000)

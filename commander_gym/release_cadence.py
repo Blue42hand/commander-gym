@@ -42,7 +42,9 @@ def feature_policy(profile):
     return {
         **{key: profile[key] for key in keys},
         'liveCatalog': profile.get('liveCatalog'),
-        'configFiles': profile['artifacts']['config']['files'],
+        # validate_profile checks generated config against these exact settings.
+        # Its bytes contain content-addressed artifact roots, which necessarily
+        # change on an ordinary source update without widening policy.
         'pilotFingerprint': profile['catalog']['pilotFingerprint'],
         'componentDigest': profile['catalog']['componentDigest'],
         'bindingNames': sorted(profile['catalog']['bindings']),

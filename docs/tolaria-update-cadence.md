@@ -18,7 +18,7 @@ content or recording data to the public triage workflow.
 
 The existing bundle inspector verifies exact artifact bytes and all nine fresh
 qualification gates. Preflight additionally freezes the approved operational
-settings, configuration files, pilot identity and binding names. Separate approved
+settings, generated configuration contract, pilot identity and binding names. Separate approved
 latency changes must be represented in the reviewed baseline. Merged local
 inference source never enables llmster. Native/catalog qualification may update
 data for existing bindings, but it cannot bypass installed pilot identity.
