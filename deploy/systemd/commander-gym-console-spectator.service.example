@@ -11,8 +11,8 @@ Group=commander-display
 WorkingDirectory=/opt/commander-gym
 Environment=PYTHONPATH=/opt/commander-gym
 Environment=TERM=linux
-# Replace GAME_SESSION_ID and the URL with the active Argentum session and endpoint.
-ExecStart=/opt/commander-gym/.venv/bin/python -m commander_gym.console_spectator --server ws://127.0.0.1:8080/game --game GAME_SESSION_ID
+# Set the native Argentum WebSocket endpoint. To follow a private AI tournament,\n# append --lobby LOBBY_ID to ExecStart.
+ExecStart=/opt/commander-gym/.venv/bin/python -m commander_gym.console_spectator --server ws://127.0.0.1:18080/game --auto
 Restart=on-failure
 RestartSec=3
 StandardInput=tty
