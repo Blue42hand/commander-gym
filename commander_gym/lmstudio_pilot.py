@@ -252,15 +252,15 @@ class LMStudioPilot:
                 remaining()
             except LMStudioError as exc:
                 fail(str(exc))
-            attempt = {"attempt": index, "request": deepcopy(request), "response": {},
-                       "discoveryWallTimeMs": discovery_ms}
+            attempt = {"attempt": index, "request": deepcopy(request),
+                       "response": {"discoveryWallTimeMs": discovery_ms}}
             attempts.append(attempt)
             dispatch = monotonic()
             try:
                 response = self.transport.request("/v1/chat/completions", request, timeout=remaining(), cancel=cancel)
             except LMStudioError as exc:
-                attempt["response"] = {"transportError": str(exc), "httpStatus": exc.status,
-                                       "providerWallTimeMs": round((monotonic() - dispatch) * 1000, 3)}
+                attempt["response"].update({"transportError": str(exc), "httpStatus": exc.status,
+                                           "providerWallTimeMs": round((monotonic() - dispatch) * 1000, 3)})
                 if exc.status in {502, 503, 504} and index + 1 < self.config.max_attempts:
                     continue
                 fail(str(exc))
