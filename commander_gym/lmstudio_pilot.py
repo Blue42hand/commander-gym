@@ -17,6 +17,7 @@ from typing import Any, Mapping
 
 from .lmstudio_provider import LMStudioConfig, LMStudioError, LMStudioTransport, require_loaded_model
 from .local_callback_context import current_cancel
+from .observation_projection import compact_seat_observation
 from .openai_responses_pilot import (
     OpenAIResponsesPilot, OpenAIResponsesPilotError, _DEFAULT_INSTRUCTIONS,
     _native_action_format, _native_decision_format, _without_live_routing,
@@ -198,7 +199,17 @@ class LMStudioPilot:
                 "If canAutoPayNow is false, do not use autoPay. If autoPay is true, selectedSources "
                 "must be empty. CancelDecisionResponse is allowed only when the schema permits it."
             )
-        base_input = json.dumps(_without_live_routing(observation), sort_keys=True, separators=(",", ":"))
+        model_observation = _without_live_routing(observation)
+        if self.config.compact_observation:
+            model_observation = compact_seat_observation(model_observation)
+            instructions += (
+                "\nThis request uses argentum-seat-sparse-cards-v1. The observation is inside "
+                "observation; cardDefaults lists exact values for omitted fields on every "
+                "state.cards entry. Restore these fields before choosing. No other state "
+                "fields or legal choices are omitted. Use semanticId from observation.legalActions."
+            )
+        instructions += "\nThe current native parameterSpec and response schema define all allowed fields, including additional cost payments."
+        base_input = json.dumps(model_observation, sort_keys=True, separators=(",", ":"))
         request = {
             "model": self.config.model,
             "messages": [{"role": "system", "content": instructions}, {"role": "user", "content": base_input}],

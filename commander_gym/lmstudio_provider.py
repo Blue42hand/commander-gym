@@ -37,10 +37,13 @@ class LMStudioConfig:
     timeout_seconds: float = 30.0
     max_attempts: int = 2
     provider: str = "lmstudio"
+    compact_observation: bool = False
 
     def __post_init__(self):
         if self.provider != "lmstudio":
             raise ValueError("local configuration requires provider lmstudio")
+        if type(self.compact_observation) is not bool:
+            raise ValueError("compact_observation must be boolean")
         try:
             url = urlsplit(self.endpoint)
             address = ipaddress.ip_address(url.hostname or "")
