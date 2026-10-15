@@ -118,7 +118,7 @@ def main() -> None:
     parser.add_argument("--server", help="Argentum game WebSocket URL (ws://host:port/game)")
     parser.add_argument("--game", help="Game session ID to spectate")
     parser.add_argument("--auto", action="store_true", help="Auto-select a live game")
-    parser.add_argument("--lobby", help="Optional AI tournament lobby ID for private-match discovery")
+    parser.add_argument("--lobby", help="Explicit lobby ID to follow private or public active games")
     args = parser.parse_args()
     if args.server:
         if args.auto:

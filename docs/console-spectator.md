@@ -34,15 +34,6 @@ spectator seats; additional players are shown in the published seat roster.
 An extended 4-player board view can use the already-public `gameState` without
 changing the native game server.
 
-## Limitations
-
-This feature still requires the user or a launcher to supply an active
-`gameSessionId`. Automatic game discovery and switching between simultaneous
-matches have not been implemented. The transport tests simulate Argentum's
-protocol; physical-console deployment and live end-to-end testing on the server
-are separate verification steps.
-
-
 ## Existing console service integration
 
 The existing `commander-gym-display.service` occupies VT7 and runs with
@@ -50,13 +41,8 @@ The existing `commander-gym-display.service` occupies VT7 and runs with
 block a WebSocket connection, including loopback. Do **not** start two services
 against VT7 at once. When swapping to the live spectator, configure a single
 service with `PrivateNetwork=no` (or omit the directive), allow
-`AF_INET AF_INET6`, point `ExecStart` to this module, and provide the
-active game session ID. An example unit is in
+`AF_INET AF_INET6`, point `ExecStart` to this module, and use `--auto`, an explicit `--game`, or `--auto --lobby LOBBY_ID`. An example unit is in
 `deploy/systemd/commander-gym-console-spectator.service.example`.
-
-The module does not currently discover game IDs or manage a game queue.
-A live game must be running, and the game ID must be supplied by the
-launcher. This is not a graphical web spectator.
 
 ## Verification
 
@@ -74,16 +60,23 @@ selects the first active match by game session ID and attaches the native
 spectator stream. Once a match ends, it resumes polling. When no match is
 available, VT7 displays an idle/waiting message.
 
-AI sandbox tournaments may be private and omitted from the public APIs.
-For one of those, specify its lobby ID:
+Private lobbies are omitted from public discovery. To follow a particular private
+or public lobby, copy its ID from `/tournament/LOBBY_ID`:
+
 ```sh
 python3 -m commander_gym.console_spectator --server ws://127.0.0.1:18080/game --auto --lobby LOBBY_ID
 ```
-This polls the existing `/api/dev/ai-tournament/{lobbyId}` status endpoint,
-when the native server has dev endpoints enabled. It follows that lobby's active
-game rather than the general public list.
 
-Current limitations: no generic privileged enumeration of all private games,
-no automatic identification of a private AI tournament without its lobby ID,
-and no multiple-game split-screen. Game selection is read-only and does not
-start or alter matches.
+This checks the lobby status, connects as a fresh observer, and joins an
+already-active lobby as a spectator using the native WebSocket protocol. It reads
+`freeForAllGameStarting` for four-player pods or `activeMatches` for brackets,
+then subscribes to the selected game's public spectator stream. Development
+endpoints and player tokens are unnecessary. Discovery errors are displayed and
+retried. The client never joins a waiting lobby, where joining would create a
+playing seat.
+
+The console does not enumerate arbitrary private lobbies. Without `--lobby`, it
+follows only games published by the public APIs. Selecting a new private lobby
+requires changing the configured lobby ID. Game selection does not start matches
+or submit player actions. The renderer shows the full seat roster, with rich
+board summaries currently limited to the first two legacy spectator seats.
