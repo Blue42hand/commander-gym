@@ -14,6 +14,11 @@ from typing import Any, Mapping
 
 _BREAKPOINTS = (32, 128, 512)
 _MARK = {"mode": "explicit"}
+CACHE_FRIENDLY_INPUT_VERSION = "argentum-seat-cache-v2"
+# Copy only values already supplied by the current seat's resolver/projection.
+# Perspective is in the first prefix block so different seats do not share a
+# knowledge/history cache boundary, even when their visible deck lists match.
+_STABLE_FIELDS = ("perspectivePlayerId", "gameId", "knownDeck", "deckKnowledge")
 
 
 def _json(value: Any) -> str:
@@ -45,13 +50,12 @@ def cache_friendly_observation_input(view: Mapping[str, Any]) -> list[dict[str, 
     if not isinstance(log, list):
         raise ValueError("masked gameLog must be an array")
 
-    stable = {}
-    if "knownDeck" in observation:
-        stable["knownDeck"] = observation.pop("knownDeck")
+    stable = {field: observation.pop(field) for field in _STABLE_FIELDS
+              if field in observation}
     if "gameLog" in state:
         stable["hasGameLog"] = True
         state.pop("gameLog")
-    messages = [_message("Seat-authorized deck knowledge (JSON):", stable,
+    messages = [_message(f"Seat-authorized identity and deck knowledge ({CACHE_FRIENDLY_INPUT_VERSION}, JSON):", stable,
                          breakpoint=True)]
     start = 0
     for end in (*_BREAKPOINTS, len(log)):
@@ -78,8 +82,9 @@ def reconstruct_cache_friendly_observation(messages: list[dict[str, Any]]) -> di
     stable = json.loads(texts[0].split("\n", 1)[1])
     data = json.loads(texts[-1].split("\n", 1)[1])
     observation = data.get("observation", data)
-    if "knownDeck" in stable:
-        observation["knownDeck"] = stable["knownDeck"]
+    for field in _STABLE_FIELDS:
+        if field in stable:
+            observation[field] = stable[field]
     if stable.get("hasGameLog"):
         observation["state"]["gameLog"] = [
             event for part in texts[1:-1]

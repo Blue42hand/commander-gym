@@ -1,0 +1,871 @@
+{
+  "provenance": "Project-owned synthetic seat-visible held-out contract fixtures; no production game data, provider calls, policy labels, or hidden card identities. Frozen independently of encoder logic.",
+  "cases": [
+    {
+      "case": "priority",
+      "observation": {
+        "type": "Game",
+        "schemaHash": "argentum-gym-contract@v1.7-semantic-state-provenance",
+        "stateDigest": "seat-a-state-17",
+        "perspectivePlayerId": "seat-a",
+        "agentToAct": "seat-a",
+        "knownDeck": {
+          "cards": [
+            {
+              "name": "seat-a visible creature",
+              "quantity": 1
+            },
+            {
+              "name": "seat-a own hand card",
+              "quantity": 1
+            },
+            {
+              "name": "Public mana source",
+              "quantity": 1
+            }
+          ]
+        },
+        "deckKnowledge": "Synthetic authorized knowledge for seat-a. These are public fixture card descriptions, not a private deck or strategic primer. This seat owns one visible creature and one hand card. The opponent hand is unknown. Preserve all native choices and mana abilities. Native state, card identities, legal targets, payment options, and response schemas determine what is legal. This fixture has no recommended action and is not policy training data.",
+        "state": {
+          "cards": {
+            "seat-a-card-0": {
+              "id": "seat-a-card-0",
+              "name": "seat-a visible creature",
+              "zone": "BATTLEFIELD",
+              "controllerId": "seat-a",
+              "isTapped": false,
+              "damage": 0,
+              "targets": [],
+              "metadata": {},
+              "rider": null,
+              "counters": {},
+              "attachments": [],
+              "isAttacking": false,
+              "isBlocking": false
+            },
+            "seat-a-card-1": {
+              "id": "seat-a-card-1",
+              "name": "seat-a own hand card",
+              "zone": "HAND",
+              "controllerId": "seat-a",
+              "isTapped": false,
+              "damage": 0,
+              "targets": [],
+              "metadata": {},
+              "rider": null,
+              "counters": {},
+              "attachments": [],
+              "isAttacking": false,
+              "isBlocking": false
+            },
+            "seat-a-card-2": {
+              "id": "seat-a-card-2",
+              "name": "Public mana source",
+              "zone": "BATTLEFIELD",
+              "controllerId": "seat-a",
+              "isTapped": false,
+              "damage": 0,
+              "targets": [],
+              "metadata": {},
+              "rider": null,
+              "counters": {},
+              "attachments": [],
+              "isAttacking": false,
+              "isBlocking": false
+            }
+          },
+          "turnNumber": 17,
+          "priorityPlayerId": "seat-a",
+          "players": [
+            {
+              "id": "seat-a",
+              "life": 24,
+              "hand": [
+                "seat-a-card-1"
+              ]
+            },
+            {
+              "id": "opponent",
+              "life": 31,
+              "handSize": 4,
+              "librarySize": 65
+            }
+          ],
+          "gameLog": [
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 1,
+              "description": "Public phase event 0"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 1,
+              "description": "Public phase event 1"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 1,
+              "description": "Public phase event 2"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 2,
+              "description": "Public phase event 3"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 2,
+              "description": "Public phase event 4"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 2,
+              "description": "Public phase event 5"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 3,
+              "description": "Public phase event 6"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 3,
+              "description": "Public phase event 7"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 3,
+              "description": "Public phase event 8"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 4,
+              "description": "Public phase event 9"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 4,
+              "description": "Public phase event 10"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 4,
+              "description": "Public phase event 11"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 5,
+              "description": "Public phase event 12"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 5,
+              "description": "Public phase event 13"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 5,
+              "description": "Public phase event 14"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 6,
+              "description": "Public phase event 15"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 6,
+              "description": "Public phase event 16"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 6,
+              "description": "Public phase event 17"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 7,
+              "description": "Public phase event 18"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 7,
+              "description": "Public phase event 19"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 7,
+              "description": "Public phase event 20"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 8,
+              "description": "Public phase event 21"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 8,
+              "description": "Public phase event 22"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 8,
+              "description": "Public phase event 23"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 9,
+              "description": "Public phase event 24"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 9,
+              "description": "Public phase event 25"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 9,
+              "description": "Public phase event 26"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 10,
+              "description": "Public phase event 27"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 10,
+              "description": "Public phase event 28"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 10,
+              "description": "Public phase event 29"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 11,
+              "description": "Public phase event 30"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 11,
+              "description": "Public phase event 31"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 11,
+              "description": "Public phase event 32"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 12,
+              "description": "Public phase event 33"
+            }
+          ],
+          "stack": []
+        },
+        "legalActions": [
+          {
+            "actionId": 5,
+            "semanticId": "argentum-action-v1:pass",
+            "kind": "PassPriority",
+            "affordable": true
+          },
+          {
+            "actionId": 9,
+            "semanticId": "argentum-action-v1:mana",
+            "kind": "ActivateAbility",
+            "affordable": true,
+            "isManaAbility": true,
+            "action": {
+              "sourceId": "seat-a-card-2",
+              "abilityId": "mana"
+            }
+          }
+        ],
+        "pendingDecision": null,
+        "terminated": false
+      }
+    },
+    {
+      "case": "targets",
+      "observation": {
+        "type": "Game",
+        "schemaHash": "argentum-gym-contract@v1.7-semantic-state-provenance",
+        "stateDigest": "seat-b-state-17",
+        "perspectivePlayerId": "seat-b",
+        "agentToAct": "seat-b",
+        "knownDeck": {
+          "cards": [
+            {
+              "name": "seat-b visible creature",
+              "quantity": 1
+            },
+            {
+              "name": "seat-b own hand card",
+              "quantity": 1
+            },
+            {
+              "name": "Public mana source",
+              "quantity": 1
+            }
+          ]
+        },
+        "deckKnowledge": "Synthetic authorized knowledge for seat-b. These are public fixture card descriptions, not a private deck or strategic primer. This seat owns one visible creature and one hand card. The opponent hand is unknown. Preserve all native choices and mana abilities. Native state, card identities, legal targets, payment options, and response schemas determine what is legal. This fixture has no recommended action and is not policy training data.",
+        "state": {
+          "cards": {
+            "seat-b-card-0": {
+              "id": "seat-b-card-0",
+              "name": "seat-b visible creature",
+              "zone": "BATTLEFIELD",
+              "controllerId": "seat-b",
+              "isTapped": false,
+              "damage": 0,
+              "targets": [],
+              "metadata": {},
+              "rider": null,
+              "counters": {},
+              "attachments": [],
+              "isAttacking": false,
+              "isBlocking": false
+            },
+            "seat-b-card-1": {
+              "id": "seat-b-card-1",
+              "name": "seat-b own hand card",
+              "zone": "HAND",
+              "controllerId": "seat-b",
+              "isTapped": false,
+              "damage": 0,
+              "targets": [],
+              "metadata": {},
+              "rider": null,
+              "counters": {},
+              "attachments": [],
+              "isAttacking": false,
+              "isBlocking": false
+            },
+            "seat-b-card-2": {
+              "id": "seat-b-card-2",
+              "name": "Public mana source",
+              "zone": "BATTLEFIELD",
+              "controllerId": "seat-b",
+              "isTapped": false,
+              "damage": 0,
+              "targets": [],
+              "metadata": {},
+              "rider": null,
+              "counters": {},
+              "attachments": [],
+              "isAttacking": false,
+              "isBlocking": false
+            }
+          },
+          "turnNumber": 17,
+          "priorityPlayerId": "seat-b",
+          "players": [
+            {
+              "id": "seat-b",
+              "life": 24,
+              "hand": [
+                "seat-b-card-1"
+              ]
+            },
+            {
+              "id": "opponent",
+              "life": 31,
+              "handSize": 4,
+              "librarySize": 65
+            }
+          ],
+          "gameLog": [
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 1,
+              "description": "Public phase event 0"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 1,
+              "description": "Public phase event 1"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 1,
+              "description": "Public phase event 2"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 2,
+              "description": "Public phase event 3"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 2,
+              "description": "Public phase event 4"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 2,
+              "description": "Public phase event 5"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 3,
+              "description": "Public phase event 6"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 3,
+              "description": "Public phase event 7"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 3,
+              "description": "Public phase event 8"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 4,
+              "description": "Public phase event 9"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 4,
+              "description": "Public phase event 10"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 4,
+              "description": "Public phase event 11"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 5,
+              "description": "Public phase event 12"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 5,
+              "description": "Public phase event 13"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 5,
+              "description": "Public phase event 14"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 6,
+              "description": "Public phase event 15"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 6,
+              "description": "Public phase event 16"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 6,
+              "description": "Public phase event 17"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 7,
+              "description": "Public phase event 18"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 7,
+              "description": "Public phase event 19"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 7,
+              "description": "Public phase event 20"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 8,
+              "description": "Public phase event 21"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 8,
+              "description": "Public phase event 22"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 8,
+              "description": "Public phase event 23"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 9,
+              "description": "Public phase event 24"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 9,
+              "description": "Public phase event 25"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 9,
+              "description": "Public phase event 26"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 10,
+              "description": "Public phase event 27"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 10,
+              "description": "Public phase event 28"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 10,
+              "description": "Public phase event 29"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 11,
+              "description": "Public phase event 30"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 11,
+              "description": "Public phase event 31"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 11,
+              "description": "Public phase event 32"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 12,
+              "description": "Public phase event 33"
+            }
+          ],
+          "stack": []
+        },
+        "legalActions": [],
+        "pendingDecision": {
+          "decisionId": "live-target-17",
+          "semanticId": "argentum-decision-v1:choose-targets",
+          "kind": "CHOOSE_TARGETS",
+          "playerId": "seat-b",
+          "prompt": "Choose one target",
+          "requiresStructuredResponse": true,
+          "responseSpec": {
+            "responseType": "TargetsResponse",
+            "requiredFields": {
+              "selectedTargets": "MAP"
+            }
+          },
+          "legalTargets": {
+            "0": [
+              "seat-b-card-0"
+            ]
+          }
+        },
+        "terminated": false
+      }
+    },
+    {
+      "case": "combat",
+      "observation": {
+        "type": "Game",
+        "schemaHash": "argentum-gym-contract@v1.7-semantic-state-provenance",
+        "stateDigest": "seat-c-state-17",
+        "perspectivePlayerId": "seat-c",
+        "agentToAct": "seat-c",
+        "knownDeck": {
+          "cards": [
+            {
+              "name": "seat-c visible creature",
+              "quantity": 1
+            },
+            {
+              "name": "seat-c own hand card",
+              "quantity": 1
+            },
+            {
+              "name": "Public mana source",
+              "quantity": 1
+            }
+          ]
+        },
+        "deckKnowledge": "Synthetic authorized knowledge for seat-c. These are public fixture card descriptions, not a private deck or strategic primer. This seat owns one visible creature and one hand card. The opponent hand is unknown. Preserve all native choices and mana abilities. Native state, card identities, legal targets, payment options, and response schemas determine what is legal. This fixture has no recommended action and is not policy training data.",
+        "state": {
+          "cards": {
+            "seat-c-card-0": {
+              "id": "seat-c-card-0",
+              "name": "seat-c visible creature",
+              "zone": "BATTLEFIELD",
+              "controllerId": "seat-c",
+              "isTapped": false,
+              "damage": 0,
+              "targets": [],
+              "metadata": {},
+              "rider": null,
+              "counters": {},
+              "attachments": [],
+              "isAttacking": false,
+              "isBlocking": false
+            },
+            "seat-c-card-1": {
+              "id": "seat-c-card-1",
+              "name": "seat-c own hand card",
+              "zone": "HAND",
+              "controllerId": "seat-c",
+              "isTapped": false,
+              "damage": 0,
+              "targets": [],
+              "metadata": {},
+              "rider": null,
+              "counters": {},
+              "attachments": [],
+              "isAttacking": false,
+              "isBlocking": false
+            },
+            "seat-c-card-2": {
+              "id": "seat-c-card-2",
+              "name": "Public mana source",
+              "zone": "BATTLEFIELD",
+              "controllerId": "seat-c",
+              "isTapped": false,
+              "damage": 0,
+              "targets": [],
+              "metadata": {},
+              "rider": null,
+              "counters": {},
+              "attachments": [],
+              "isAttacking": false,
+              "isBlocking": false
+            },
+            "public-attacker": {
+              "id": "public-attacker",
+              "name": "Public attacker",
+              "isTapped": true
+            }
+          },
+          "turnNumber": 17,
+          "priorityPlayerId": "seat-c",
+          "players": [
+            {
+              "id": "seat-c",
+              "life": 24,
+              "hand": [
+                "seat-c-card-1"
+              ]
+            },
+            {
+              "id": "opponent",
+              "life": 31,
+              "handSize": 4,
+              "librarySize": 65
+            }
+          ],
+          "gameLog": [
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 1,
+              "description": "Public phase event 0"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 1,
+              "description": "Public phase event 1"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 1,
+              "description": "Public phase event 2"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 2,
+              "description": "Public phase event 3"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 2,
+              "description": "Public phase event 4"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 2,
+              "description": "Public phase event 5"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 3,
+              "description": "Public phase event 6"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 3,
+              "description": "Public phase event 7"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 3,
+              "description": "Public phase event 8"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 4,
+              "description": "Public phase event 9"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 4,
+              "description": "Public phase event 10"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 4,
+              "description": "Public phase event 11"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 5,
+              "description": "Public phase event 12"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 5,
+              "description": "Public phase event 13"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 5,
+              "description": "Public phase event 14"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 6,
+              "description": "Public phase event 15"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 6,
+              "description": "Public phase event 16"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 6,
+              "description": "Public phase event 17"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 7,
+              "description": "Public phase event 18"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 7,
+              "description": "Public phase event 19"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 7,
+              "description": "Public phase event 20"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 8,
+              "description": "Public phase event 21"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 8,
+              "description": "Public phase event 22"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 8,
+              "description": "Public phase event 23"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 9,
+              "description": "Public phase event 24"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 9,
+              "description": "Public phase event 25"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 9,
+              "description": "Public phase event 26"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 10,
+              "description": "Public phase event 27"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 10,
+              "description": "Public phase event 28"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 10,
+              "description": "Public phase event 29"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 11,
+              "description": "Public phase event 30"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 11,
+              "description": "Public phase event 31"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 11,
+              "description": "Public phase event 32"
+            },
+            {
+              "type": "PhaseChanged",
+              "turnNumber": 12,
+              "description": "Public phase event 33"
+            }
+          ],
+          "stack": []
+        },
+        "legalActions": [
+          {
+            "actionId": 8,
+            "semanticId": "argentum-action-v1:declare-blockers",
+            "kind": "DeclareBlockers",
+            "affordable": true,
+            "validBlockers": [
+              "seat-c-card-0"
+            ],
+            "validAttackers": [
+              "public-attacker"
+            ],
+            "parameterSpec": {
+              "allowedFields": {
+                "blockers": "ENTITY_ID_LIST_MAP"
+              }
+            }
+          }
+        ],
+        "pendingDecision": null,
+        "terminated": false
+      }
+    }
+  ]
+}
