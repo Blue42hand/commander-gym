@@ -162,7 +162,11 @@ def stage_bundle(root, manifest):
         registry.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
         with open_data(root, 'recording-registry.json') as stream: raw = stream.read(4*1024*1024+1)
         require(len(raw) <= 4*1024*1024 and hashlib.sha256(raw).hexdigest() == profile['recordingAuthority']['registrySha256'], 'recording_registry_changed')
-        atomic_root(registry, raw, mode=0o644)
+        # The real recorder rejects world-readable historical authority files.
+        # Its effective group is commander-prod, including on a fresh host where
+        # the numeric GID is chosen by account creation rather than Tolaria's GID.
+        atomic_root(registry, raw, mode=0o640)
+        os.chown(registry, 0, grp.getgrnam('commander-prod').gr_gid)
     bank = CONFIG / 'runtimes' / digest(profile)
     bank.mkdir(parents=True, exist_ok=True, mode=0o700)
     for name in ('profile', 'qualification', 'approval'):

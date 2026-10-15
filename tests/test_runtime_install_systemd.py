@@ -4,6 +4,7 @@ Uses synthetic lifecycle/recorder/provider processes, never a game or real key.
 This proves bootstrap/update/rollback plumbing, not native rules or human gameplay.
 """
 import copy
+import grp
 import hashlib
 import json
 import os
@@ -143,12 +144,25 @@ class RuntimeInstallSystemdTests(unittest.TestCase):
         from commander_gym.manual_runtime_host import ProtectedRuntimeHost, CONFIG, GATE, load_bundle
         from commander_gym.manual_runtime_profile import ManualRuntimeError
         p=self.prepare();root,manifest=self.bundle(p)
+        # The fixture factory supplies source bytes for packaging. A clean
+        # installation must create the protected destination itself.
+        Path(p['paths']['registryPath']).unlink()
         # Remove the selected artifact trees: installation must really stage them.
         for artifact in p['artifacts'].values(): shutil.rmtree(artifact['root'])
         # CI disk size is not a capacity qualification; production reserves remain.
         capacity=SimpleNamespace(f_bavail=128*1024**3,f_frsize=1)
         with patch('os.statvfs',return_value=capacity):
             result=install(root,manifest);self.assertEqual(result['state'],'installed')
+            registry = Path(p['paths']['registryPath'])
+            self.assertEqual(registry.stat().st_mode & 0o777, 0o640)
+            self.assertEqual(registry.stat().st_gid, grp.getgrnam('commander-prod').gr_gid)
+            # The native-UID recorder runs with this group, not necessarily its
+            # account's primary GID. Check actual cross-identity readability.
+            readable = subprocess.run(
+                [sys.executable, '-c', 'from pathlib import Path; Path(__import__("sys").argv[1]).read_bytes()', str(registry)],
+                user=p['identities']['nativeUid'], group=registry.stat().st_gid,
+                extra_groups=[], capture_output=True, timeout=10)
+            self.assertEqual(readable.returncode, 0)
             catalog=Path(p['artifacts']['catalog']['root'])
             self.assertEqual(catalog.stat().st_mode & 0o007,0)
             for entry in catalog.rglob('*'): self.assertEqual(entry.stat().st_mode & 0o007,0)
