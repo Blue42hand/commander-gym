@@ -1,0 +1,35 @@
+[Unit]
+Description=Commander Gym native live spectator on Linux VT7
+After=network-online.target
+Wants=network-online.target
+Conflicts=getty@tty7.service
+
+[Service]
+Type=simple
+User=commander-display
+Group=commander-display
+WorkingDirectory=/opt/commander-gym
+Environment=PYTHONPATH=/opt/commander-gym
+Environment=TERM=linux
+# Set the native Argentum WebSocket endpoint. To follow a private AI tournament,\n# append --lobby LOBBY_ID to ExecStart.
+ExecStart=/opt/commander-gym/.venv/bin/python -m commander_gym.console_spectator --server ws://127.0.0.1:18080/game --auto
+Restart=on-failure
+RestartSec=3
+StandardInput=tty
+StandardOutput=tty
+StandardError=journal
+TTYPath=/dev/tty7
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+# NOTE: do not set PrivateNetwork=yes: the spectator must reach Argentum.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
