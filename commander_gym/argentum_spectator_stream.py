@@ -91,7 +91,10 @@ def watch(
                     return
         except SpectatorProtocolError:
             raise
-        except Exception as exc:\n            # Network libraries raise their own WebSocketException subclasses.\n            # Protocol and programming errors remain explicit instead of being retried.\n            if isinstance(exc, (ValueError, TypeError, KeyError, AttributeError)):\n                raise
+        except Exception as exc:
+            # Transport libraries can raise their own WebSocketException subclasses.
+            if isinstance(exc, (ValueError, TypeError, KeyError, AttributeError)):
+                raise
             LOG.warning("Spectator disconnected (%s); reconnecting", type(exc).__name__)
             if not stop():
                 time.sleep(retry_delay)
