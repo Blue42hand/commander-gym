@@ -29,10 +29,12 @@ updates and pilot provenance are ignored; spectators never receive private hands
 The display is read-only and does not submit game actions. The server-supplied
 public data determines which cards and fields can be shown.
 
-Currently the rich battlefield summary uses the server's first two legacy
-spectator seats; additional players are shown in the published seat roster.
-An extended 4-player board view can use the already-public `gameState` without
-changing the native game server.
+Every seat has its own section with its published name, life total, hand count,
+and battlefield from the already-masked spectator `gameState`. Cards are grouped
+by current controller (including control changes), with tapped status and
+creature power/toughness. Identical permanents are counted together; card lists
+wrap to the display width. Face-down names and hand/library contents are not
+rendered. Older two-player snapshots fall back to the legacy summaries.
 
 ## Existing console service integration
 
@@ -78,5 +80,4 @@ playing seat.
 The console does not enumerate arbitrary private lobbies. Without `--lobby`, it
 follows only games published by the public APIs. Selecting a new private lobby
 requires changing the configured lobby ID. Game selection does not start matches
-or submit player actions. The renderer shows the full seat roster, with rich
-board summaries currently limited to the first two legacy spectator seats.
+or submit player actions. The renderer shows each seat's name, life total, and public battlefield.

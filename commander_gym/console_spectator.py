@@ -11,40 +11,102 @@ import os
 import select
 import sys
 import time
-from collections import deque
+import textwrap
+import unicodedata
+from collections import Counter, deque
 
 def clean(value: object, width: int = 60) -> str:
-    return str(value if value is not None else "—").replace("\x1b", "?").replace("\n", " ")[:width]
+    text = str(value if value is not None else "—")
+    return "".join(" " if unicodedata.category(c).startswith("C") else c for c in text)[:max(0, width)]
+
+
+def player_views(snapshot: dict) -> list[dict]:
+    """Read each seat from the already-masked spectator state, with legacy fallback."""
+    game = snapshot.get("gameState")
+    game = game if isinstance(game, dict) else {}
+    public_players = {p["playerId"]: p for p in game.get("players", [])
+                      if isinstance(p, dict) and p.get("playerId")}
+    legacy_players = {p["playerId"]: p for key in ("player1", "player2")
+                      if isinstance(p := snapshot.get(key), dict) and p.get("playerId")}
+    roster = snapshot.get("players")
+    if not isinstance(roster, list) or not roster:
+        roster = list(public_players.values()) or list(legacy_players.values())
+    cards = game.get("cards")
+    cards = cards if isinstance(cards, dict) else {}
+    result = []
+    for i, seat in enumerate(roster):
+        if not isinstance(seat, dict):
+            continue
+        ident = seat.get("playerId")
+        legacy = legacy_players.get(ident, {})
+        public = public_players.get(ident)
+        if public is not None:
+            board = [card for card in cards.values() if isinstance(card, dict)
+                     and isinstance(card.get("zone"), dict)
+                     and card["zone"].get("zoneType") == "Battlefield"
+                     and (card.get("controllerId") or card["zone"].get("ownerId")) == ident]
+            state = public
+        else:
+            board = legacy.get("battlefield")
+            board = board if isinstance(board, list) else []
+            state = legacy
+        result.append({
+            "playerId": ident,
+            "name": seat.get("name") or seat.get("playerName") or state.get("name")
+                    or state.get("playerName") or f"Seat {i+1}",
+            "life": state.get("life"), "handSize": state.get("handSize"),
+            "battlefield": board, "available": bool(state),
+        })
+    return result
+
+
+def card_label(card: dict) -> str:
+    if card.get("isFaceDown"):
+        label = "Face-down card"
+    else:
+        label = clean(card.get("name") or "Unknown card", 120)
+        if card.get("power") is not None and card.get("toughness") is not None:
+            label += f" {clean(card['power'], 8)}/{clean(card['toughness'], 8)}"
+    if card.get("isTapped"):
+        label += " [tapped]"
+    return label
+
 
 def render(snapshot: dict, events: deque[str], width: int = 90) -> str:
-    game = snapshot.get("gameState") or {}
-    roster = snapshot.get("players") or []
-    if not isinstance(roster, list): roster = []
-    lines = ["COMMANDER GYM  /  LIVE SPECTATOR", "=" * min(width, 90)]
-    lines.append(f"Game: {clean(snapshot.get('gameSessionId'))}  Phase: {clean(snapshot.get('currentPhase'))}")
-    lines.append(f"Active: {clean(snapshot.get('activePlayerId'))}  Priority: {clean(snapshot.get('priorityPlayerId'))}")
-    lines.append("-" * min(width, 90))
-    # The two legacy player fields have complete public board summaries.
-    # For additional seats, only render the published roster without guessing.
-    for i, seat in enumerate(roster):
-        if not isinstance(seat, dict): continue
-        ident = seat.get("playerId")
-        legacy = next((snapshot.get(k) for k in ("player1", "player2")
-                       if isinstance(snapshot.get(k), dict) and snapshot[k].get("playerId") == ident), {})
-        name = seat.get("playerName") or legacy.get("playerName") or f"Seat {i+1}"
-        life = legacy.get("life", "—")
-        lines.append(f"{clean(name, 30):30} LIFE {clean(life, 5):>5}  HAND {clean(legacy.get('handSize'), 5):>5}  BOARD {len(legacy.get('battlefield') or []):>3}" if legacy else f"{clean(name, 30)}  [see public game state]")
-        if legacy:
-            board = [clean(c.get("name"), 22) for c in (legacy.get("battlefield") or []) if isinstance(c, dict)]
-            if board: lines.append("  " + ", ".join(board[:10])[:width-3])
-    lines.append("-" * min(width, 90))
+    width = max(10, min(width, 100))
+    players = player_views(snapshot)
+    names = {p["playerId"]: p["name"] for p in players}
+    def name(player_id):
+        return clean(names.get(player_id) or player_id)
+    lines = []
+    def add(text, indent=""):
+        lines.extend(textwrap.wrap(text, width=width, initial_indent=indent,
+                                   subsequent_indent=indent) or [""])
+    add("COMMANDER GYM  /  LIVE SPECTATOR")
+    add("=" * width)
+    add(f"Game: {clean(snapshot.get('gameSessionId'))}  Phase: {clean(snapshot.get('currentPhase'))}")
+    add(f"Active: {name(snapshot.get('activePlayerId'))}  Priority: {name(snapshot.get('priorityPlayerId'))}")
+    for i, player in enumerate(players):
+        add("-" * width)
+        add(f"{i+1}. {clean(player['name'], 120)}")
+        board = [card for card in player["battlefield"] if isinstance(card, dict)]
+        if not player["available"]:
+            add("Public board state unavailable", "  ")
+            continue
+        add(f"LIFE {clean(player['life'])}  |  HAND {clean(player['handSize'])}  |  BATTLEFIELD {len(board)}", "  ")
+        labels = Counter(card_label(card) for card in board)
+        battlefield = "; ".join(f"{count}x {label}" if count > 1 else label
+                                for label, count in labels.items())
+        add(battlefield or "(empty battlefield)", "  ")
+    add("-" * width)
     decision = snapshot.get("decisionStatus") or {}
     if isinstance(decision, dict) and decision:
-        lines.append("PENDING: " + clean(decision.get("playerName")) + " / " + clean(decision.get("displayText")))
-    lines.append("EVENTS (public snapshot changes)")
-    lines.extend("  " + clean(e, width-4) for e in events)
-    lines.append("")
-    lines.append("q quit  |  Ctrl+C quit  |  updates on spectator snapshots")
+        add("PENDING: " + clean(decision.get("playerName")) + " / " + clean(decision.get("displayText")))
+    add("EVENTS (public snapshot changes)")
+    for event in events:
+        add(clean(event, 160), "  ")
+    add("")
+    add("Live updates from the public spectator stream")
     return "\n".join(lines)
 
 def run(source, output, refresh: float = 0.25) -> None:
