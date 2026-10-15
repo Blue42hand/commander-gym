@@ -31,7 +31,8 @@ class CommanderGymAutoConfigurationTest {
         try {
             runner.withPropertyValues("game.ai.mode=engine", "commander-gym.local.enabled=true",
                 "commander-gym.local.url=http://127.0.0.1:${server.address.port}",
-                "commander-gym.local.token=local-token").run { context ->
+                "commander-gym.local.token=local-token",
+                "commander-gym.recorder.socket=/tmp/fixture-recorder.sock").run { context ->
                 assertNull(context.startupFailure)
                 val provider = context.getBean(AiControllerProvider::class.java)
                 assertEquals("commander-gym-local", provider.mode)

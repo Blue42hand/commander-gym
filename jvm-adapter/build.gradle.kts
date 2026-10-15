@@ -66,3 +66,11 @@ tasks.register<JavaExec>("runRecordedFullGame") {
     classpath = sourceSets["test"].runtimeClasspath
     mainClass.set("org.commandergym.argentum.RecordedFullGameKt")
 }
+
+// Explicit local-only opt-in. CI never contacts a model; no credentials are bundled.
+tasks.register<JavaExec>("runLocalInferenceAcceptance") {
+    group = "verification"
+    dependsOn(tasks.named("testClasses"))
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("org.commandergym.argentum.LocalInferenceAcceptanceKt")
+}

@@ -21,8 +21,8 @@ class CommanderGymLocalAutoConfiguration {
         return CommanderGymControllerProvider(
             URI.create(environment.getRequiredProperty("$prefix.url")),
             environment.getRequiredProperty("$prefix.token"), Duration.ofMillis(timeout),
-            requireHumanParticipant = environment.getProperty("$prefix.manual-only", Boolean::class.java, true),
-            recorder = environment.getProperty("commander-gym.recorder.socket")?.let { RecorderCallbackClient(Path.of(it)) },
+            requireHumanParticipant = true,
+            recorder = RecorderCallbackClient(Path.of(environment.getRequiredProperty("commander-gym.recorder.socket"))),
             mode = "commander-gym-local", profileLabel = "Local", requireExplicitProfile = true,
         )
     }

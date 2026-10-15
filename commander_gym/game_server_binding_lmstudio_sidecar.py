@@ -93,6 +93,13 @@ def build_binding_lmstudio_sidecar(config: LocalBindingConfig, *, game_capture=N
     stopping = threading.Event()
 
     class LocalServer(GameServerSidecarServer):
+        daemon_threads = False  # Reap cancelled inference before the service process exits.
+
+        def get_request(self):
+            connection, address = super().get_request()
+            connection.settimeout(5)  # Bound incomplete HTTP request bodies on shutdown.
+            return connection, address
+
         def server_close(self):
             stopping.set()
             super().server_close()
@@ -115,7 +122,6 @@ def main():
     parser.add_argument("--instance-root", type=Path, required=True)
     parser.add_argument("--live-catalog-root", type=Path)
     parser.add_argument("--port", type=int, required=True)
-    parser.add_argument("--synthetic-test", action="store_true", help="Permit isolated non-human test games")
     args = parser.parse_args()
     # Explicit input only; no provider credential, SDK endpoint or proxy environment is consumed.
     raw = json.loads(args.inference_config.read_text())
@@ -123,7 +129,7 @@ def main():
         raise ValueError("inference configuration must explicitly select lmstudio")
     config = LocalBindingConfig(
         GameServerSidecarConfig(os.environ["COMMANDER_GYM_LOCAL_SIDECAR_TOKEN"], port=args.port,
-                               require_manual_human_game=not args.synthetic_test),
+                               require_manual_human_game=True),
         LMStudioConfig(**raw), args.catalog, args.instance_root, args.live_catalog_root,
     )
     from .recorder_bridge import RemoteCaptureSink
