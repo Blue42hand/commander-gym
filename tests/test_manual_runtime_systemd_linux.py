@@ -166,6 +166,8 @@ ExecStart=/usr/bin/touch {self.root}/sidecar-started
         script=self.root/'notify.py'
         script.write_text("import os,socket,time\ns=socket.socket(socket.AF_UNIX,socket.SOCK_DGRAM)\np=os.environ['NOTIFY_SOCKET']\ns.connect('\\0'+p[1:] if p.startswith('@') else p)\ns.sendall(b'READY=1')\ntime.sleep(60)\n")
         local_path.write_text(local_prefix+f'[Service]\nType=notify\nNotifyAccess=main\nTimeoutStartSec=5\nExecStart={sys.executable} {script}\n')
-        self.systemctl('daemon-reload');self.systemctl('reset-failed',local,native)
+        self.systemctl('daemon-reload');self.systemctl('reset-failed',local)
+        # Native never ran: systemd may garbage-collect that dependency-failed job.
+        self.systemctl('reset-failed',native,check=False)
         self.systemctl('start',native)
         self.assertTrue((self.root/'local-native-started').exists())
