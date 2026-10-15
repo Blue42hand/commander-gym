@@ -36,7 +36,7 @@ class CommanderGymNativeCostCallbackTest {
         val offeredId = EntityId.of("own-candidate")
         val hiddenId = EntityId.of("opponent-secret")
         val fields = listOf(
-            "tappedPermanents", "sacrificedPermanents", "discardedCards", "exiledCards",
+            "tappedPermanents", "sacrificedPermanents", "discardedCards", "exiledCards", "bouncedPermanents",
         )
         val registry = CardRegistry()
         val enricher = LegalActionEnricher(ManaSolver(registry, PredicateEvaluator(registry)), registry)
@@ -70,6 +70,8 @@ class CommanderGymNativeCostCallbackTest {
                     validSacrificeTargets = if (field == "sacrificedPermanents") listOf(offeredId) else emptyList(),
                     validDiscardTargets = if (field == "discardedCards") listOf(offeredId) else emptyList(),
                     validExileTargets = if (field == "exiledCards") listOf(offeredId) else emptyList(),
+                    validBounceTargets = if (field == "bouncedPermanents") listOf(offeredId) else emptyList(),
+                    bounceCount = if (field == "bouncedPermanents") 1 else 0,
                 )
                 val nativeOffer = LegalAction(
                     actionType = "ActivateAbility",
@@ -87,6 +89,7 @@ class CommanderGymNativeCostCallbackTest {
                     "tappedPermanents" -> paid.tappedPermanents
                     "sacrificedPermanents" -> paid.sacrificedPermanents
                     "discardedCards" -> paid.discardedCards
+                    "bouncedPermanents" -> paid.bouncedPermanents
                     else -> paid.exiledCards
                 }
                 assertEquals(listOf(offeredId), selected, field)
@@ -109,14 +112,27 @@ class CommanderGymNativeCostCallbackTest {
                             "tappedPermanents" -> "validTapTargets"
                             "sacrificedPermanents" -> "validSacrificeTargets"
                             "discardedCards" -> "validDiscardTargets"
+                            "bouncedPermanents" -> "validBounceTargets"
                             else -> "validExileTargets"
                         }).jsonArray.map { it.jsonPrimitive.content },
                 )
+                if (field == "bouncedPermanents") {
+                    assertEquals("1", policyAction.getValue("additionalCostInfo").jsonObject
+                        .getValue("bounceCount").jsonPrimitive.content)
+                    assertThrows(IllegalArgumentException::class.java) {
+                        ActionParameterizer.apply(offered, ActionParams(), GameState())
+                    }
+                    assertThrows(IllegalArgumentException::class.java) {
+                        ActionParameterizer.apply(offered,
+                            ActionParams(bouncedPermanents = listOf(offeredId, offeredId)), GameState())
+                    }
+                }
                 assertEquals(false, requestBody.contains(hiddenId.value))
                 val invalid = when (field) {
                     "tappedPermanents" -> ActionParams(tappedPermanents = listOf(hiddenId))
                     "sacrificedPermanents" -> ActionParams(sacrificedPermanents = listOf(hiddenId))
                     "discardedCards" -> ActionParams(discardedCards = listOf(hiddenId))
+                    "bouncedPermanents" -> ActionParams(bouncedPermanents = listOf(hiddenId))
                     else -> ActionParams(exiledCards = listOf(hiddenId))
                 }
                 assertThrows(IllegalArgumentException::class.java) {

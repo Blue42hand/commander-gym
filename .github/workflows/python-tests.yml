@@ -98,7 +98,7 @@ jobs:
         with:
           repository: Blue42hand/argentum-engine
           # Pinned native candidate for the human-versus-Luna milestone.
-          ref: 10ec3736841b6803f4f486886447730701e40fde
+          ref: 61d41fd300bd549cc190dd6cff9b4b76f84f4891
           path: argentum-engine
       - uses: actions/setup-java@v5
         with:
