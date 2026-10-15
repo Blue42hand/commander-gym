@@ -107,7 +107,7 @@ log_format argentum_metadata '$time_iso8601 $request_method $status $body_bytes_
 
 
 def service_units(*, launcher_root: str, dependency_root: str, python_relative: str, tailnet_only: bool = False,
-                  live_catalog: dict | None = None) -> dict[str, str]:
+                  live_catalog: dict | None = None, local_inference: dict | None = None) -> dict[str, str]:
     require(type(tailnet_only) is bool, 'ingress_mode')
     for role, root in (('launcher', launcher_root), ('dependencies', dependency_root)):
         require(re.fullmatch('/srv/argentum-luna/artifacts/' + role + '/[0-9a-f]{64}', root), 'sealed_unit_layout')
@@ -300,6 +300,42 @@ WantedBy=timers.target
         dependency = '[Unit]\nRequires=argentum-binding-catalog.service\nAfter=argentum-binding-catalog.service\n'
         for name in ('units/argentum-recorder.service', 'units/argentum-luna-sidecar.service'):
             result[name] += '\n' + dependency
+    if local_inference is not None:
+        from .lmstudio_provider import LMStudioConfig
+        from urllib.parse import urlsplit
+        config = LMStudioConfig(**local_inference['config'])
+        endpoint_ip = urlsplit(config.endpoint).hostname
+        local_unit = 'argentum-local-sidecar.service'
+        result['units/argentum-play.conf'] += ('[Unit]\nRequires=' + local_unit + '\nAfter=' + local_unit
+            + '\n[Service]\nLoadCredential=commander-gym.local.token:/etc/argentum-luna/local-sidecar.token\n')
+        result['units/argentum-manual-preflight.service'] += '[Unit]\nBefore=' + local_unit + '\n'
+        result['units/argentum-recorder.service'] += ('[Service]\nRuntimeDirectory=argentum-local-ipc\n'
+            'ReadWritePaths=/run/argentum-local-ipc\n')
+        result['units/argentum-recorder.conf'] += '[Service]\nSupplementaryGroups=commander-local\n'
+        result['units/' + local_unit] = f'''[Unit]
+Description=Explicit sealed local inference sidecar
+{gate}
+Requires=argentum-manual-preflight.service argentum-recorder.service
+After=argentum-manual-preflight.service argentum-recorder.service
+[Service]
+Type=notify
+NotifyAccess=main
+TimeoutStartSec=30
+User=commander-local
+Group=commander-local
+{creds}
+LoadCredential=commander-gym.local.token:/etc/argentum-luna/local-sidecar.token
+ExecStart={entry}/scripts/local_sidecar_entry.py
+{protection}RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+IPAddressDeny=any
+IPAddressAllow=127.0.0.1
+IPAddressAllow=::1
+IPAddressAllow={endpoint_ip}
+InaccessiblePaths=/var/lib/commander-gym/runs /srv/commander-runtime /run/argentum-luna-ipc -/etc/ssh -/etc/ssl/private -/var/lib/tailscale
+ReadOnlyPaths=/srv/argentum-luna/artifacts
+MemoryMax=1G
+TasksMax=64
+'''
     return result
 
 
@@ -312,7 +348,7 @@ def validate_config_contract(profile: dict) -> None:
     require(len(tailnet) == 1 and (tailnet_only or lan_origin in ingress['origins']), 'config_origin_mode')
     expected = service_units(launcher_root=artifacts['launcher']['root'],
         dependency_root=artifacts['dependencies']['root'], python_relative='python/bin/python3.12',
-        tailnet_only=tailnet_only, live_catalog=profile.get('liveCatalog'))
+        tailnet_only=tailnet_only, live_catalog=profile.get('liveCatalog'), local_inference=profile.get('localInference'))
     expected['nginx.conf'] = shared_https_nginx(frontend_root=artifacts['frontend']['root'],
         tailnet_origin=tailnet[0], lan_address=ingress['lanAddress'], lan_subnet=ingress['lanSubnet'],
         tailnet_only=tailnet_only)

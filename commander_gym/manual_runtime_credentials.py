@@ -9,10 +9,11 @@ from .manual_runtime_profile import ManualRuntimeError, relative_path, require
 
 
 UNITS = {'native': 'argentum-play.service', 'recorder': 'argentum-recorder.service',
-         'sidecar': 'argentum-luna-sidecar.service'}
-NAMES = {'native': frozenset({'profile.json', 'commander-gym.sidecar.token'}),
+         'sidecar': 'argentum-luna-sidecar.service', 'local': 'argentum-local-sidecar.service'}
+NAMES = {'native': frozenset({'profile.json', 'commander-gym.sidecar.token', 'commander-gym.local.token'}),
          'recorder': frozenset({'profile.json'}),
-         'sidecar': frozenset({'profile.json', 'commander-gym.sidecar.token', 'openai.env'})}
+         'sidecar': frozenset({'profile.json', 'commander-gym.sidecar.token', 'openai.env'}),
+         'local': frozenset({'profile.json', 'commander-gym.local.token'})}
 
 
 def _identity(info):

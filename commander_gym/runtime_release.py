@@ -142,8 +142,8 @@ def stage_bundle(root, manifest):
                     out.flush(); os.fsync(out.fileno())
                 require(file_hash(target) == sha, 'staging_digest')
                 target.chmod(0o555 if manifest['files'][key]['executable'] else 0o444)
-            if role == 'catalog':
-                group = grp.getgrnam('commander-prod').gr_gid
+            if role in ('catalog', 'localCatalog', 'localConfig'):
+                group = grp.getgrnam('commander-prod' if role == 'catalog' else 'commander-local').gr_gid
                 for path in [stage, *stage.rglob('*')]:
                     os.chown(path, 0, group)
                     path.chmod(0o750 if path.is_dir() else 0o440)

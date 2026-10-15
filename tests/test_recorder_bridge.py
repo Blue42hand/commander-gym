@@ -50,6 +50,75 @@ class RecorderBridgeTests(unittest.TestCase):
                             state={'viewingPlayerId': 'seat-a'}, pendingDecision=None, recentGameLog=[],
                             legalActions=[{'action': {'type': 'PassPriority', 'playerId': 'seat-a'}, 'actionType': 'PassPriority'}])
 
+    def test_local_peer_scope_precedes_duplicate_acknowledgement(self):
+        # Both receipts share one capture; the peer's binding scope is mandatory
+        # even when a durable row already exists and could otherwise be replayed.
+        self.bridge.local_binding_ids = frozenset({'seat-a'})
+        self.bridge.local_uid = os.getuid() + 100
+        self.register()
+        event = self.event()
+        accepted = self.bridge.ingest(event, native=False, local=True)
+        self.assertTrue(accepted['ok'])
+        with self.assertRaisesRegex(RecorderBridgeError, 'provider scope'):
+            self.bridge.ingest(event, native=False)
+        self.assertEqual(accepted, self.bridge.ingest(event, native=False, local=True))
+        self.bridge.local_binding_ids = frozenset({'other-local-binding'})
+        with self.assertRaisesRegex(RecorderBridgeError, 'provider scope'):
+            self.bridge.ingest(event, native=False, local=True)
+
+    def test_local_socket_rejects_luna_uid_before_ingestion(self):
+        self.bridge.local_uid = os.getuid() + 100
+        self.bridge.local_binding_ids = frozenset({'seat-a'})
+        server, client = socket.socketpair()
+        with patch.object(self.bridge, 'ingest') as ingest:
+            client.sendall(json.dumps(self.event()).encode() + b'\n')
+            self.bridge._serve_connection(server, False, True)
+            response = json.loads(client.recv(4096))
+            self.assertFalse(response['ok']); ingest.assert_not_called()
+        client.close()
+
+    def test_local_socket_requires_distinct_identity_and_directory(self):
+        args = dict(native_socket=self.ipc/'native.sock', sidecar_socket=self.ipc/'sidecar.sock',
+                    native_uid=os.getuid(), sidecar_uid=os.getuid(), allow_same_uid_fixture=True,
+                    local_uid=os.getuid()+100, local_gid=os.getgid(), local_binding_ids={'local'})
+        with self.assertRaisesRegex(RecorderBridgeError, 'local recorder peer'):
+            RecorderBridge(self.capture, self.registry, local_socket=self.ipc/'local.sock', **args)
+        args['local_uid'] = os.getuid()
+        with self.assertRaisesRegex(RecorderBridgeError, 'local recorder peer'):
+            RecorderBridge(self.capture, self.registry, local_socket=self.base/'other'/'local.sock', **args)
+
+    @unittest.skipUnless(os.geteuid() == 0 and hasattr(os, 'setresuid'), 'isolated Linux root UID fixture')
+    def test_real_local_uid_can_only_connect_to_its_scoped_socket(self):
+        import multiprocessing
+        self.base.chmod(0o755)
+        directory = self.base/'local-ipc';directory.mkdir(mode=0o750);os.chown(directory,0,10004)
+        os.chown(self.ipc,0,10002)
+        self.bridge = RecorderBridge(self.capture,self.registry,native_socket=self.ipc/'native.sock',
+            sidecar_socket=self.ipc/'sidecar.sock',native_uid=0,sidecar_uid=10002,sidecar_gid=10002,
+            local_socket=directory/'local.sock',local_uid=10004,local_gid=10004,local_binding_ids={'seat-a'})
+        self.register();self.bridge.start()
+        context=multiprocessing.get_context('fork');receiver,sender=context.Pipe(False)
+        message=self.event()
+        def client():
+            try:
+                os.setgroups([]);os.setgid(10004);os.setuid(10004)
+                accepted=exchange(directory/'local.sock',message,recorder_uid=0)
+                try: exchange(self.ipc/'sidecar.sock',message,recorder_uid=0)
+                except (OSError,ValueError): denied=True
+                else: denied=False
+                sender.send((accepted['ok'],denied))
+            except Exception as error:sender.send(('error',type(error).__name__,str(error)))
+            finally:sender.close()
+        child=context.Process(target=client);child.start();sender.close()
+        try:
+            self.assertTrue(receiver.poll(5),'local UID fixture stalled')
+            self.assertEqual(receiver.recv(),(True,True))
+        finally:
+            child.join(5)
+            if child.is_alive():child.kill();child.join(5)
+            receiver.close()
+        self.assertEqual(child.exitcode,0)
+
     def tearDown(self):
         self.bridge.close(); self.capture.close(); self.temp.cleanup()
 

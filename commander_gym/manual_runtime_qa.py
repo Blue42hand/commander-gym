@@ -80,6 +80,7 @@ def match_profiles(production, qa):
             and qa['purpose'] == 'qualification', 'qa_profile_purposes')
     redis_qa = qa.get('profile') == 'manual-luna-redis-qa-v1'
     excluded = {'purpose', 'artifacts', 'paths', 'recordingAuthority'}
+    require(('localInference' in production) == ('localInference' in qa), 'qa_local_provider_mode')
     require(('liveCatalog' in production) == ('liveCatalog' in qa), 'qa_live_catalog_mode')
     if 'liveCatalog' in production:
         excluded.add('liveCatalog')
@@ -94,7 +95,7 @@ def match_profiles(production, qa):
         require(production[key] == qa[key], 'qa_profile_delta')
     # Root remapping is necessary in Q; sealed config is carried as P bytes and
     # never installed. Separately sealed QA units are the explicit execution seam.
-    for role in ROLES:
+    for role in production['artifacts']:
         pfiles = production['artifacts'][role]['files']; qfiles = qa['artifacts'][role]['files']
         if redis_qa and role == 'dependencies':
             additions = dependency_additions(qa)
@@ -106,7 +107,7 @@ def match_profiles(production, qa):
     require(all(Path(path).is_relative_to(ROOT/'qa') for path in qa['paths'].values()), 'qa_path_escape')
     require(qa['recordingAuthority']['registryUid'] == 0, 'qa_registry_custody')
     return {'productionProfileSha256': digest(production), 'qaProfileSha256': digest(qa),
-            'unchangedRoleInventories': {role: digest(qa['artifacts'][role]['files']) for role in sorted(ROLES) if not (redis_qa and role == 'dependencies')},
+            'unchangedRoleInventories': {role: digest(qa['artifacts'][role]['files']) for role in sorted(production['artifacts']) if not (redis_qa and role == 'dependencies')},
             **({'redisDependencyAdditions': additions} if redis_qa else {}),
             'substitutions': ['purpose', 'artifactRoots', 'runtimePaths', 'recordingAuthority'] +
                 (['profile','settings.redisEnabled','redisQa','redisDependencyAdditions'] if redis_qa else []) +

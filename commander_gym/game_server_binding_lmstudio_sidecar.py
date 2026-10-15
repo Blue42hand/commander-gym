@@ -139,7 +139,7 @@ def build_binding_lmstudio_sidecar(config: LocalBindingConfig, *, game_capture=N
     )
 
 
-def main():
+def main(*, ready=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--inference-config", type=Path, required=True)
     parser.add_argument("--catalog", type=Path, required=True)
@@ -165,6 +165,7 @@ def main():
         raise KeyboardInterrupt
     previous_term = signal.signal(signal.SIGTERM, terminate)
     try:
+        if ready is not None: ready()
         server.serve_forever()
     except KeyboardInterrupt:
         pass
