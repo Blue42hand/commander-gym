@@ -27,6 +27,11 @@ from .pilot import PilotChoice, PilotContractError, _require_observation, valida
 class LMStudioPilotError(OpenAIResponsesPilotError):
     """Uses the existing failure-receipt contract, carrying provider=lmstudio."""
 
+    def __init__(self, message, *, model_io=None):
+        super().__init__(message, model_io=model_io if model_io is not None else {
+            "schemaVersion": 1, "provider": "lmstudio", "selectedAttempt": None, "attempts": [],
+        })
+
 
 def _local_native_format(observation: Mapping[str, Any]) -> dict[str, Any] | None:
     """Compose existing native schemas without hiding either payment channel.
@@ -260,6 +265,15 @@ class LMStudioPilot:
                             snapshot[target] = message[source]
             try:
                 remaining()  # Discard late or cancelled results before selection.
+                usage = response.get("usage")
+                if isinstance(usage, dict):
+                    for field in ("prompt_tokens", "completion_tokens"):
+                        if field in usage and (type(usage[field]) is not int or usage[field] < 0):
+                            raise LMStudioError("invalid_usage")
+                    if (usage.get("prompt_tokens", 0) > self.config.max_prompt_bytes + self.config.template_reserve_tokens
+                        or usage.get("completion_tokens", 0) > self.config.max_output_tokens
+                        or usage.get("prompt_tokens", 0) + usage.get("completion_tokens", 0) > self.config.context_window):
+                        raise LMStudioError("provider_context_budget_exceeded")
                 content, parsed = _parse_final(response, self.config.model)
                 _schema_check(schema_format["schema"], parsed, validate=True)
                 choice = validator._choice_from_response(
@@ -268,7 +282,7 @@ class LMStudioPilot:
                 choice = validate_pilot_choice(choice, observation)
             except (LMStudioError, OpenAIResponsesPilotError, PilotContractError) as exc:
                 snapshot["validationError"] = str(exc)
-                if str(exc) in {"cancelled", "deadline_exceeded"}:
+                if str(exc) in {"cancelled", "deadline_exceeded", "invalid_usage", "provider_context_budget_exceeded"}:
                     fail(str(exc))
                 request["messages"][1]["content"] = base_input + "\nPrevious output was invalid. Return JSON matching the schema and current native offer."
                 continue

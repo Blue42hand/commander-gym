@@ -28,6 +28,7 @@ class LocalBounceTests(unittest.TestCase):
         action = bounce_action()
         action["additionalCostInfo"]["bounceCount"] = 99
         transport = FakeTransport()
-        with self.assertRaises(LMStudioPilotError):
+        with self.assertRaises(LMStudioPilotError) as caught:
             LMStudioPilot(config(), transport=transport).choose(observation(action))
+        self.assertEqual(caught.exception.model_io["provider"], "lmstudio")
         self.assertEqual(transport.calls, [])

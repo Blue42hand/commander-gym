@@ -62,6 +62,14 @@ class FakeTransport:
 
 
 class LMStudioPilotTests(unittest.TestCase):
+    def test_reported_usage_cannot_exceed_qualified_context_or_output_budget(self):
+        for usage in ({"prompt_tokens": 9000}, {"completion_tokens": 2049},
+                      {"prompt_tokens": True}, {"completion_tokens": -1}):
+            transport = FakeTransport(completion(usage=usage))
+            with self.assertRaises(LMStudioPilotError):
+                LMStudioPilot(config(), transport=transport).choose(action_observation())
+            self.assertEqual(len(transport.calls), 2)  # No retry after a context contract failure.
+
     def test_explicit_provider_and_model_selection_ignores_openai_environment(self):
         with tempfile.TemporaryDirectory() as root:
             path = Path(root) / "local.json"
