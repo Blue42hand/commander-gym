@@ -1,3 +1,4 @@
+from copy import deepcopy
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
 import json
