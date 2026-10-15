@@ -97,6 +97,109 @@ Do not copy mage-bench's XMage-specific:
 
 Equivalent generic capabilities belong in Argentum and should be upstreamed there when missing.
 
+## Replay-Safe State Caching Implementation (Issue #55)
+
+To reduce pilot context duplication while maintaining replayability and preventing opponent hidden information leakage, Commander Gym implements optional replay-safe state caching:
+
+### Architecture
+
+The implementation follows mage-bench's deduplication principle (#3 above) with additional safety guarantees:
+
+1. **ObservationIdentity.kt**: Assigns unique identifiers to pilot observations using SHA-256 hashing of seat-visible fields (turn number, phase, state hash). This enables deterministic change detection.
+
+2. **StateCacheManager.kt**: Thread-safe cache that stores only seat-visible information:
+   - Visible hand cards (not opponent's hidden cards)
+   - Visible board permanents (only own side)
+   - Public game events (no opponent-specific details)
+
+3. **CardTextCache.kt**: Deduplicates card oracle text within a game session, tracking which cards have been seen in the current context.
+
+4. **CachingCommanderGymPlayerController.kt**: Wrapper around the base controller that applies caching when enabled (opt-in only).
+
+### Safety Guarantees
+
+- ✅ No opponent hidden information leakage - Only seat-visible data cached
+- ✅ Deterministic cache reset behavior on incompatible state transitions
+- ✅ Replayability maintained - All cached data reconstructable from trajectory logs
+- ✅ Thread-safe implementation for concurrent access
+- ✅ Default caching OFF (opt-in only) for safety
+
+### Usage
+
+Enable caching in `CommanderGymControllerProvider`:
+
+```kotlin
+val provider = CommanderGymControllerProvider(
+    endpoint = uri,
+    token = "...",
+    enableStateCaching = true,  // Opt-in only
+    maxCacheSize = 1024,
+)
+```
+
+Or use the convenience factory:
+
+```kotlin
+val controller = CachingCommanderGymPlayerController.createWithCaching(
+    playerId = entityId,
+    endpoint = uri,
+    token = "...",
+)
+```
+
+### Cache Metadata Format
+
+When caching is enabled, metadata is logged for each request:
+
+```json
+{
+  "observationId": "sha256-hash-of-state",
+  "isCacheHit": true,
+  "tokensSaved": 500,
+  "cacheStats": {
+    "cacheHits": 142,
+    "cacheMisses": 8,
+    "totalTokensSaved": 71000
+  },
+  "cardCacheStats": {
+    "cardsCached": 23,
+    "totalTokensSaved": 2300
+  }
+}
+```
+
+### Integration with mage-bench Patterns
+
+This implementation adapts mage-bench's deduplication pattern (#3) while adding:
+- Explicit seat-visible-only guarantees (no opponent data leakage)
+- Deterministic replayability through ObservationIdentity
+- Optional opt-in design for safety
+- Comprehensive unit tests verifying correctness
+
+### Testing
+
+Unit tests verify:
+- State hashing consistency and determinism
+- Cache hit/miss behavior
+- Thread-safe concurrent access
+- No hidden information leakage in cached data
+- Card deduplication within game sessions
+
+See `jvm-adapter/src/test/kotlin/org/commandergym/argentum/` for test implementations.
+
+## Do not import
+
+Do not copy mage-bench's XMage-specific:
+
+- callback translation;
+- legality filtering;
+- mana handling;
+- priority workarounds;
+- rules workarounds;
+- client/server authority.
+
+Equivalent generic capabilities belong in Argentum and should be upstreamed there when missing.
+
 Commander Gym may adapt MIT-licensed mage-bench player-side code where doing so is simpler and cleaner than reimplementation, with attribution and license compliance.
 
 ## Near-term implementation order
@@ -105,6 +208,8 @@ Commander Gym may adapt MIT-licensed mage-bench player-side code where doing so 
 2. Add harness/interface epoch metadata.
 3. Add model/tool latency, cost, retry, stall, and failure telemetry to the full-game runner.
 4. Add player-side state/rules-text deduplication where it does not weaken replayability.
+5. Implement replay-safe state caching with seat-visible-only guarantees (Issue #55).
+6. Add a generic chat event/action seam once the corresponding normal-player transport exists in Argentum.
 5. Add a generic chat event/action seam once the corresponding normal-player transport exists in Argentum.
 6. Implement social-policy separation before adding rich personalities or table personas.
 

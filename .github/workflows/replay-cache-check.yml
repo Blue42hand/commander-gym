@@ -1,0 +1,61 @@
+name: Replay-Safe State Caching Progress Check
+
+on:
+  push:
+    branches: [feat/replay-safe-state-caching]
+  pull_request:
+    branches: [main]
+
+jobs:
+  progress-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Check implementation plan exists
+        run: |
+          if [ ! -f docs/replay-safe-state-caching-plan.md ]; then
+            echo "❌ Implementation plan missing!"
+            exit 1
+          fi
+          echo "✅ Plan file found"
+      
+      - name: Verify core files created
+        run: |
+          required_files=(
+            "jvm-adapter/src/main/kotlin/org/commandergym/argentum/ObservationIdentity.kt"
+            "jvm-adapter/src/main/kotlin/org/commandergym/argentum/StateCacheManager.kt"
+          )
+          
+          for file in "${required_files[@]}"; do
+            if [ ! -f "$file" ]; then
+              echo "❌ Missing required file: $file"
+              exit 1
+            fi
+            echo "✅ Found: $file"
+          done
+      
+      - name: Check acceptance criteria progress
+        run: |
+          plan_file="docs/replay-safe-state-caching-plan.md"
+          
+          if grep -q "Phase 1.*IN PROGRESS\|Phase 1.*DONE" "$plan_file"; then
+            echo "✅ Phase 1 status tracked in plan"
+          else
+            echo "⚠️  Consider updating phase status in plan"
+          fi
+      
+      - name: Verify no hidden info leakage (basic check)
+        run: |
+          # Check that StateCacheManager doesn't include opponent data
+          if grep -q "opponent.*hidden\|secret.*card\|private.*hand" jvm-adapter/src/main/kotlin/org/commandergym/argentum/StateCacheManager.kt; then
+            echo "❌ WARNING: Potential hidden information leakage detected!"
+            exit 1
+          fi
+          echo "✅ No obvious hidden info leakage in cache implementation"
+
+      - name: Display current progress summary
+        run: |
+          echo "📊 Current Implementation Progress:"
+          echo ""
+          grep -A 20 "Progress Tracking" docs/replay-safe-state-caching-plan.md || true

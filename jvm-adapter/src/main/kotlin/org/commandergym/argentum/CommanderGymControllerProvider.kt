@@ -24,6 +24,7 @@ import com.wingedsheep.sdk.model.EntityId
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.*
 import java.net.URI
+import org.commandergym.argentum.CachingCommanderGymPlayerController
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
@@ -49,6 +50,10 @@ class CommanderGymControllerProvider(
     private val http: HttpClient = HttpClient.newBuilder().connectTimeout(timeout).build(),
     private val requireHumanParticipant: Boolean = false,
     private val recorder: RecorderCallbackClient? = null,
+    /** Enable replay-safe state caching (default OFF for safety - opt-in only) */
+    private val enableStateCaching: Boolean = false,
+    /** Maximum cache size for observations */
+    private val maxCacheSize: Int = 1024,
 ) : AiControllerProvider {
     override val mode: String = "commander-gym"
     override val supportsDefaultController: Boolean get() = !requireHumanParticipant
@@ -92,31 +97,62 @@ class CommanderGymControllerProvider(
                 "Unknown Commander Gym Binding profile '$profileId'"
             }
         }
-        return CommanderGymPlayerController(
-            playerId = context.playerId,
-            endpoint = endpoint,
-            token = token,
-            timeout = timeout,
-            profileId = selected?.id,
-            gameSessionId = context.gameSessionId,
-            expectedDeck = selected?.deckList,
-            expectedCommander = selected?.commander,
-            parameterize = { offered, params ->
-                if (params.isEmpty) offered.action else {
-                    val snapshot = context.snapshot()
-                        ?: error("Commander Gym action params require a live Argentum runtime snapshot")
-                    ActionParameterizer.apply(offered, params, snapshot.state)
-                }
-            },
-            http = http,
-            beforeCallback = {
-                require(!requireHumanParticipant ||
-                    (context.gameSessionId != null && context.isManualHumanGame())) {
-                    "Commander Gym manual service requires a native game with a human participant"
-                }
-            },
-            manualHumanGame = requireHumanParticipant,
-            recorder = recorder,
+        // Use caching-enabled controller if enabled, otherwise use standard controller
+        val controller: AiPlayerController = if (enableStateCaching) {
+            CachingCommanderGymPlayerController(
+                playerId = context.playerId,
+                endpoint = endpoint,
+                token = token,
+                timeout = timeout,
+                profileId = selected?.id,
+                gameSessionId = context.gameSessionId,
+                expectedDeck = selected?.deckList,
+                expectedCommander = selected?.commander,
+                parameterize = { offered, params ->
+                    if (params.isEmpty) offered.action else {
+                        val snapshot = context.snapshot()
+                            ?: error("Commander Gym action params require a live Argentum runtime snapshot")
+                        ActionParameterizer.apply(offered, params, snapshot.state)
+                    }
+                },
+                http = http,
+                beforeCallback = {
+                    require(!requireHumanParticipant ||
+                        (context.gameSessionId != null && context.isManualHumanGame())) {
+                        "Commander Gym manual service requires a native game with a human participant"
+                    }
+                },
+                manualHumanGame = requireHumanParticipant,
+                recorder = recorder,
+                enableStateCaching = true, // Explicit opt-in
+                maxCacheSize = maxCacheSize,
+            )
+        } else {
+            CommanderGymPlayerController(
+                playerId = context.playerId,
+                endpoint = endpoint,
+                token = token,
+                timeout = timeout,
+                profileId = selected?.id,
+                gameSessionId = context.gameSessionId,
+                expectedDeck = selected?.deckList,
+                expectedCommander = selected?.commander,
+                parameterize = { offered, params ->
+                    if (params.isEmpty) offered.action else {
+                        val snapshot = context.snapshot()
+                            ?: error("Commander Gym action params require a live Argentum runtime snapshot")
+                        ActionParameterizer.apply(offered, params, snapshot.state)
+                    }
+                },
+                http = http,
+                beforeCallback = {
+                    require(!requireHumanParticipant ||
+                        (context.gameSessionId != null && context.isManualHumanGame())) {
+                        "Commander Gym manual service requires a native game with a human participant"
+                    }
+                },
+                manualHumanGame = requireHumanParticipant,
+                recorder = recorder,
         )
         // Only the native edge can obtain the trusted snapshot. It never crosses HTTP.
     }
