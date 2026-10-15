@@ -61,6 +61,7 @@ def inspect_catalog(profile: dict) -> dict:
     config = binding_openai_game_server_config_from_environment({
         "OPENAI_API_KEY": "qa-placeholder-never-a-credential", "COMMANDER_GYM_SIDECAR_TOKEN": "qa-placeholder-never-a-token",
         "COMMANDER_GYM_SIDECAR_PORT": "8083", "COMMANDER_GYM_MANUAL_UNCAPPED": "true",
+        "COMMANDER_GYM_CACHE_FRIENDLY_HISTORY": "true",
         "COMMANDER_GYM_INSTANCE_ROOT": str(root), "COMMANDER_GYM_BINDING_CATALOG": str(root / profile["catalog"]["roster"]),
         "COMMANDER_GYM_OPENAI_MODEL": "gpt-6-luna", "COMMANDER_GYM_OPENAI_TIMEOUT": "90", "COMMANDER_GYM_OPENAI_MAX_ATTEMPTS": "2"})
     resolver = OpenAIBindingPilotComponentResolver(config=config.sidecar, client=RejectingClient(), budget=None, cache_friendly_history=config.cache_friendly_history, manual_uncapped=True)

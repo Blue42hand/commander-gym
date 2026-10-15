@@ -196,7 +196,28 @@ class ManualRuntimeProfileTests(unittest.TestCase):
         self.assertEqual(env['OPENAI_API_KEY'], 'qa-placeholder')
         self.assertFalse(any('BUDGET' in name or 'RECORDING_ROOT' in name or 'SESSION_MAX' in name for name in env))
         self.assertEqual(env['COMMANDER_GYM_OPENAI_MAX_ATTEMPTS'], '2')
+        self.assertEqual(env['COMMANDER_GYM_CACHE_FRIENDLY_HISTORY'], 'true')
         self.assertIn('-I', sidecar_spec(runtime, env).arguments)
+
+    def test_offline_catalog_qualification_uses_same_cache_mode_as_launch(self):
+        from commander_gym.manual_runtime_qualification import inspect_catalog
+        from commander_gym.game_server_binding_openai_sidecar import OpenAIBindingPilotComponentResolver
+        manifest = {'files': {}, 'model': 'gpt-6-luna', 'maxAttempts': 2,
+                    'profiles': list(self.profile['catalog']['bindings'])}
+        manifest_path = Path(self.profile['artifacts']['catalog']['root']) / self.profile['catalog']['manifest']
+        manifest_path.write_bytes(canonical(manifest))
+        self.profile['artifacts']['catalog']['files'][manifest_path.name] = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+        class StopBeforeCatalogLoad(Exception):
+            pass
+        with patch('commander_gym.binding_catalog.load_binding_catalog', side_effect=StopBeforeCatalogLoad), \
+             patch('commander_gym.game_server_binding_openai_sidecar.OpenAIBindingPilotComponentResolver',
+                   wraps=OpenAIBindingPilotComponentResolver) as resolver:
+            with self.assertRaises(StopBeforeCatalogLoad):
+                inspect_catalog(self.profile)
+        self.assertIs(resolver.call_args.kwargs['cache_friendly_history'], True)
+        rejecting = resolver.call_args.kwargs['client']
+        with self.assertRaisesRegex(AssertionError, 'offline qualification forbids provider calls'):
+            rejecting.responses.create()
 
     def test_validated_runtime_does_not_alias_mutable_input(self):
         runtime = ValidatedRuntime(canonical(self.profile), digest(self.profile), 2)

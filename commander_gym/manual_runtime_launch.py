@@ -125,6 +125,7 @@ def sidecar_environment(runtime: ValidatedRuntime, *, credential_directory: Path
             "COMMANDER_GYM_SIDECAR_TOKEN": token, "COMMANDER_GYM_SIDECAR_HOST": "127.0.0.1",
             "COMMANDER_GYM_SIDECAR_PORT": "8083", "COMMANDER_GYM_OPENAI_MODEL": "gpt-6-luna",
             "COMMANDER_GYM_OPENAI_TIMEOUT": "90", "COMMANDER_GYM_OPENAI_MAX_ATTEMPTS": "2",
+            "COMMANDER_GYM_CACHE_FRIENDLY_HISTORY": "true",
             "COMMANDER_GYM_RECORDER_SOCKET": str(Path(profile["paths"]["recorderSocket"]).parent / "sidecar.sock"),
             "COMMANDER_GYM_RECORDER_UID": str(profile["identities"]["nativeUid"]),
             "COMMANDER_GYM_MANUAL_UNCAPPED": "true", "COMMANDER_GYM_INSTANCE_ROOT": catalog["root"],
