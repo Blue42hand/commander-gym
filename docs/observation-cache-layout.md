@@ -53,14 +53,32 @@ ceiling is not a measured saving from this change.
 
 ## Activation handoff
 
-On a reviewed source revision containing this change, the existing binding
-sidecar option `COMMANDER_GYM_CACHE_FRIENDLY_HISTORY=true` selects this layout.
+On a reviewed source revision containing this change, the binding sidecar option
+`COMMANDER_GYM_CACHE_FRIENDLY_HISTORY=true` selects this layout when supplied
+in the sidecar's actual process environment.
 The default remains `false`. Existing built-in compact Pilot components,
 including explicit-wait v8, already accept this transport option through
 `OpenAIBindingPilotComponentResolver`; existing immutable Pilot/Binding artifacts
 need no mutation. Pin the Gym revision and environment value in the release
-receipt. `manual_runtime_qualification` forwards the option into its no-provider
-resolver qualification.
+receipt. `manual_runtime_qualification` forwards the option from its resulting
+configuration into its no-provider resolver qualification.
+
+The current manual-runtime launcher builds an explicit environment allowlist in
+`manual_runtime_launch.sidecar_environment` and does **not** include this option.
+Neither a shell export nor an ambient systemd environment variable activates it.
+The release owner must include the following entry in that function's returned
+environment in a separately reviewed release source revision, then rebuild and
+reseal the launcher/source manifests through the existing release process:
+
+```python
+"COMMANDER_GYM_CACHE_FRIENDLY_HISTORY": "true",
+```
+
+Qualification must assert this entry in the generated sidecar environment and
+resolve the same immutable Pilot/Binding with cache mode enabled using a rejecting
+or fake provider. The existing launcher allowlist and sealed-profile schema are
+not changed by this PR. Until the release source change is incorporated and
+qualified, the manual runtime continues to use the original non-cache layout.
 
 Historical human-GUI/experimental-prefix/sequential-v7 launchers deliberately
 force cache mode off; this change does not relax their qualification contracts.
