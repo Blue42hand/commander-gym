@@ -83,6 +83,7 @@ class GameServerSidecarServer(ThreadingHTTPServer):
         callback_context: Callable[..., Any] | None = None,
         profiles_supplier: Callable[[], Sequence[Mapping[str, Any]]] | None = None,
         profile_exists: Callable[[str], bool] | None = None,
+        connection_context: Callable[..., Any] | None = None,
     ) -> None:
         self.sidecar_config = config
         self.seats = dict(seats or {})
@@ -90,6 +91,7 @@ class GameServerSidecarServer(ThreadingHTTPServer):
         self._profile_seat_factory = profile_seat_factory
         self._game_profile_seat_factory = game_profile_seat_factory
         self.callback_context = callback_context
+        self.connection_context = connection_context
         if (profiles_supplier is None) != (profile_exists is None):
             raise GameServerSidecarConfigurationError('live profiles require discovery and selection together')
         self._profiles_supplier = profiles_supplier
@@ -267,7 +269,8 @@ class GameServerSidecarHandler(BaseHTTPRequestHandler):
                 raise ValueError("gameSessionId must be a non-empty string")
             adapter = self.server.resolve_seat(player_id, profile_id, game_id)  # type: ignore[attr-defined]
             context = self.server.callback_context  # type: ignore[attr-defined]
-            with (nullcontext() if context is None else context(
+            connection_context = self.server.connection_context  # type: ignore[attr-defined]
+            with (nullcontext() if connection_context is None else connection_context(self.connection)), (nullcontext() if context is None else context(
                     request, callback, self.headers.get("X-Commander-Gym-Callback-Id"))):
                 response = self._invoke(callback, adapter, request)
         except UnknownProfileError:
@@ -295,7 +298,7 @@ class GameServerSidecarHandler(BaseHTTPRequestHandler):
     @staticmethod
     def _pilot_failure_detail(exc: Exception) -> str:
         kind = type(exc).__name__
-        if kind != "OpenAIResponsesPilotError":
+        if kind not in {"OpenAIResponsesPilotError", "LMStudioPilotError"}:
             return kind
         message = " ".join(str(exc).split())
         return f"{kind}: {message[:1000]}" if message else kind

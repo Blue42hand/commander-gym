@@ -16,6 +16,7 @@ from types import SimpleNamespace
 from typing import Any, Mapping
 
 from .lmstudio_provider import LMStudioConfig, LMStudioError, LMStudioTransport, require_loaded_model
+from .local_callback_context import current_cancel
 from .openai_responses_pilot import (
     OpenAIResponsesPilot, OpenAIResponsesPilotError, _DEFAULT_INSTRUCTIONS,
     _native_action_format, _native_decision_format, _without_live_routing,
@@ -167,6 +168,7 @@ class LMStudioPilot:
 
     def choose(self, observation: Mapping[str, Any]) -> PilotChoice:
         _require_observation(observation)
+        cancel = self.cancel if self.cancel is not None else current_cancel.get()
         started = monotonic()
         deadline = started + self.config.timeout_seconds
         attempts = []
@@ -209,7 +211,7 @@ class LMStudioPilot:
             } if attempts else None)
 
         def remaining():
-            if self.cancel is not None and self.cancel.is_set():
+            if cancel is not None and cancel.is_set():
                 raise LMStudioError("cancelled")
             value = deadline - monotonic()
             if value <= 0:
@@ -222,7 +224,7 @@ class LMStudioPilot:
             if len(json.dumps(request, ensure_ascii=False).encode()) > self.config.max_prompt_bytes:
                 fail("local_prompt_byte_limit_exceeded")
             try:
-                discovery = self.transport.request("/api/v1/models", None, timeout=remaining(), cancel=self.cancel)
+                discovery = self.transport.request("/api/v1/models", None, timeout=remaining(), cancel=cancel)
                 identity = require_loaded_model(discovery, self.config)
                 remaining()
             except LMStudioError as exc:
@@ -231,7 +233,7 @@ class LMStudioPilot:
             attempts.append(attempt)
             dispatch = monotonic()
             try:
-                response = self.transport.request("/v1/chat/completions", request, timeout=remaining(), cancel=self.cancel)
+                response = self.transport.request("/v1/chat/completions", request, timeout=remaining(), cancel=cancel)
             except LMStudioError as exc:
                 attempt["response"] = {"transportError": str(exc), "httpStatus": exc.status,
                                        "providerWallTimeMs": round((monotonic() - dispatch) * 1000, 3)}

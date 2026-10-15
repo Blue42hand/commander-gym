@@ -12,7 +12,33 @@ import kotlin.test.assertNull
 
 class CommanderGymAutoConfigurationTest {
     private val runner = ApplicationContextRunner()
-        .withConfiguration(AutoConfigurations.of(CommanderGymAutoConfiguration::class.java))
+        .withConfiguration(AutoConfigurations.of(CommanderGymAutoConfiguration::class.java, CommanderGymLocalAutoConfiguration::class.java))
+
+    @Test
+    fun `local provider needs its own explicit configuration and never enables Luna`() {
+        runner.withPropertyValues("commander-gym.local.enabled=true",
+            "commander-gym.sidecar.url=http://127.0.0.1:1", "commander-gym.sidecar.token=cloud-token").run { context ->
+            assertNotNull(context.startupFailure)
+        }
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        server.createContext("/v1/controller-profiles") { exchange ->
+            val authorized = exchange.requestHeaders.getFirst("Authorization") == "Bearer local-token"
+            val body = """{"profiles":[]}""".toByteArray()
+            exchange.sendResponseHeaders(if (authorized) 200 else 401, body.size.toLong())
+            exchange.responseBody.use { it.write(body) }
+        }
+        server.start()
+        try {
+            runner.withPropertyValues("game.ai.mode=engine", "commander-gym.local.enabled=true",
+                "commander-gym.local.url=http://127.0.0.1:${server.address.port}",
+                "commander-gym.local.token=local-token").run { context ->
+                assertNull(context.startupFailure)
+                val provider = context.getBean(AiControllerProvider::class.java)
+                assertEquals("commander-gym-local", provider.mode)
+                assertEquals(false, provider.supportsDefaultController)
+            }
+        } finally { server.stop(0) }
+    }
 
     @Test
     fun `installing artifact alone leaves keyless engine default untouched`() {
