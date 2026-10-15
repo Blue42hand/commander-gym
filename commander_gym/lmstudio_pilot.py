@@ -217,7 +217,7 @@ class LMStudioPilot:
                 key: deepcopy(value) for key, value in schema_format.items() if key != "type"
             }},
             "max_tokens": self.config.max_output_tokens,
-            "stream": False, "reasoning_effort": "none", "temperature": 0,
+            "stream": self.config.stream, "reasoning_effort": "none", "temperature": 0,
         }
         validator = OpenAIResponsesPilot(
             client=SimpleNamespace(responses=SimpleNamespace(create=lambda **_: None)), model=self.config.model,
@@ -243,19 +243,22 @@ class LMStudioPilot:
             if len(json.dumps(request, ensure_ascii=False).encode()) > self.config.max_prompt_bytes:
                 fail("local_prompt_byte_limit_exceeded")
             try:
+                discovery_started = monotonic()
                 discovery = self.transport.request("/api/v1/models", None, timeout=remaining(), cancel=cancel)
                 identity = require_loaded_model(discovery, self.config)
+                discovery_ms = round((monotonic() - discovery_started) * 1000, 3)
                 remaining()
             except LMStudioError as exc:
                 fail(str(exc))
-            attempt = {"attempt": index, "request": deepcopy(request), "response": {}}
+            attempt = {"attempt": index, "request": deepcopy(request),
+                       "response": {"discoveryWallTimeMs": discovery_ms}}
             attempts.append(attempt)
             dispatch = monotonic()
             try:
                 response = self.transport.request("/v1/chat/completions", request, timeout=remaining(), cancel=cancel)
             except LMStudioError as exc:
-                attempt["response"] = {"transportError": str(exc), "httpStatus": exc.status,
-                                       "providerWallTimeMs": round((monotonic() - dispatch) * 1000, 3)}
+                attempt["response"].update({"transportError": str(exc), "httpStatus": exc.status,
+                                           "providerWallTimeMs": round((monotonic() - dispatch) * 1000, 3)})
                 if exc.status in {502, 503, 504} and index + 1 < self.config.max_attempts:
                     continue
                 fail(str(exc))
@@ -263,7 +266,8 @@ class LMStudioPilot:
             snapshot.update({"providerWallTimeMs": round((monotonic() - dispatch) * 1000, 3),
                              "modelIdentity": identity})
             for source, target in (("id", "responseId"), ("model", "responseModel"),
-                                   ("usage", "usage"), ("stats", "stats")):
+                                   ("usage", "usage"), ("stats", "stats"),
+                                   ("_localTransport", "transport")):
                 if source in response:
                     snapshot[target] = deepcopy(response[source])
             choices = response.get("choices")
@@ -298,6 +302,7 @@ class LMStudioPilot:
                 request["messages"][1]["content"] = base_input + "\nPrevious output was invalid. Return JSON matching the schema and current native offer."
                 continue
             metadata = {**dict(choice.metadata), "provider": "lmstudio", "model": self.config.model,
+                        "choiceWallTimeMs": round((monotonic() - started) * 1000, 3),
                         "providerWallTimeMs": round(sum(a["response"]["providerWallTimeMs"] for a in attempts), 3),
                         "modelIo": {"schemaVersion": 1, "provider": "lmstudio",
                                     "selectedAttempt": index, "attempts": attempts}}
