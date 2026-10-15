@@ -26,7 +26,7 @@ from commander_gym.game_server_bindings import GameServerBindingRegistry
 from commander_gym.recorder_bridge import _RecordingPilot
 
 
-def local_profile(root):
+def local_profile(root, *, source_entries=True):
     profile = fixture_profile(root)
     cfg = config()
     pilot = Pilot(pilot_id='local-fixture', revision='1', generalist_base=local_component_ref(cfg))
@@ -50,7 +50,7 @@ def local_profile(root):
     launcher = profile['artifacts']['launcher']
     for name in ('scripts/local_sidecar_entry.py', 'commander_gym/manual_runtime_local.py', 'commander_gym/lmstudio_provider.py', 'commander_gym/lmstudio_http_worker.py'):
         path = Path(launcher['root'])/name;path.parent.mkdir(parents=True,exist_ok=True)
-        path.write_bytes(Path(name).read_bytes());launcher['files'][name]=hashlib.sha256(path.read_bytes()).hexdigest()
+        path.write_bytes(Path(name).read_bytes() if source_entries else b'# nonexecuted credential fixture entry');launcher['files'][name]=hashlib.sha256(path.read_bytes()).hexdigest()
     return profile
 
 
