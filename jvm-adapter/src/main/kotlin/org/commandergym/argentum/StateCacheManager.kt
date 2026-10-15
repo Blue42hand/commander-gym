@@ -10,13 +10,6 @@ import kotlin.math.max
  * Manages caching of pilot observations to reduce repeated model input.
  * Tracks state changes and provides safe deduplication while maintaining replayability.
  */
-@Serializable
-data class CacheMetadata(
-    val cacheHits: Int = 0,
-    val cacheMisses: Int = 0,
-    val totalTokensSaved: Long = 0L,
-    val lastCacheUpdate: Instant = Instant.now(),
-    val currentObservationIdentity: ObservationIdentity? = null,
 )
 
 /**
@@ -215,8 +208,8 @@ data class CacheMetadata(
     val observationId: String? = null,
     val isCacheHit: Boolean = false,
     val tokensSaved: Long = 0L,
-    val cacheStats: StateCacheManager.CacheStats? = null,
-    val cardCacheStats: CardTextCache.Stats? = null,
+    val cacheStats: StateCacheManagerCacheStats? = null,
+    val cardCacheStats: CardTextCacheStats? = null,
 ) { }
 
 /**

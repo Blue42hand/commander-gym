@@ -119,7 +119,7 @@ class CachingCommanderGymPlayerController(
                 isCacheHit = isCacheHit,
                 tokensSaved = if (isCacheHit) 500L else 0L, // Rough estimate
                 cacheStats = stateCacheManager?.getStats() ?: StateCacheManagerCacheStats(),
-                cardCacheStats = cardTextCache?.getStats() ?: StateCacheManagerCacheStats()
+                cardCacheStats = cardTextCache?.getStats() ?: CardTextCacheStats()
             )
         } else null
 
@@ -220,7 +220,7 @@ class CachingCommanderGymPlayerController(
     /**
      * Log cache metadata for debugging and monitoring.
      */
-    private fun logCacheMetadata(metadata: CacheMetadata) {
+    private fun logCacheMetadata(metadata: CacheResult) {
         val logEntry = buildString {
             append("=== Replay-Safe State Caching ===\n")
             append("Observation ID: ${metadata.observationId}\n")
