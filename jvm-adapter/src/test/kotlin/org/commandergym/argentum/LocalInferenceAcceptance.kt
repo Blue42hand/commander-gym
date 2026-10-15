@@ -52,8 +52,8 @@ fun main() {
     check(provider.mode == "commander-gym-local" && !provider.supportsDefaultController)
     check(provider.profiles.single().id == "local-qualification")
     val controllers = seats.associateWith { seat ->
-        provider.create(AiControllerContext(playerId=seat, gameSessionId=gameId,
-            profileId="local-qualification", snapshot={ session.getAiRuntimeSnapshot() })).also {
+        (provider.create(AiControllerContext(playerId=seat, gameSessionId=gameId,
+            profileId="local-qualification", snapshot={ session.getAiRuntimeSnapshot() })) as CommanderGymPlayerController).also {
             it.setDeckList(deck)
         }
     }
