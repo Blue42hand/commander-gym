@@ -196,13 +196,22 @@ class RecorderBridge:
     """
     def __init__(self, capture, registry, *, native_socket: Path, sidecar_socket: Path,
                  native_uid: int, sidecar_uid: int, sidecar_gid: int | None = None,
-                 allow_same_uid_fixture: bool = False):
+                 allow_same_uid_fixture: bool = False, local_socket: Path | None = None,
+                 local_uid: int | None = None, local_gid: int | None = None, local_binding_ids=()):
         if native_uid != os.getuid() or type(sidecar_uid) is not int or sidecar_uid < 0:
             raise RecorderBridgeError('invalid recorder identities')
         if native_uid == sidecar_uid and not allow_same_uid_fixture:
             raise RecorderBridgeError('sidecar and recorder must have distinct identities')
         if native_socket == sidecar_socket:
             raise RecorderBridgeError('recorder roles require separate sockets')
+        self.local_binding_ids = frozenset(local_binding_ids)
+        self.local_socket, self.local_uid, self.local_gid = local_socket, local_uid, local_gid
+        if any(value is not None for value in (local_socket, local_uid, local_gid)) or self.local_binding_ids:
+            if (not isinstance(local_socket, Path) or type(local_uid) is not int or local_uid < 0
+                    or type(local_gid) is not int or local_gid < 0 or local_uid in (native_uid, sidecar_uid)
+                    or local_socket in (native_socket, sidecar_socket) or local_socket.parent == sidecar_socket.parent
+                    or not self.local_binding_ids or any(not isinstance(x, str) or not _ID.fullmatch(x) for x in self.local_binding_ids)):
+                raise RecorderBridgeError('invalid local recorder peer')
         self.capture, self.registry = capture, registry
         self.native_socket, self.sidecar_socket = Path(native_socket), Path(sidecar_socket)
         self.native_uid, self.sidecar_uid, self.sidecar_gid = native_uid, sidecar_uid, sidecar_gid
@@ -222,7 +231,7 @@ class RecorderBridge:
                 return row, metadata
         return None
 
-    def ingest(self, message, *, native: bool):
+    def ingest(self, message, *, native: bool, local: bool = False):
         required = {'protocol', 'op', 'callbackId', 'gameId', 'seatId', 'bindingId', 'callback'}
         op = message.get('op')
         required |= {'request'} if op == 'register' else {'event'} if op in {'started', 'finished'} else set()
@@ -236,6 +245,10 @@ class RecorderBridge:
             _safe(message)
         except JournalError:
             raise RecorderBridgeError('unsafe callback event') from None
+        # Peer scope is checked before looking up even an already durable receipt.
+        if not native and ((local and (self.local_uid is None or message['bindingId'] not in self.local_binding_ids))
+                           or (not local and message['bindingId'] in self.local_binding_ids)):
+            raise RecorderBridgeError('recorder provider scope mismatch')
         digest = hashlib.sha256(_json(message)).hexdigest()
         game_id, seat = message['gameId'], message['seatId']
         # Scanner and ingestion share its lock; finalization cannot race a receipt.
@@ -338,7 +351,10 @@ class RecorderBridge:
             raise RecorderBridgeError('recorder bridge already started or closed')
         self.capture.errors['recorder_bridge_transport'] = 'BridgeNotReady'
         try:
-            for native, path in ((True, self.native_socket), (False, self.sidecar_socket)):
+            peers = [(True, self.native_socket, False), (False, self.sidecar_socket, False)]
+            if self.local_socket is not None:
+                peers.append((False, self.local_socket, True))
+            for native, path, local in peers:
                 path = _socket_path(path, self.native_uid, listener=True, native=native)
                 listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
                 try:
@@ -348,11 +364,11 @@ class RecorderBridge:
                     raise
                 self._listeners.append((listener, path, path.stat().st_ino))
                 os.chmod(path, 0o600 if native else 0o660)
-                if not native and self.sidecar_gid is not None:
-                    os.chown(path, -1, self.sidecar_gid)
+                if not native and (self.local_gid if local else self.sidecar_gid) is not None:
+                    os.chown(path, -1, self.local_gid if local else self.sidecar_gid)
                 listener.listen(8)
                 listener.settimeout(0.2)
-                thread = threading.Thread(target=self._serve, args=(listener, native), daemon=True,
+                thread = threading.Thread(target=self._serve, args=(listener, native, local), daemon=True,
                                           name='private-recorder-native' if native else 'private-recorder-sidecar')
                 self._threads.append(thread)
                 thread.start()
@@ -361,7 +377,7 @@ class RecorderBridge:
             self.close()
             raise
 
-    def _serve(self, listener, native):
+    def _serve(self, listener, native, local=False):
         while not self._stop.is_set():
             try:
                 connection, _ = listener.accept()
@@ -377,19 +393,19 @@ class RecorderBridge:
                     return
                 self._connections.add(connection)
             try:
-                self._serve_connection(connection, native)
+                self._serve_connection(connection, native, local)
             finally:
                 with self._connections_lock:
                     self._connections.discard(connection)
                 connection.close()
 
-    def _serve_connection(self, connection, native):
+    def _serve_connection(self, connection, native, local=False):
         with connection:
             connection.settimeout(TIMEOUT)
             try:
-                if peer_uid(connection) != (self.native_uid if native else self.sidecar_uid):
+                if peer_uid(connection) != (self.native_uid if native else self.local_uid if local else self.sidecar_uid):
                     raise RecorderBridgeError('recorder peer mismatch')
-                response = self.ingest(_read(connection), native=native)
+                response = self.ingest(_read(connection), native=native, local=local)
             except (OSError, ValueError, TypeError, KeyError, RecursionError):
                 response = dict(protocol=PROTOCOL, ok=False, error='recorder_event_rejected')
             try:

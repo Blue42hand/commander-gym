@@ -62,6 +62,28 @@ class FakeTransport:
 
 
 class LMStudioPilotTests(unittest.TestCase):
+    def test_optional_compact_view_round_trips_masked_input_and_keeps_native_schema(self):
+        from commander_gym.observation_projection import expand_seat_observation
+        from commander_gym.openai_responses_pilot import _without_live_routing
+        obs = action_observation()
+        obs["state"] = {"cards": {"own": {"name": "Forest", "tapped": False, "modifiers": []},
+                                   "visible": {"name": "Plains", "tapped": True, "modifiers": []}}}
+        transport = FakeTransport()
+        before = deepcopy(obs)
+        LMStudioPilot(config(compact_observation=True), transport=transport).choose(obs)
+        wire = json.loads(transport.calls[1][1]["messages"][1]["content"])
+        self.assertEqual(expand_seat_observation(wire), _without_live_routing(obs))
+        self.assertEqual(obs, before)
+        self.assertEqual(wire["observation"]["legalActions"], _without_live_routing(obs)["legalActions"])
+
+    def test_reported_usage_cannot_exceed_qualified_context_or_output_budget(self):
+        for usage in ({"prompt_tokens": 9000}, {"completion_tokens": 2049},
+                      {"prompt_tokens": True}, {"completion_tokens": -1}):
+            transport = FakeTransport(completion(usage=usage))
+            with self.assertRaises(LMStudioPilotError):
+                LMStudioPilot(config(), transport=transport).choose(action_observation())
+            self.assertEqual(len(transport.calls), 2)  # No retry after a context contract failure.
+
     def test_explicit_provider_and_model_selection_ignores_openai_environment(self):
         with tempfile.TemporaryDirectory() as root:
             path = Path(root) / "local.json"

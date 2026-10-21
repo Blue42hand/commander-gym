@@ -41,12 +41,16 @@ def install_artifact(role, files):
     return {'root': str(root), 'uid': 0, 'files': inventory}
 
 
-def synthetic_profile():
+def synthetic_profile(*, local=False):
     # Only this disposable filesystem has these fixed production paths. Hashes
     # describe real fake files; no historical registry identity is invented.
-    base = Path('/run/credential-fixture-profile')
+    base = Path('/run/credential-fixture-profile' + ('-local' if local else ''))
     base.mkdir()
-    profile = fixture_profile(base)
+    if local:
+        from test_manual_runtime_local import local_profile
+        profile = local_profile(base, source_entries=False)
+    else:
+        profile = fixture_profile(base)
     profile['purpose'] = 'native-manual-play'
     profile['identities'] = {'nativeUid': 10001, 'sidecarUid': 10002, 'proxyUid': 10003}
     for role in profile['artifacts']:
@@ -68,12 +72,12 @@ def synthetic_profile():
     # service_runtime deliberately does not claim a recording authority gate.
     # The registry is only a synthetic empty inventory and is never acquired.
     registry = Path(profile['paths']['registryPath'])
-    registry.parent.mkdir(parents=True)
+    registry.parent.mkdir(parents=True, exist_ok=True)
     registry.write_bytes(b'{}')
     profile['recordingAuthority'] = {'registryUid': 0, 'registrySha256': hashlib.sha256(b'{}').hexdigest()}
     artifacts = profile['artifacts']
     config = service_units(launcher_root=artifacts['launcher']['root'], dependency_root=artifacts['dependencies']['root'],
-                           python_relative='python/bin/python3.12')
+                           python_relative='python/bin/python3.12', local_inference=profile.get('localInference'))
     config['nginx.conf'] = shared_https_nginx(frontend_root=artifacts['frontend']['root'],
         tailnet_origin='https://tolaria.example.test', lan_address='192.168.0.178', lan_subnet='192.168.0.0/24')
     config['lan-server.crt'] = 'synthetic certificate never served'
@@ -99,6 +103,11 @@ def probe(role, scenario):
         if role == 'sidecar':
             env = launch.sidecar_environment(runtime, credential_directory=directory, uid=os.getuid(), credential_reader=reader)
             assert env['OPENAI_API_KEY'] == FAKE_PROVIDER and env['COMMANDER_GYM_SIDECAR_TOKEN'] == FAKE_TOKEN
+        elif role == 'local':
+            from commander_gym.manual_runtime_local import local_environment
+            env = local_environment(runtime, credential_directory=directory, uid=os.getuid(), credential_reader=reader)
+            assert env['COMMANDER_GYM_LOCAL_SIDECAR_TOKEN'] == FAKE_TOKEN
+            assert not (directory / 'commander-gym.sidecar.token').exists()
         elif role == 'native':
             assert _credential(directory, 'commander-gym.sidecar.token', uid=os.getuid(), limit=1024, role=role) == FAKE_TOKEN
             spec = native_spec(runtime, credential_directory=directory)
@@ -154,9 +163,11 @@ class SystemdCredentialTests(unittest.TestCase):
         # service manager, never the host (Docker supplied a private tmpfs here).
         subprocess.run(['mount', '--make-rshared', '/run'], check=True)
         cls.profile = synthetic_profile()
+        cls.local_profile = synthetic_profile(local=True)
         SOURCE.mkdir(mode=0o700)
         cls.write_source('openai.env', ('OPENAI_API_KEY=' + FAKE_PROVIDER).encode())
         cls.write_source('commander-gym.sidecar.token', FAKE_TOKEN.encode())
+        cls.write_source('commander-gym.local.token', FAKE_TOKEN.encode())
         GATE.parent.mkdir(mode=0o755)
 
     @classmethod
@@ -180,9 +191,9 @@ class SystemdCredentialTests(unittest.TestCase):
         GATE.chmod(0o644)  # Nonsecret attestation, protected root ancestry.
 
     def unit(self, role, scenario='valid', extra=''):
-        uid = 10002 if role == 'sidecar' else 10001
+        uid = 10004 if role == 'local' else 10002 if role == 'sidecar' else 10001
         names = ['profile.json'] + (['openai.env', 'commander-gym.sidecar.token'] if role == 'sidecar'
-                                   else ['commander-gym.sidecar.token'] if role == 'native' else [])
+                                   else ['commander-gym.local.token'] if role == 'local' else ['commander-gym.sidecar.token'] if role == 'native' else [])
         credentials = ''.join(f'LoadCredential={name}:{SOURCE / name}\n' for name in names)
         path = Path('/etc/systemd/system') / UNITS[role]
         path.write_text(f'[Service]\nType=exec\nUser={uid}\nGroup={uid}\n{credentials}'
@@ -192,7 +203,9 @@ class SystemdCredentialTests(unittest.TestCase):
         self.ctl('daemon-reload')
         REPORT.unlink(missing_ok=True)
         self.ctl('reset-failed', UNITS[role], check=False)
-        self.ctl('start', UNITS[role])
+        started = self.ctl('start', UNITS[role], check=False)
+        if started.returncode:
+            self.fail(started.stderr + self.ctl('status', UNITS[role], check=False).stdout)
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
             if REPORT.exists() and REPORT.stat().st_size:
@@ -217,14 +230,16 @@ class SystemdCredentialTests(unittest.TestCase):
     def test_actual_nonroot_copies_all_roles_and_other_uid_denied(self):
         for role in UNITS:
             with self.subTest(role=role):
+                self.profile = copy.deepcopy(type(self).local_profile if role == 'local' else type(self).profile)
+                self.write_source('profile.json', canonical(self.profile)); self.write_gate()
                 report = self.unit(role)
                 self.assertEqual('accepted', report['result'], report)
                 self.assertEqual((0, 0, '0o440', '0o550', True),
                                  (report['copyUid'], report['copyGid'], report['copyMode'], report['directoryMode'], report['readonly']))
                 pid = self.ctl('show', '-p', 'MainPID', '--value', UNITS[role]).stdout.strip()
                 names = ['profile.json'] + (['openai.env', 'commander-gym.sidecar.token'] if role == 'sidecar'
-                                           else ['commander-gym.sidecar.token'] if role == 'native' else [])
-                for uid in (10003, 10001 if role == 'sidecar' else 10002):
+                                           else ['commander-gym.local.token'] if role == 'local' else ['commander-gym.sidecar.token'] if role == 'native' else [])
+                for uid in sorted({10001,10002,10003,10004} - {10004 if role == 'local' else 10002 if role == 'sidecar' else 10001}):
                     for name in names:
                         # Given the exact service mount, another UID still cannot
                         # raw-open any copy, including each actual secret copy.

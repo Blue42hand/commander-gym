@@ -89,6 +89,51 @@ class SourceEvidenceTests(unittest.TestCase):
         self.assertEqual(result['sources']['engine']['sha'], sha)
         self.assertEqual(result['observedMain']['engine'], head)
 
+    def advance_gym_main(self):
+        repo = REPOSITORIES['gym']; head = 'f' * 40; sha = self.shas['gym']
+        self.responses[f'repos/{repo}/commits/main']['sha'] = head
+        self.responses[f'repos/{repo}/compare/{sha}...{head}'] = {
+            'status': 'ahead', 'merge_base_commit': {'sha': sha}}
+        return head
+
+    def test_frozen_gym_revalidates_exact_source_without_relabeling_main(self):
+        head = self.advance_gym_main()
+        result = collect(self, self.policy, now=1792065600, gym_sha=self.shas['gym'])
+        self.assertEqual(result['sources']['gym']['sha'], self.shas['gym'])
+        self.assertEqual(result['observedMain']['gym'], head)
+        self.assertEqual(result['sources']['engine']['sha'], self.shas['engine'])
+        self.assertEqual(result['matchedArtifact']['id'], 999)
+        self.assertFalse(result['promotionEnabled'])
+        self.assertNotIn(f'repos/{REPOSITORIES["gym"]}/contents/{GYM_WORKFLOW}?ref={head}', self.calls)
+
+    def test_frozen_gym_requires_full_sha_before_network_reads(self):
+        for value in ('main', 'a' * 39, 'A' * 40, 'a' * 40 + '?ref=main'):
+            with self.subTest(value=value), self.assertRaisesRegex(ManualRuntimeError, 'source_sha'):
+                collect(self, self.policy, now=1792065600, gym_sha=value)
+        self.assertEqual(self.calls, [])
+
+    def test_frozen_gym_cannot_bypass_ancestry(self):
+        head = self.advance_gym_main(); sha = self.shas['gym']
+        row = self.responses[f'repos/{REPOSITORIES["gym"]}/compare/{sha}...{head}']
+        for mutation in ({'status': 'diverged'}, {'merge_base_commit': {'sha': head}}):
+            with self.subTest(mutation=mutation), patch.dict(row, mutation):
+                with self.assertRaisesRegex(ManualRuntimeError, 'source_not_main_ancestor'):
+                    collect(self, self.policy, now=1792065600, gym_sha=sha)
+
+    def test_frozen_gym_cannot_hide_newer_failed_exact_commit_ci(self):
+        self.advance_gym_main()
+        row = next(self.responses[k] for k in self.run_keys if '/commander-gym/' in k)
+        newer = copy.deepcopy(row['workflow_runs'][0]); newer.update(id=999999, conclusion='failure')
+        row['workflow_runs'].append(newer); row['total_count'] = 2
+        with self.assertRaisesRegex(ManualRuntimeError, 'source_run_identity_or_result'):
+            collect(self, self.policy, now=1792065600, gym_sha=self.shas['gym'])
+
+    def test_frozen_gym_cannot_use_expired_artifact(self):
+        self.advance_gym_main()
+        self.responses[self.artifact_key]['artifacts'][0]['expired'] = True
+        with self.assertRaisesRegex(ManualRuntimeError, 'source_artifact_identity_or_expiry'):
+            collect(self, self.policy, now=1792065600, gym_sha=self.shas['gym'])
+
     def test_changed_or_missing_pin_workflow_rejected(self):
         key = f'repos/{REPOSITORIES["gym"]}/contents/{GYM_WORKFLOW}?ref={self.shas["gym"]}'
         for raw in (b'no pin', base64.b64decode(self.responses[key]['content']) + b'unreviewed command\n'):

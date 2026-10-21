@@ -31,8 +31,23 @@ def run_recorder(runtime, *, sidecar_gid: int, stopping, capture_factory=None,
             registry = LiveBindingRegistry(profile['liveCatalog']['snapshotRoot'],
                 pilot_factory=lambda pilot, binding: _RecordingPilot(pilot),
                 allowed_pilots=registry.pilot_fingerprints)
+        local_peer = {}
+        if 'localInference' in profile:
+            from .manual_runtime_local import local_recording_registry, RecordingRegistries, local_ipc
+            local = profile['localInference']
+            registry = RecordingRegistries(registry, local_recording_registry(profile), local['catalog']['bindings'])
+            directory = local_ipc(profile)
+            import os, stat
+            info = directory.lstat()
+            require(stat.S_ISDIR(info.st_mode) and not directory.is_symlink()
+                    and info.st_uid == profile['identities']['nativeUid'] and not info.st_mode & 0o027,
+                    'local_ipc_custody')
+            require(local['gid'] in {*os.getgroups(), os.getgid()}, 'local_recorder_group')
+            os.chown(directory, -1, local['gid'])
+            local_peer = dict(local_socket=directory / 'local.sock', local_uid=local['uid'], local_gid=local['gid'],
+                              local_binding_ids=local['catalog']['bindings'])
         bridge = bridge_factory(capture, registry, native_socket=ipc / 'native.sock', sidecar_socket=ipc / 'sidecar.sock',
-                                native_uid=profile['identities']['nativeUid'], sidecar_uid=profile['identities']['sidecarUid'], sidecar_gid=sidecar_gid)
+                                native_uid=profile['identities']['nativeUid'], sidecar_uid=profile['identities']['sidecarUid'], sidecar_gid=sidecar_gid, **local_peer)
         reporter = reporter_factory(capture, Path(profile['paths']['lifecycleSocket']))
         bridge.start()
         # Reporter.tick already scans; no additional capture scanner thread.

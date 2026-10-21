@@ -1,1 +1,2 @@
 org.commandergym.argentum.CommanderGymAutoConfiguration
+org.commandergym.argentum.CommanderGymLocalAutoConfiguration

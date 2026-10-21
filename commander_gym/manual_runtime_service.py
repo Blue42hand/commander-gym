@@ -20,7 +20,7 @@ GATE = Path('/run/argentum-luna-runtime/precredential.json')
 
 
 def service_runtime(role: str, credential_directory: Path, *, boot_id: str) -> ValidatedRuntime:
-    require(role in ('native', 'sidecar', 'recorder'), 'fixed_service_role')
+    require(role in ('native', 'sidecar', 'recorder', 'local'), 'fixed_service_role')
     # This root-owned boot-specific attestation is inspected before even opening
     # the nonsecret context credential. No provider source/token is read here.
     gate = decode(protected_bytes(GATE, uid=0, max_bytes=4096))
@@ -30,11 +30,14 @@ def service_runtime(role: str, credential_directory: Path, *, boot_id: str) -> V
     profile = decode(raw.encode())
     validate_profile(profile)
     require(profile['purpose'] == 'native-manual-play' and gate['runtimeId'] == digest(profile), 'attested_profile')
-    uid_field = 'sidecarUid' if role == 'sidecar' else 'nativeUid'
-    require(profile['identities'][uid_field] == os.getuid(), 'service_role_identity')
+    uid = profile.get('localInference', {}).get('uid') if role == 'local' else profile['identities']['sidecarUid' if role == 'sidecar' else 'nativeUid']
+    require(uid == os.getuid(), 'service_role_identity')
     required = {'native': {'server', 'adapter', 'dependencies', 'launcher'},
                 'sidecar': {'sidecar', 'dependencies', 'launcher', 'catalog'},
                 'recorder': {'recorder', 'sidecar', 'dependencies', 'launcher', 'catalog'}}
+    required['local'] = {'sidecar', 'dependencies', 'launcher', 'localCatalog', 'localConfig'}
+    if 'localInference' in profile and role == 'recorder':
+        required['recorder'] |= {'localCatalog', 'localConfig'}
     verify_artifacts(profile, roles=frozenset(required[role]))
     dependency_lock(profile)
     return ValidatedRuntime(raw.encode(), gate['runtimeId'], gate['sequence'])

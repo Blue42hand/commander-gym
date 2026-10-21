@@ -50,9 +50,11 @@ class CommanderGymControllerProvider(
     private val requireHumanParticipant: Boolean = false,
     private val recorder: RecorderCallbackClient? = null,
     private val catalogRefreshInterval: Duration = Duration.ofSeconds(5),
+    override val mode: String = "commander-gym",
+    private val profileLabel: String? = if (requireHumanParticipant) "Luna" else null,
+    private val requireExplicitProfile: Boolean = requireHumanParticipant,
 ) : AiControllerProvider {
-    override val mode: String = "commander-gym"
-    override val supportsDefaultController: Boolean get() = !requireHumanParticipant
+    override val supportsDefaultController: Boolean get() = !requireExplicitProfile
     private val base: String
     @Volatile private var profileConfigs: Map<String, BindingProfileConfig> = emptyMap()
     @Volatile private var lastCatalogCheck = 0L
@@ -64,6 +66,7 @@ class CommanderGymControllerProvider(
         }
 
     init {
+        require(mode in setOf("commander-gym", "commander-gym-local"))
         require(endpoint.scheme == "http" && endpoint.host in setOf("127.0.0.1", "localhost", "::1")) {
             "Commander Gym policy endpoint must be loopback HTTP"
         }
@@ -78,7 +81,7 @@ class CommanderGymControllerProvider(
 
     private fun profileView(profile: BindingProfileConfig) = AiControllerProfile(
         id = profile.id,
-        displayName = if (requireHumanParticipant) "Luna — ${profile.displayName}" else profile.displayName,
+        displayName = profileLabel?.let { "$it — ${profile.displayName}" } ?: profile.displayName,
         description = profile.description,
         deckSpec = AiDeckSpec.Fixed(profile.deckList, profile.deckLabel, profile.commander),
     )

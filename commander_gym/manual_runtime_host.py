@@ -14,6 +14,7 @@ import importlib
 import os
 from pathlib import Path
 import pwd
+import grp
 import stat
 import subprocess
 import sys
@@ -47,6 +48,7 @@ TARGETS = {
     'units/argentum-source-feeder.conf': Path('/etc/systemd/system/argentum-source-feeder.service.d/manual-runtime.conf'),
     'units/argentum-updater.conf': Path('/etc/systemd/system/argentum-updater.service.d/manual-runtime.conf'),
     'units/argentum-admission.conf': Path('/etc/systemd/system/argentum-admission.service.d/manual-runtime.conf'),
+    'units/argentum-local-sidecar.service': Path('/etc/systemd/system/argentum-local-sidecar.service'),
     'units/argentum-luna-sidecar.service': Path('/etc/systemd/system/argentum-luna-sidecar.service'),
     'units/argentum-manual-preflight.service': Path('/etc/systemd/system/argentum-manual-preflight.service'),
     'units/argentum-binding-catalog.service': Path('/etc/systemd/system/argentum-binding-catalog.service'),
@@ -61,8 +63,24 @@ def selected_targets(profile):
     config_files = profile['artifacts']['config']['files']
     return {name: path for name, path in TARGETS.items()
             if not (tailnet_only and name == "lan-server.crt")
+            and not (name == 'units/argentum-local-sidecar.service' and 'localInference' not in profile)
             and not (name in ('units/argentum-recorder.service', 'units/argentum-binding-catalog.service',
                              'units/argentum-binding-catalog.timer') and name not in config_files)}
+
+
+def runtime_units(profile):
+    if 'localInference' not in profile: return UNITS
+    return (*UNITS[:-1], 'argentum-local-sidecar.service', UNITS[-1])
+
+
+def verify_local_identity(profile):
+    if 'localInference' not in profile: return
+    local = profile['localInference']
+    account = pwd.getpwnam('commander-local')
+    group = grp.getgrnam('commander-local')
+    cloud_group = grp.getgrnam('commander-prod').gr_gid
+    require(account.pw_uid == local['uid'] and account.pw_gid == group.gr_gid == local['gid']
+            and cloud_group not in os.getgrouplist('commander-local', account.pw_gid), 'local_identity_isolation')
 
 
 def root_json(path: Path) -> dict:
@@ -113,6 +131,7 @@ class ProtectedRuntimeHost:
             require(Path(anchor_profile['artifacts'][role]['root']) == path, 'legacy_layout_mismatch')
         for field, name in (('nativeUid', 'argentum-play'), ('sidecarUid', 'commander-prod'), ('proxyUid', 'argentum-web')):
             require(anchor_profile['identities'][field] == pwd.getpwnam(name).pw_uid, 'runtime_identity_changed')
+        verify_local_identity(anchor_profile)
         _directory(CONFIG); _directory(STATE)
         policy = root_json(CONFIG / 'operator-policy.json')
         require(set(policy) == {'schemaVersion', 'implementationApproved', 'activationApproved', 'minFreeBytes'}
@@ -184,16 +203,26 @@ class ProtectedRuntimeHost:
         self.base.drain(boot_id)  # Legacy waits for acknowledgement, returns initial reply.
         return self.base.status()  # Return the actual fresh recording drain barrier.
 
+    def _units(self):
+        profiles = [self.anchor]
+        if self.pending is not None:
+            candidate = self.pending.get('candidate')
+            if getattr(candidate, 'profile', None) is not None: profiles.append(candidate.profile)
+            previous = self.pending.get('previous')
+            if getattr(previous, 'kind', None) == 'manual-luna-v1':
+                profiles.append(load_bundle(previous.runtime_id)[0])
+        return runtime_units(next((p for p in profiles if 'localInference' in p), self.anchor))
+
     def _service(self, verb, unit):
-        reset_units = (*UNITS, 'argentum-manual-preflight.service', 'argentum-binding-catalog.service')
-        require((verb in ('start', 'stop') and unit in UNITS)
+        reset_units = (*self._units(), 'argentum-manual-preflight.service', 'argentum-binding-catalog.service')
+        require((verb in ('start', 'stop') and unit in self._units())
                 or (verb == 'reset-failed' and unit in reset_units), 'fixed_service_operation')
         if verb == 'reset-failed':
             # reset-failed does not load a unit that has never been started.
             load = subprocess.run(['/usr/bin/systemctl', 'show', unit, '-p', 'LoadState', '--value'],
                                   text=True, capture_output=True, timeout=10, check=True)
             require(load.stdout.strip() == 'loaded', 'service_not_loaded')
-        if verb == 'stop' and unit == 'argentum-luna-sidecar.service':
+        if verb == 'stop' and unit in ('argentum-luna-sidecar.service', 'argentum-local-sidecar.service'):
             load = subprocess.run(['/usr/bin/systemctl', 'show', unit, '-p', 'LoadState', '--value'],
                                   text=True, capture_output=True, timeout=10, check=False)
             if load.stdout.strip() == 'not-found': return
@@ -271,7 +300,7 @@ class ProtectedRuntimeHost:
         atomic_root(STATE / 'stop-request.json', canonical(context))
         self._clear_gate()
         self._catalog_timer(False)
-        for unit in UNITS: self._service('stop', unit)
+        for unit in self._units(): self._service('stop', unit)
 
     def stop_for_rollback(self):
         """Stop an uncommitted candidate even when startup produced no socket.
@@ -296,14 +325,14 @@ class ProtectedRuntimeHost:
                             for k in ('activeGames', 'pendingActivities', 'pendingRecordWrites', 'inFlightAdmissions')),
                     'rollback_candidate_not_idle')
         self._clear_gate(); self._catalog_timer(False)
-        for unit in UNITS: self._service('stop', unit)
+        for unit in self._units(): self._service('stop', unit)
         # quiescence_barrier checks every PID and reconciles the unchanged
         # inventory against the original, acknowledged stop generation.
 
     def quiescence_barrier(self):
         self._locked()
-        for unit in UNITS:
-            if unit == 'argentum-luna-sidecar.service':
+        for unit in self._units():
+            if unit in ('argentum-luna-sidecar.service', 'argentum-local-sidecar.service'):
                 load = subprocess.run(['/usr/bin/systemctl', 'show', unit, '-p', 'LoadState', '--value'],
                                       text=True, capture_output=True, timeout=10, check=False)
                 if load.stdout.strip() == 'not-found': continue
@@ -327,6 +356,15 @@ class ProtectedRuntimeHost:
         targets = selected_targets(profile)
         require((set(targets) - {'profile.json'}).issubset(artifact['files']), 'service_config_incomplete')
         source = Path(artifact['root'])
+        local_name = 'units/argentum-local-sidecar.service'
+        destination = TARGETS.get(local_name)
+        if destination is not None and local_name not in targets and (destination.exists() or destination.is_symlink()):
+            require(self.pending is not None, 'transaction_required')
+            bank = root_json(self.pending['bank'] / 'bank.json')
+            original = bank[str(destination)]
+            require(hashlib.sha256(protected_bytes(destination, uid=0, max_bytes=1024*1024)).hexdigest()
+                    == original.get('sha256'), 'foreign_runtime_config')
+            destination.unlink()
         for name, destination in targets.items():
             if not destination.parent.exists():
                 _directory(destination.parent.parent); destination.parent.mkdir(mode=0o755)
@@ -370,16 +408,19 @@ class ProtectedRuntimeHost:
             runtime = precredential_validate(profile, receipt, approval,
                 previous_id=approval['previousRuntimeId'], sequence=approval['sequence'], now=receipt['observedUnix'])
             require(runtime.runtime_id == snapshot.runtime_id, 'precredential_identity')
+            verify_local_identity(profile)
             self._attest_precredential(snapshot)
             # A verified explicit transaction (including rollback) gets a fresh
             # start budget. Rapid prior starts must not strand the known-good
             # release; unattended process restarts retain systemd rate limits.
-            reset_units = (*UNITS, 'argentum-manual-preflight.service')
+            reset_units = (*runtime_units(profile), 'argentum-manual-preflight.service')
             if 'liveCatalog' in profile: reset_units += ('argentum-binding-catalog.service',)
             for unit in reset_units: self._service('reset-failed', unit)
             # No key source opened here; only after this gate can systemd start
             # the separately approved credential-bearing sidecar unit.
-            for unit in ('argentum-recorder.service', 'argentum-luna-sidecar.service', 'argentum-play.service', 'argentum-web.service'):
+            start_units = ('argentum-recorder.service', 'argentum-luna-sidecar.service')
+            if 'localInference' in profile: start_units += ('argentum-local-sidecar.service',)
+            for unit in (*start_units, 'argentum-play.service', 'argentum-web.service'):
                 self._service('start', unit)
         else:
             for unit in ('argentum-recorder.service', 'argentum-play.service', 'argentum-web.service'): self._service('start', unit)
@@ -476,6 +517,7 @@ class ProtectedRuntimeHost:
         runtime = precredential_validate(profile, receipt, approval,
             previous_id=approval['previousRuntimeId'], sequence=approval['sequence'], now=receipt['observedUnix'])
         require(runtime.runtime_id == snapshot.runtime_id, 'precredential_identity')
+        verify_local_identity(profile)
         self._verify_selected_files(profile)
         _directory(GATE.parent)
         atomic_root(GATE, canonical({'runtimeId': snapshot.runtime_id, 'sequence': snapshot.sequence,
@@ -500,6 +542,7 @@ class ProtectedRuntimeHost:
         runtime = precredential_validate(profile, receipt, approval,
             previous_id=approval['previousRuntimeId'], sequence=approval['sequence'], now=receipt['observedUnix'])
         require(runtime.runtime_id == snapshot.runtime_id, 'precredential_identity')
+        verify_local_identity(profile)
         self._verify_selected_files(profile)
 
     def preflight_current(self):
