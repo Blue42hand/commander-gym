@@ -39,7 +39,20 @@ ROLES_ORDER = ('recorder', 'sidecar', 'native', 'proxy')
 
 
 def roles_order(profile):
-    return ('redis', *ROLES_ORDER) if profile.get('profile') == 'manual-luna-redis-qa-v1' else ROLES_ORDER
+    roles = ('recorder', 'sidecar', 'local', 'native', 'proxy') if 'localInference' in profile else ROLES_ORDER
+    return ('redis', *roles) if profile.get('profile') == 'manual-luna-redis-qa-v1' else roles
+
+
+def role_closure(candidate, previous=None):
+    profiles = (candidate,) if previous is None else (candidate, previous)
+    selected = {role for profile in profiles for role in roles_order(profile)}
+    return tuple(role for role in ('redis', 'recorder', 'sidecar', 'local', 'native', 'proxy') if role in selected)
+
+
+def probes_for(profile):
+    if 'localInference' not in profile: return PROBES
+    from .qa_local_provider import LOCAL_PROBES
+    return (*PROBES, *LOCAL_PROBES)
 LIMITS = {'allocatedBytes': 2*1024**3, 'guestMemoryBytes': 12*1024**3,
           'supervisorMemoryBytes': 16*1024**3, 'swapBytes': 0, 'cpuPercent': 400,
           'tasks': 512, 'runtimeSeconds': 900}
@@ -120,12 +133,14 @@ def validate_previous(previous, candidate):
     require(previous['purpose'] == 'qualification' and previous['paths'] == candidate['paths']
             and previous['identities'] == candidate['identities'], 'qa_previous_mapping')
     require(previous['recordingAuthority'] == candidate['recordingAuthority'], 'qa_previous_registry')
+    if 'localInference' in previous and 'localInference' in candidate:
+        require(all(previous['localInference'][k] == candidate['localInference'][k] for k in ('uid', 'gid', 'port')), 'qa_previous_local_identity')
     for artifact in previous['artifacts'].values():
         require(artifact['uid'] == 0 and Path(artifact['root']).is_relative_to(ROOT/'artifacts'), 'qa_previous_artifact_layout')
     verify_artifacts(previous)
 
 
-def validate_authority(value, production, qa, ci, *, now):
+def validate_authority(value, production, qa, ci, *, now, previous=None):
     require(type(value) is dict and set(value) == AUTH_FIELDS, 'qa_authority_fields')
     require(type(value['schemaVersion']) is int and value['schemaVersion'] == 1
             and value['scope'] == 'isolated-qa-observation-only', 'qa_authority_scope')
@@ -166,10 +181,17 @@ def validate_authority(value, production, qa, ci, *, now):
             and type(c['runId']) is int and c['runId'] > 0 for c in checks), 'qa_implementation_ci_failed')
     names = [c['name'] for c in checks]
     require(len(names) == len(set(names)) and {'python','manual-runtime-sdk'} <= set(names), 'qa_implementation_ci_missing')
+    if previous is not None:
+        require(digest(previous) == value['previousProfileSha256'], 'qa_previous_profile_changed')
+        validate_previous(previous, qa)
+    profiles = (qa,) if previous is None else (qa, previous)
+    local = any('localInference' in profile for profile in profiles)
     inventory = value['executionInventory']
-    required = ({f'units/{role}.service' for role in roles_order(qa)} | {f'probes/{role}' for role in PROBES}
+    required = ({f'units/{role}.service' for role in role_closure(qa, previous)} | {f'probes/{role}' for profile in profiles for role in probes_for(profile)}
                 | {f'implementation/commander_gym/{name}' for name in IMPLEMENTATION_FILES}
                 | ({f'implementation/commander_gym/{name}' for name in ('qa_redis_variant.py','qa_redis_entry.py','qa_redis_recovery.py','manual_runtime_qa_roles.py','qa_callback_drain.py')} if qa.get('profile') == 'manual-luna-redis-qa-v1' else set()))
+    if local:
+        required |= {f'implementation/commander_gym/{name}' for name in ('qa_local_provider.py', 'qa_local_probes.py', 'qa_local_entry.py', 'manual_runtime_qa_roles.py', 'qa_redis_variant.py', 'qa_legal_responses.py')}
     require(type(inventory) is dict and required <= set(inventory) and len(inventory) <= 5000
             and all(type(name) is str and (name in required or re.fullmatch(r'implementation/commander_gym/(?:[a-zA-Z0-9_]+/)*[a-zA-Z0-9_]+\.py',name))
                     and type(sha) is str and SHA.fullmatch(sha) for name,sha in inventory.items()), 'qa_execution_inventory')
@@ -547,14 +569,17 @@ class QAFileHost:
         self.production = decode(root_bytes(ROOT/'production-profile.json'))
         self.qa = decode(root_bytes(ROOT/'qa-profile.json'))
         self.ci = decode(root_bytes(ROOT/'source-ci.json'))
-        validate_authority(self.authority,self.production,self.qa,self.ci,now=time.time())
+        self.state = ROOT/'qa/state'
+        previous = self._json('bank.json')['profile'] if (self.state/'bank.json').exists() else self._json('service-profile.json')
+        validate_authority(self.authority,self.production,self.qa,self.ci,now=time.time(),previous=previous)
+        self.previous_profile = previous
         require(raw_digest(root_bytes(ROOT/'production-authority.json')) == self.authority['productionAuthoritySha256'], 'qa_p_authority_seal')
         require(raw_digest(registry_bytes(self.qa)) == self.authority['qaAuthoritySha256'], 'qa_q_authority_seal')
         require(Path(__file__).resolve() == ROOT/'implementation/commander_gym/manual_runtime_qa.py', 'qa_implementation_layout')
         require(raw_digest(root_bytes(Path(__file__))) == self.authority['implementationSha256'], 'qa_implementation_seal')
         verify_artifacts(self.qa)
         self.state = ROOT/'qa/state'; self.locked = False; self.pending = None
-        self.units = {role: 'commander-gym-qa-'+self.authority['nonce']+'-'+role+'.service' for role in roles_order(self.qa)}
+        self.units = {role: 'commander-gym-qa-'+self.authority['nonce']+'-'+role+'.service' for role in role_closure(self.qa, self.previous_profile)}
         self._inventory()
         if (self.state/'bank.json').exists():
             bank = self._json('bank.json');require(digest(bank) == self._json('transaction.json')['bankSha256'],'qa_bank_changed')
@@ -591,6 +616,8 @@ class QAFileHost:
                      (fragment == Path('/etc/systemd/system')/unit
                       and fragment.resolve(strict=True) == expected))
                     and fields['DropInPaths'] == '' and fields['NeedDaemonReload'] == 'no', 'qa_loaded_unit_mismatch')
+            if role == 'local':
+                require(self._show(unit, ('Type', 'NotifyAccess')) == {'Type': 'notify', 'NotifyAccess': 'main'}, 'qa_local_readiness_unit')
             if role == 'redis':
                 memory = self._show(unit, ('MemoryMax', 'MemorySwapMax'))
                 require(memory == {'MemoryMax':str(64*1024**2), 'MemorySwapMax':'0'}, 'qa_redis_service_memory')
@@ -604,7 +631,7 @@ class QAFileHost:
 
     def _fresh(self):
         require(root_bytes(AUTHORITY) == self.raw, 'qa_authority_changed')
-        validate_authority(self.authority,self.production,self.qa,self.ci,now=time.time())
+        validate_authority(self.authority,self.production,self.qa,self.ci,now=time.time(),previous=self.previous_profile)
         guest_boundary(); self._inventory(); verify_artifacts(self.qa)
 
     @contextmanager
@@ -751,7 +778,11 @@ class QAFileHost:
     def delegate_keyless_update(self):raise ValueError('qa_never_delegates')
 
     def probe(self,role):
-        self._locked();self._fresh();require(role in PROBES,'qa_probe_role')
+        self._locked();self._fresh()
+        if role not in PROBES:
+            from .qa_local_provider import LOCAL_PROBES
+            require(role in LOCAL_PROBES, 'qa_probe_role')
+            require(role in probes_for(self._json('service-profile.json')), 'qa_probe_role')
         path = ROOT/'probes'/role
         # Probes are exact root-sealed fixture programs, not caller commands.
         def bounded_child():
@@ -764,7 +795,11 @@ class QAFileHost:
         require(len(raw) <= 1024*1024 and len(error) <= 1024*1024,'qa_probe_output_size')
         self.observe('probe',dict(role=role,exitCode=completed.returncode,stdoutSha256=raw_digest(raw),stderrSha256=raw_digest(error),stdoutBase64=base64.b64encode(raw).decode(),stderrBase64=base64.b64encode(error).decode()))
         require(completed.returncode == 0,'qa_probe_failed')
-        return decode(raw)
+        result = decode(raw)
+        if role not in PROBES:
+            from .qa_local_provider import validate_probe_result
+            validate_probe_result(role, result, self._json('service-profile.json'), self.authority['nonce'])
+        return result
 
 
 def promote_qa(host):
@@ -785,12 +820,16 @@ def evidence_manifest(host):
     inventory = {}
     for path in (host.state/'observations').glob('*.json'):
         inventory[path.name] = raw_digest(root_bytes(path))
+    gates = set(GATES)
+    if 'localInference' in host.production:
+        from .manual_runtime_local import GATES as local_gates
+        gates.update(local_gates)
     return {'kind':'commander-gym.qa-observations-v1','nonce':host.authority['nonce'],
             'authoritySha256':raw_digest(host.raw),'productionProfileSha256':digest(host.production),
             'qaProfileSha256':digest(host.qa),'observations':inventory,
             'productionQualificationIssued':False,'activationEligible':False,
             'productionGateBooleansTransferred':False,
-            'unestablishedProductionGates':sorted(GATES),
+            'unestablishedProductionGates':sorted(gates),
             'residuals':['physicalHost32GiBReserve','realTailnetTerminationAndClientAcl',
                          'productionCredentialDelivery','nativeMemoryFitUntilMeasured',
                          'originalProductionRecordingAuthorityPreservation']}

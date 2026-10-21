@@ -15,8 +15,11 @@ from test_manual_runtime_profile import fixture_profile, qualification, approval
 from test_manual_runtime_rollout import FakeHost
 
 
-def paired_profiles(root):
-    q=fixture_profile(root)
+def paired_profiles(root, *, local=False):
+    if local:
+        from test_manual_runtime_local import local_profile
+        q=local_profile(root)
+    else: q=fixture_profile(root)
     q['recordingAuthority']['registryUid']=0
     for a in q['artifacts'].values():a['uid']=0
     p=copy.deepcopy(q);p['purpose']='native-manual-play'
@@ -26,7 +29,7 @@ def paired_profiles(root):
         a['root']='/usr/local/libexec/argentum-'+('native' if role=='legacyNative' else 'source') if role in ('legacyNative','legacySource') else '/srv/argentum-luna/artifacts/'+role+'/'+digest(a['files'])
     p['ingress']['origins']=['https://tolaria.example.ts.net'];q['ingress']=copy.deepcopy(p['ingress'])
     from commander_gym.manual_runtime_config import service_units,shared_https_nginx
-    expected=service_units(launcher_root=p['artifacts']['launcher']['root'],dependency_root=p['artifacts']['dependencies']['root'],python_relative='python/bin/python3.12',tailnet_only=True)
+    expected=service_units(launcher_root=p['artifacts']['launcher']['root'],dependency_root=p['artifacts']['dependencies']['root'],python_relative='python/bin/python3.12',tailnet_only=True,local_inference=p.get('localInference'))
     expected['nginx.conf']=shared_https_nginx(frontend_root=p['artifacts']['frontend']['root'],tailnet_origin=p['ingress']['origins'][0],lan_address=p['ingress']['lanAddress'],lan_subnet=p['ingress']['lanSubnet'],tailnet_only=True)
     inventory={name:hashlib.sha256(text.encode()).hexdigest() for name,text in expected.items()}
     q['artifacts']['config']['files']=inventory;p['artifacts']['config']['files']=inventory
@@ -73,6 +76,32 @@ class QAContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ManualRuntimeError,'qa_live_catalog_layout'):qa.match_profiles(p,q)
         q.pop('liveCatalog')
         with self.assertRaisesRegex(ManualRuntimeError,'qa_live_catalog_mode'):qa.match_profiles(p,q)
+
+    def test_local_authority_requires_local_unit_all_probes_and_exact_previous_closure(self):
+        folder=self.root/'local-fixture';folder.mkdir()
+        p,q,ci,value=paired_profiles(folder,local=True)
+        local_names={'qa_local_provider.py','qa_local_probes.py','qa_local_entry.py','manual_runtime_qa_roles.py','qa_redis_variant.py','qa_legal_responses.py'}
+        inventory=value['executionInventory'];inventory.update({f'units/{r}.service':'a'*64 for r in qa.roles_order(q)})
+        inventory.update({f'probes/{r}':'a'*64 for r in qa.probes_for(q)})
+        inventory.update({f'implementation/commander_gym/{n}':'a'*64 for n in local_names})
+        with patch.object(qa,'ROOT',folder),patch.object(qa,'verify_artifacts'):
+            qa.validate_authority(value,p,q,ci,now=1000,previous=q)
+            for name in ['units/local.service',*[f'probes/{n}' for n in qa.probes_for(q) if n not in qa.PROBES],
+                         *[f'implementation/commander_gym/{n}' for n in local_names]]:
+                modified=copy.deepcopy(value);modified['executionInventory'].pop(name)
+                with self.subTest(name=name),self.assertRaisesRegex(ManualRuntimeError,'qa_execution_inventory'):
+                    qa.validate_authority(modified,p,q,ci,now=1000,previous=q)
+            changed=copy.deepcopy(q);changed['localInference']['gid']=10005
+            with self.assertRaisesRegex(ManualRuntimeError,'qa_previous_local_identity'):qa.validate_previous(changed,q)
+            # The role closure is authenticated from the sealed previous profile,
+            # not guessed from the currently selected candidate's local toggle.
+            plain=copy.deepcopy(q);plain.pop('localInference')
+            for role in ('localCatalog','localConfig'):plain['artifacts'].pop(role)
+            self.assertIn('local',qa.role_closure(plain,q));self.assertNotIn('local',qa.roles_order(plain))
+            host=qa.QAFileHost.__new__(qa.QAFileHost);host._locked=Mock();host._fresh=Mock()
+            host._json=Mock(return_value=plain);host._service=Mock();host.authority=value;host.state=folder/'qa/state'
+            with patch.object(qa,'write'),patch.object(qa,'root_bytes',return_value=canonical(plain)):host.start_closed()
+            self.assertEqual([c.args for c in host._service.call_args_list],[('start',r) for r in qa.ROLES_ORDER])
 
     def test_scope_freshness_limits_nonce_and_exact_ci_fail_closed(self):
         for mutate in (lambda a:a.update(scope='activate-manual-runtime'),lambda a:a.update(sequence=True),lambda a:a.update(expiresUnix=1901),lambda a:a.update(nonce='../escape'),lambda a:a.update(qaProfileSha256='9'*64),lambda a:a.update(productionAuthoritySha256='9'*64),lambda a:a.update(qaAuthoritySha256='8'*64),lambda a:a['limits'].update(guestMemoryBytes=3*1024**3),lambda a:a.update(qaMinFreeBytes=True),lambda a:a['executionInventory'].update({'probes/foreign':'a'*64})):

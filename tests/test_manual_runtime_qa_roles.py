@@ -64,7 +64,8 @@ class QARoleTests(unittest.TestCase):
         runtime=self.select()
         with patch('commander_gym.manual_runtime_launch.dependency_lock',return_value={
                 'python':'python/bin/python3','pythonPath':['site-packages']}):
-            for role in roles.ROLES:
+            from commander_gym.manual_runtime_qa import roles_order
+            for role in roles_order(self.profile):
                 spec,message=roles.child_spec(role,runtime)
                 self.assertEqual(spec.arguments[1:4],('-I','-S','-B'))
                 self.assertTrue(spec.arguments[-1].endswith('/qa_role_child_entry.py'))

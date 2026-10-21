@@ -24,7 +24,7 @@ from .manual_runtime_profile import (
 )
 from .manual_runtime_rollout import RuntimeSnapshot
 
-ROLES = ('recorder', 'sidecar', 'native', 'proxy', 'redis')
+ROLES = ('recorder', 'sidecar', 'local', 'native', 'proxy', 'redis')
 TOKEN = 'commander-gym-isolated-qa-placeholder-only'
 MAX_MESSAGE = 4 * 1024 * 1024
 
@@ -67,9 +67,13 @@ def authenticate(role):
     require('qa_role_child_entry.py' in launcher['files'], 'qa_role_child_not_sealed')
     for artifact_role in ('launcher', 'recorder', 'sidecar'):
         artifact = profile['artifacts'][artifact_role]
-        name = 'commander_gym/manual_runtime_qa_roles.py'
-        require(name in artifact['files'] and artifact['files'][name] ==
-                hashlib.sha256(protected_bytes(Path(__file__), uid=0)).hexdigest(), 'qa_role_source_mismatch')
+        names = ['manual_runtime_qa_roles.py']
+        if 'localInference' in profile:
+            names += ['qa_local_provider.py', 'qa_local_probes.py', 'qa_legal_responses.py']
+        for filename in names:
+            name = 'commander_gym/'+filename
+            require(name in artifact['files'] and artifact['files'][name] ==
+                    hashlib.sha256(protected_bytes(Path(__file__).with_name(filename), uid=0)).hexdigest(), 'qa_role_source_mismatch')
     require(Path(__file__).resolve() == ROOT/'implementation/commander_gym/manual_runtime_qa_roles.py', 'qa_role_import')
     return runtime
 
@@ -78,6 +82,7 @@ def child_spec(role, runtime):
     from .manual_runtime_launch import dependency_lock, LaunchSpec
     require(role in ROLES, 'qa_role_name')
     profile = runtime.profile
+    if role == 'local': require('localInference' in profile, 'qa_local_role_disabled')
     lock = dependency_lock(profile)
     dependencies = Path(profile['artifacts']['dependencies']['root'])
     source_role = 'recorder' if role == 'recorder' else 'sidecar'
@@ -91,15 +96,20 @@ def child_spec(role, runtime):
 
 
 def root_main(role):
-    """Four fixed role entrypoints; executed only by sealed guest units as root."""
+    """Fixed authenticated role entrypoints for separately staged guest units."""
     runtime = authenticate(role)
     spec, message = child_spec(role, runtime)
     profile = runtime.profile
     from .qa_redis_variant import role_uid
     account = pwd.getpwuid(role_uid(profile, role))
     sidecar_gid = pwd.getpwuid(profile['identities']['sidecarUid']).pw_gid
-    groups = sorted({account.pw_gid, *([sidecar_gid] if role in ('native','recorder') else [])})
+    groups = child_groups(role, profile, account.pw_gid, sidecar_gid)
     message['sidecarGid'] = sidecar_gid
+    if 'localInference' in profile: message['localGid'] = profile['localInference']['gid']
+    if role == 'local':
+        require(os.environ.get('NOTIFY_SOCKET') == '/run/systemd/notify', 'qa_local_notify_socket')
+        from dataclasses import replace
+        spec = replace(spec, environment={**spec.environment, 'NOTIFY_SOCKET': '/run/systemd/notify'})
     raw = canonical(message)
     require(len(raw) <= MAX_MESSAGE, 'qa_role_message_size')
     # A regular private temporary file avoids a blocking pipe write before exec.
@@ -143,13 +153,22 @@ def readonly_message_fd(writer):
 
 
 def run_child(message):
-    require(set(message) == {'role','profile','runtimeId','sequence','importPaths','sidecarGid'}, 'qa_role_message')
+    expected = {'role','profile','runtimeId','sequence','importPaths','sidecarGid'}
+    if 'localInference' in message.get('profile', {}): expected.add('localGid')
+    require(set(message) == expected, 'qa_role_message')
     role, profile = message['role'], message['profile']
     require(role in ROLES, 'qa_role_name')
     validate_profile(profile)
     require(profile['purpose'] == 'qualification' and digest(profile) == message['runtimeId'], 'qa_role_child_profile')
     from .qa_redis_variant import role_uid
     require(os.getuid() == os.geteuid() == role_uid(profile, role), 'qa_role_child_uid')
+    if 'localInference' in profile:
+        local_gid = profile['localInference']['gid']
+        require(type(message['localGid']) is int and message['localGid'] == local_gid
+                and local_gid != message['sidecarGid'], 'qa_local_child_group')
+        if role == 'local':
+            require(os.getgid() == local_gid and message['sidecarGid'] not in os.getgroups(), 'qa_local_child_group')
+        if role == 'recorder': require(local_gid in os.getgroups(), 'qa_local_recorder_group')
     # Root selected paths. Do not retain provider/credential values from caller env.
     require(not any('OPENAI' in k or 'TOKEN' in k or 'CREDENTIAL' in k for k in os.environ), 'qa_role_child_environment')
     runtime = ValidatedRuntime(canonical(profile), message['runtimeId'], message['sequence'])
@@ -165,12 +184,12 @@ def run_child(message):
         from .native_game_capture import NativeGameCapture
         require(message['sidecarGid'] in os.getgroups(), 'qa_role_recorder_group')
         def qa_capture(root, pins, **kwargs):
-            # The selected catalog still declares the production Pilot identity;
-            # these pins describe the actual fixture execution, not a model call.
-            pins = {**pins, 'models': {'provider':'qa-native-legal-fixture','model':'none',
-                                     'configured':pins['models']},
-                    'config': {**pins['config'], 'qaExecution': {
-                        'providerMode':'fake','credentialSource':'qa-placeholder-only'}}}
+            if 'localInference' in profile:
+                from .qa_local_provider import capture_pins
+                pins = capture_pins(pins, profile)
+            else:
+                pins = {**pins, 'models': {'provider':'qa-native-legal-fixture','model':'none', 'configured':pins['models']},
+                        'config': {**pins['config'], 'qaExecution': {'providerMode':'fake','credentialSource':'qa-placeholder-only'}}}
             return NativeGameCapture(root, pins, **kwargs)
         run_recorder(runtime, sidecar_gid=message['sidecarGid'], stopping=stopping.is_set,
                      capture_factory=qa_capture)
@@ -186,20 +205,31 @@ def run_child(message):
         capture = RemoteCaptureSink(Path(profile['paths']['recorderSocket']).parent/'sidecar.sock',
                                     recorder_uid=profile['identities']['nativeUid'])
         server = build_binding_openai_game_server_sidecar(config, client=NativeLegalFixtureClient(), game_capture=capture)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        try:
-            while thread.is_alive() and not stopping.wait(0.2): pass
-        finally:
-            server.shutdown(); server.server_close(); thread.join(timeout=10)
+        serve(server, stopping)
+    elif role == 'local':
+        from .qa_local_provider import build_local_server
+        server = build_local_server(runtime)
+        serve(server, stopping, notify=True)
     elif role == 'native':
+        if 'localInference' in profile:
+            from .qa_local_provider import require_local_ready
+            require_local_ready(profile)
         from .manual_runtime_launch import native_spec
         from .manual_runtime_qa import ROOT
         config = ROOT/'qa/native/configtree'
         _private_role_directory(config, os.getuid())
-        require(set(p.name for p in config.iterdir()) <= {'commander-gym.sidecar.token'}, 'qa_role_configtree_contents')
+        names = {'commander-gym.sidecar.token'}
+        if 'localInference' in profile: names.add('commander-gym.local.token')
+        stale = config/'commander-gym.local.token'
+        if 'localInference' not in profile and (stale.exists() or stale.is_symlink()):
+            from .qa_local_provider import LOCAL_TOKEN
+            _remove_literal_file(stale, LOCAL_TOKEN.encode())
+        require(set(p.name for p in config.iterdir()) <= names, 'qa_role_configtree_contents')
         token_path = config/'commander-gym.sidecar.token'
         _literal_file(token_path, TOKEN.encode())
+        if 'localInference' in profile:
+            from .qa_local_provider import LOCAL_TOKEN
+            _literal_file(config/'commander-gym.local.token', LOCAL_TOKEN.encode())
         spec = native_spec(runtime, credential_directory=config)
         from dataclasses import replace
         extra = ("--native.qa.callback-gate-enabled=true",)
@@ -228,3 +258,47 @@ def _literal_file(path, raw):
     fd = os.open(path, os.O_CREAT|os.O_EXCL|os.O_WRONLY|os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd,'wb') as stream:
         stream.write(raw); stream.flush(); os.fsync(stream.fileno())
+
+
+def child_groups(role, profile, primary_gid, sidecar_gid):
+    """Pure group plan; only the recorder gets access to both provider sockets."""
+    groups = {primary_gid}
+    if role in ('native', 'recorder'): groups.add(sidecar_gid)
+    if 'localInference' in profile:
+        local_gid = profile['localInference']['gid']
+        require(local_gid != sidecar_gid, 'qa_local_cloud_group')
+        if role == 'local': require(primary_gid == local_gid, 'qa_local_account_group')
+        if role == 'recorder': groups.add(local_gid)
+        elif role != 'local': require(local_gid not in groups, 'qa_local_group_leak')
+    elif role == 'local': require(False, 'qa_local_role_disabled')
+    return sorted(groups)
+
+
+def serve(server, stopping, *, notify=False):
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    started = False
+    try:
+        if notify:
+            import socket
+            require(os.environ.get('NOTIFY_SOCKET') == '/run/systemd/notify', 'qa_local_notify_socket')
+            with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as connection:
+                connection.connect('/run/systemd/notify'); connection.sendall(b'READY=1')
+        thread.start(); started = True
+        while thread.is_alive() and not stopping.wait(0.2): pass
+        require(stopping.is_set(), 'qa_role_server_stopped_unexpectedly')
+    finally:
+        if started: server.shutdown()
+        server.server_close()
+        if started:
+            thread.join(timeout=10)
+            require(not thread.is_alive(), 'qa_role_shutdown_timeout')
+
+
+def _remove_literal_file(path, raw):
+    if not path.exists() and not path.is_symlink(): return
+    before = path.lstat()
+    require(stat.S_ISREG(before.st_mode) and before.st_uid == os.getuid()
+            and before.st_nlink == 1 and stat.S_IMODE(before.st_mode) == 0o600
+            and protected_bytes(path, uid=os.getuid(), max_bytes=1024) == raw, 'qa_role_stale_token')
+    require(path.lstat() == before, 'qa_role_stale_token_changed')
+    path.unlink()
