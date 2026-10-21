@@ -1,7 +1,7 @@
 """Select currently available Argentum spectator games without starting any games.
 
-Reads existing public live-game endpoints and, optionally, an explicitly
-configured private AI-tournament status endpoint. No privileged access.
+Reads public live-game endpoints or an explicitly selected lobby through the
+native spectator protocol. No development endpoint or player credential is used.
 """
 from __future__ import annotations
 import json
@@ -15,14 +15,63 @@ def http_base(ws_url: str) -> str:
         raise ValueError("expected Argentum ws(s) URL ending in /game")
     return ("https" if p.scheme=="wss" else "http")+"://"+p.netloc
 
+def lobby_candidates(ws_url: str, lobby_id: str, *, ws_factory=None) -> list[str]:
+    """Join only an explicitly selected, already-active lobby as a spectator."""
+    from urllib.parse import quote
+    from .argentum_spectator_stream import SpectatorProtocolError, message
+    status_url = http_base(ws_url) + "/api/tournaments/" + quote(lobby_id, safe="") + "/status"
+    with urlopen(status_url, timeout=3) as response:
+        status = json.load(response)
+    # Joining a waiting lobby would add a playing seat. Never do that.
+    if status.get("state") != "TOURNAMENT_ACTIVE":
+        return []
+    timeout_errors = (TimeoutError,)
+    if ws_factory is None:
+        from websocket import create_connection, WebSocketTimeoutException
+        timeout_errors += (WebSocketTimeoutException,)
+        ws_factory = create_connection
+    ws = ws_factory(ws_url, timeout=3, enable_multithread=True)
+    try:
+        ws.send(message("connect", playerName="Commander Gym Lobby Spectator"))
+        joined = False
+        deadline = time.monotonic() + 6
+        while time.monotonic() < deadline:
+            try:
+                raw = ws.recv()
+            except timeout_errors:
+                if joined:
+                    # FFA lobbies stay active between games and may send no game ID.
+                    return []
+                raise
+            if not raw:
+                raise ConnectionError("Lobby spectator connection closed")
+            msg = json.loads(raw)
+            if not isinstance(msg, dict):
+                continue
+            kind = msg.get("type")
+            if kind == "error":
+                raise SpectatorProtocolError("Lobby spectator error: " + str(msg.get("code", "unknown")))
+            if kind == "connected" and not joined:
+                ws.send(message("joinLobby", lobbyId=lobby_id))
+                joined = True
+            if not joined or msg.get("lobbyId") != lobby_id:
+                continue
+            if kind == "freeForAllGameStarting":
+                game_id = msg.get("gameSessionId")
+                return [game_id] if isinstance(game_id, str) and game_id else []
+            if kind == "activeMatches":
+                return sorted({game["gameSessionId"] for game in msg.get("matches", [])
+                               if isinstance(game, dict) and isinstance(game.get("gameSessionId"), str)
+                               and game["gameSessionId"]})
+        return []
+    finally:
+        ws.close()
+
 def candidates(ws_url: str, lobby_id: str | None=None) -> list[str]:
-    base=http_base(ws_url)
-    paths=[]
     if lobby_id:
-        from urllib.parse import quote
-        paths.append("/api/dev/ai-tournament/"+quote(lobby_id,safe=""))
-    else:
-        paths.extend(("/api/quick-games/live","/api/tournaments/live"))
+        return lobby_candidates(ws_url, lobby_id)
+    base=http_base(ws_url)
+    paths=["/api/quick-games/live", "/api/tournaments/live"]
     found=[]
     for path in paths:
         try:
@@ -58,7 +107,13 @@ def follow(
     if watch_fn is None:
         from .argentum_spectator_stream import watch as watch_fn
     while not stop():
-        found=candidates(ws_url,lobby_id)
+        try:
+            found=candidates(ws_url,lobby_id)
+        except Exception as exc:
+            on_error(exc)
+            if stop(): return
+            pause_fn(poll_seconds)
+            continue
         if not found:
             on_idle()
             if stop(): return
