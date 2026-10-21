@@ -1,8 +1,11 @@
 import copy
+import io
+import os
+from unittest.mock import patch
 import unittest
 from collections import deque
 
-from commander_gym.console_spectator import player_views, render
+from commander_gym.console_spectator import player_views, render, write_frame
 
 
 def snapshot():
@@ -85,3 +88,56 @@ class ConsoleSpectatorTests(unittest.TestCase):
         data["players"][0]["name"] = "Name\r\n\t\x1b\x07\x9b"
         frame = render(data, deque(["event\r\n\x1b\x07"]))
         self.assertFalse(any(c in frame for c in "\r\t\x1b\x07\x9b"))
+
+
+class ConsoleGeometryTests(unittest.TestCase):
+    def crowded_snapshot(self):
+        data = snapshot()
+        for player in range(1, 5):
+            for i in range(40):
+                data["gameState"]["cards"][f"extra-{player}-{i}"] = {
+                    "name": f"Long creature name seat {player} card {i}",
+                    "power": 7, "toughness": 7, "isTapped": True,
+                    "controllerId": f"p{player}", "zone": {"zoneType": "Battlefield"}}
+        return data
+
+    def test_crowded_boards_keep_all_seats_and_life_on_screen(self):
+        data = self.crowded_snapshot()
+        for columns, rows in ((240, 67), (80, 24), (40, 24)):
+            with self.subTest(columns=columns, rows=rows):
+                frame = render(data, deque(["public event"] * 7), columns, rows)
+                self.assertLessEqual(len(frame.splitlines()) + 1, rows)
+                for i in range(1, 5):
+                    self.assertIn(f"Player {i}", frame)
+                    self.assertIn(f"LIFE {40-i}", frame)
+                self.assertTrue("hidden" in frame)
+                self.assertTrue(all(len(line) <= min(columns, 100) for line in frame.splitlines()))
+
+    def test_tty_write_uses_height_and_leaves_room_for_final_newline(self):
+        class Terminal(io.StringIO):
+            def isatty(self): return True
+            def fileno(self): return 1
+        output = Terminal()
+        with patch("commander_gym.console_spectator.os.get_terminal_size", return_value=os.terminal_size((240, 67))):
+            write_frame(output, self.crowded_snapshot(), deque())
+        text = output.getvalue()
+        self.assertTrue(text.startswith("\x1b[H\x1b[2J"))
+        self.assertTrue(text.endswith("\n"))
+        self.assertLessEqual(text.count("\n"), 66)
+        self.assertIn("Player 1", text)
+        self.assertIn("Player 4", text)
+
+    def test_redirected_output_retains_complete_battlefields(self):
+        output = io.StringIO()
+        write_frame(output, self.crowded_snapshot(), deque())
+        text = output.getvalue()
+        self.assertGreater(len(text.splitlines()), 67)
+        for player in range(1, 5):
+            self.assertIn(f"Long creature name seat {player} card 39", " ".join(text.split()))
+        self.assertNotIn("battlefield rows hidden", text)
+
+    def test_small_boards_are_not_hidden_to_make_room_for_history(self):
+        frame = render(snapshot(), deque(["event"] * 7), 80, 24)
+        for i in range(1, 5):
+            self.assertIn(f"Permanent {i}", frame)
+        self.assertNotIn("hidden", frame)

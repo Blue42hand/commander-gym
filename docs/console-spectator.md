@@ -33,7 +33,10 @@ Every seat has its own section with its published name, life total, hand count,
 and battlefield from the already-masked spectator `gameState`. Cards are grouped
 by current controller (including control changes), with tapped status and
 creature power/toughness. Identical permanents are counted together; card lists
-wrap to the display width. Face-down names and hand/library contents are not
+wrap to the display width. On a terminal, space is shared between seats so
+large battlefields do not scroll earlier players off-screen; omitted battlefield
+rows are counted explicitly. Redirected text output retains the complete lists.
+Face-down names and hand/library contents are not
 rendered. Older two-player snapshots fall back to the legacy summaries.
 
 ## Existing console service integration

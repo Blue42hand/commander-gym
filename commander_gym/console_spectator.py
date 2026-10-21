@@ -72,48 +72,89 @@ def card_label(card: dict) -> str:
     return label
 
 
-def render(snapshot: dict, events: deque[str], width: int = 90) -> str:
+def render(snapshot: dict, events: deque[str], width: int = 90, height: int | None = None) -> str:
     width = max(10, min(width, 100))
     players = player_views(snapshot)
     names = {p["playerId"]: p["name"] for p in players}
     def name(player_id):
         return clean(names.get(player_id) or player_id)
-    lines = []
-    def add(text, indent=""):
-        lines.extend(textwrap.wrap(text, width=width, initial_indent=indent,
-                                   subsequent_indent=indent) or [""])
-    add("COMMANDER GYM  /  LIVE SPECTATOR")
-    add("=" * width)
-    add(f"Game: {clean(snapshot.get('gameSessionId'))}  Phase: {clean(snapshot.get('currentPhase'))}")
-    add(f"Active: {name(snapshot.get('activePlayerId'))}  Priority: {name(snapshot.get('priorityPlayerId'))}")
+    def wrap(text, indent=""):
+        return textwrap.wrap(text, width=width, initial_indent=indent,
+                             subsequent_indent=indent) or [""]
+    intro = wrap("COMMANDER GYM  /  LIVE SPECTATOR") + ["=" * width]
+    intro += wrap(f"Game: {clean(snapshot.get('gameSessionId'))}  Phase: {clean(snapshot.get('currentPhase'))}")
+    intro += wrap(f"Active: {name(snapshot.get('activePlayerId'))}  Priority: {name(snapshot.get('priorityPlayerId'))}")
+    sections = []
     for i, player in enumerate(players):
-        add("-" * width)
-        add(f"{i+1}. {clean(player['name'], 120)}")
+        heading = ["-" * width] + wrap(f"{i+1}. {clean(player['name'], 120)}")
         board = [card for card in player["battlefield"] if isinstance(card, dict)]
         if not player["available"]:
-            add("Public board state unavailable", "  ")
+            heading += wrap("Public board state unavailable", "  ")
+            sections.append((heading, []))
             continue
-        add(f"LIFE {clean(player['life'])}  |  HAND {clean(player['handSize'])}  |  BATTLEFIELD {len(board)}", "  ")
+        heading += wrap(f"LIFE {clean(player['life'])}  |  HAND {clean(player['handSize'])}  |  BATTLEFIELD {len(board)}", "  ")
         labels = Counter(card_label(card) for card in board)
         battlefield = "; ".join(f"{count}x {label}" if count > 1 else label
                                 for label, count in labels.items())
-        add(battlefield or "(empty battlefield)", "  ")
-    add("-" * width)
+        sections.append((heading, wrap(battlefield or "(empty battlefield)", "  ")))
+    tail = ["-" * width]
     decision = snapshot.get("decisionStatus") or {}
     if isinstance(decision, dict) and decision:
-        add("PENDING: " + clean(decision.get("playerName")) + " / " + clean(decision.get("displayText")))
-    add("EVENTS (public snapshot changes)")
+        tail += wrap("PENDING: " + clean(decision.get("playerName")) + " / " + clean(decision.get("displayText")))
+    tail += wrap("EVENTS (public snapshot changes)")
     for event in events:
-        add(clean(event, 160), "  ")
-    add("")
-    add("Live updates from the public spectator stream")
+        tail += wrap(clean(event, 160), "  ")
+    tail += [""] + wrap("Live updates from the public spectator stream")
+    if height is None:
+        return "\n".join(intro + [line for heading, board in sections for line in heading + board] + tail)
+
+    # Leave a row for the final newline: writing on the bottom row scrolls the console.
+    limit = max(0, height - 1)
+    available = limit - len(intro) - sum(len(heading) for heading, _ in sections)
+    if available < sum(bool(board) for _, board in sections):
+        # Tiny consoles still prioritize all names/life over headers, boards, and history.
+        compact = ["LIVE SPECTATOR"[:width]]
+        compact += [f"LIFE {clean(p['life'])} | {clean(p['name'], 120)}"[:width] for p in players]
+        compact += ["Battlefield details hidden: terminal too small"[:width]]
+        return "\n".join(compact[:limit])
+    allocations = [0] * len(sections)
+    while available > 0:
+        progressed = False
+        for i, (_, board) in enumerate(sections):
+            if allocations[i] < len(board) and available > 0:
+                allocations[i] += 1
+                available -= 1
+                progressed = True
+        if not progressed:
+            break
+    lines = list(intro)
+    for (heading, board), count in zip(sections, allocations):
+        lines += heading
+        if count < len(board):
+            visible = max(0, count - 1)
+            lines += board[:visible]
+            lines += [f"  +{len(board) - visible} battlefield rows hidden"[:width]]
+        else:
+            lines += board
+    lines += tail[:max(0, limit - len(lines))]
     return "\n".join(lines)
+
+
+def write_frame(output, snapshot: dict, events: deque[str]) -> None:
+    """Use both terminal dimensions; redirected output retains the complete frame."""
+    if output.isatty():
+        size = os.get_terminal_size(output.fileno())
+        frame = render(snapshot, events, width=max(10, size.columns - 1), height=size.lines)
+        output.write("\x1b[H\x1b[2J")
+    else:
+        frame = render(snapshot, events)
+    output.write(frame + "\n")
+    output.flush()
 
 def run(source, output, refresh: float = 0.25) -> None:
     latest = {}
     events: deque[str] = deque(maxlen=7)
     previous = None
-    is_tty = output.isatty()
     while True:
         ready, _, _ = select.select([source], [], [], refresh)
         if ready:
@@ -130,9 +171,7 @@ def run(source, output, refresh: float = 0.25) -> None:
             previous = signature
             latest = msg
         if latest:
-            if is_tty: output.write("\x1b[H\x1b[2J")
-            output.write(render(latest, events, os.get_terminal_size(output.fileno()).columns if is_tty else 90)+"\n")
-            output.flush()
+            write_frame(output, latest, events)
 
 def live(url: str, game_id: str, output) -> None:
     """Render native public updates straight to the Linux virtual terminal."""
@@ -144,12 +183,7 @@ def live(url: str, game_id: str, output) -> None:
         if previous[0] is not None and signature != previous[0]:
             events.appendleft(f"{clean(signature[0])} / active {clean(signature[1])} / priority {clean(signature[2])}")
         previous[0] = signature
-        tty = output.isatty()
-        if tty:
-            output.write("\x1b[H\x1b[2J")
-        width = os.get_terminal_size(output.fileno()).columns if tty else 90
-        output.write(render(snapshot, events, width) + "\n")
-        output.flush()
+        write_frame(output, snapshot, events)
     watch(url, game_id, draw)
 
 def auto_live(url: str, output, lobby_id: str | None = None) -> None:
@@ -166,10 +200,7 @@ def auto_live(url: str, output, lobby_id: str | None = None) -> None:
         if previous[0] is not None and signature != previous[0]:
             events.appendleft(f"{clean(signature[0])} / active {clean(signature[1])} / priority {clean(signature[2])}")
         previous[0] = signature
-        if output.isatty(): output.write("\x1b[H\x1b[2J")
-        width = os.get_terminal_size(output.fileno()).columns if output.isatty() else 90
-        output.write(render(snapshot, events, width) + "\n")
-        output.flush()
+        write_frame(output, snapshot, events)
     follow(url,draw,lobby_id=lobby_id,on_idle=lambda:status("Waiting for an active game…"),
            on_game=lambda game:status("Following game "+clean(game)),
            on_error=lambda exc:status("Spectator error: "+clean(type(exc).__name__)))
