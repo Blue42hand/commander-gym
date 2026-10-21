@@ -95,6 +95,10 @@ def recorder_peer(profile, nonce):
     from .recorder_bridge import exchange, _expected_event, recording_registry, RecorderBridge, peer_uid
     require(os.getuid() == 0 and len(nonce) == 32 and all(c in '0123456789abcdef' for c in nonce), 'qa_local_probe_nonce')
     base = ROOT/'qa/local-peer-fixture'/nonce
+    # Fail before forking or touching the fixture if a staging root would
+    # exceed the portable sockaddr_un path budget (including its terminator).
+    require(all(len(os.fsencode(base/path)) < 104 for path in
+            ('ipc/native.sock','ipc/sidecar.sock','local-ipc/local.sock')), 'qa_local_peer_socket_path')
     native_uid = profile['identities']['nativeUid']; cloud_uid = profile['identities']['sidecarUid']
     local = profile['localInference']; cloud_gid = pwd.getpwuid(cloud_uid).pw_gid
     for parent in (base.parent, *base.parent.parents):
@@ -193,7 +197,9 @@ def recorder_peer(profile, nonce):
         _as_role(profile,'native',lambda:[exchange(base/'ipc/native.sock',dict(identity(req),op='closed'),recorder_uid=native_uid)
                                         for req in (local_request,cloud_request)])
     finally:
-        if process.is_alive():controller.send('close')
+        if process.is_alive():
+            try:controller.send('close')
+            except (OSError,BrokenPipeError):pass
         process.join(8)
         if process.is_alive():process.kill();process.join(2)
         controller.close()

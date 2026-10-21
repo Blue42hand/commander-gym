@@ -150,6 +150,12 @@ class LocalQATests(unittest.TestCase):
         self.assertTrue(result['acceptedCallbackCancelled']);self.assertTrue(result['callbackThreadsReaped'])
         self.assertTrue(result['badContextWithheldReadiness']);self.assertLess(result['elapsedSeconds'],4)
 
+    def test_overlong_peer_socket_path_fails_before_fixture_access_or_fork(self):
+        from commander_gym.qa_local_probes import recorder_peer
+        with patch.object(qa,'ROOT',Path('/'+'x'*90)),patch('commander_gym.qa_local_probes.os.getuid',return_value=0),patch.object(Path,'lstat') as inspect,patch('commander_gym.qa_local_probes.multiprocessing.get_context') as context:
+            with self.assertRaisesRegex(ManualRuntimeError,'qa_local_peer_socket_path'):recorder_peer(self.profile,'a'*32)
+            inspect.assert_not_called();context.assert_not_called()
+
     def test_ready_notification_failure_closes_bound_server(self):
         server=Mock()
         with patch.dict(os.environ,{},clear=True):

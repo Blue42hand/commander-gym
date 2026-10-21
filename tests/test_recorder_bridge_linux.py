@@ -68,7 +68,7 @@ print(json.dumps({'denied':len(failed), 'receipt':response['ok'], 'registerRejec
         from test_game_server_binding_openai_sidecar import synthetic_catalog
         # A numerical UID fixture uses no account/group provisioning. Only this
         # disposable root-CI namespace receives fixture ownership/mode changes.
-        with tempfile.TemporaryDirectory(prefix='qa-local-peer-', dir='/var/lib') as temp:
+        with tempfile.TemporaryDirectory(prefix='ql-', dir='/var/lib') as temp:
             base=Path(temp);base.chmod(0o755)
             profile=local_profile(base/'source')
             profile['identities']={'nativeUid':65534,'sidecarUid':65533,'proxyUid':65531}
@@ -79,7 +79,7 @@ print(json.dumps({'denied':len(failed), 'receipt':response['ok'], 'registerRejec
             profile['artifacts']['catalog']={'root':str(cloud),'uid':0,'files':{
                 str(p.relative_to(cloud)):hashlib.sha256(p.read_bytes()).hexdigest() for p in cloud.rglob('*') if p.is_file()}}
             profile['catalog']['roster']=str(roster.relative_to(cloud))
-            nonce='a'*32;guest=base/'guest';fixture=guest/'qa/local-peer-fixture'/nonce;fixture.mkdir(parents=True)
+            nonce='a'*32;guest=base/'g';fixture=guest/'qa/local-peer-fixture'/nonce;fixture.mkdir(parents=True)
             for folder,uid,gid,mode in [('recordings',65534,65534,0o700),('ipc',65534,65533,0o750),('local-ipc',65534,65532,0o750)]:
                 path=fixture/folder;path.mkdir(mode=mode);os.chown(path,uid,gid)
             with patch.object(qa,'ROOT',guest),patch('commander_gym.qa_local_probes.pwd.getpwuid',side_effect=lambda uid:SimpleNamespace(pw_uid=uid,pw_gid=uid)):
