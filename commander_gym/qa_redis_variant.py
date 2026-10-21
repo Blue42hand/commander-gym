@@ -34,6 +34,9 @@ def validate_settings(profile):
 
 
 def role_uid(profile, role):
+    if role == 'local':
+        require('localInference' in profile, 'qa_local_role_disabled')
+        return profile['localInference']['uid']
     if role == 'redis':
         require(profile.get('profile') == PROFILE, 'qa_redis_role_requires_variant')
         validate_settings(profile)

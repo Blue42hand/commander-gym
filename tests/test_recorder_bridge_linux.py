@@ -57,6 +57,41 @@ print(json.dumps({'denied':len(failed), 'receipt':response['ok'], 'registerRejec
         finally:
             fixture.tearDown()
 
+    def test_local_qa_peer_probe_is_disposable_and_reaps_its_only_recorder(self):
+        import hashlib
+        import tempfile
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from commander_gym import manual_runtime_qa as qa
+        from commander_gym.qa_local_probes import recorder_peer, _as_role
+        from test_manual_runtime_local import local_profile
+        from test_game_server_binding_openai_sidecar import synthetic_catalog
+        # A numerical UID fixture uses no account/group provisioning. Only this
+        # disposable root-CI namespace receives fixture ownership/mode changes.
+        with tempfile.TemporaryDirectory(prefix='ql-', dir='/var/lib') as temp:
+            base=Path(temp);base.chmod(0o755)
+            profile=local_profile(base/'source')
+            profile['identities']={'nativeUid':65534,'sidecarUid':65533,'proxyUid':65531}
+            profile['localInference'].update(uid=65532,gid=65532)
+            cloud=base/'cloud';cloud.mkdir();roster=synthetic_catalog(cloud)
+            binding=cloud/'bindings/seat-a.json';data=json.loads(binding.read_text());data['binding_id']='cloud-seat';binding.write_text(json.dumps(data))
+            data=json.loads(roster.read_text());data['active_bindings']=['cloud-seat'];roster.write_text(json.dumps(data))
+            profile['artifacts']['catalog']={'root':str(cloud),'uid':0,'files':{
+                str(p.relative_to(cloud)):hashlib.sha256(p.read_bytes()).hexdigest() for p in cloud.rglob('*') if p.is_file()}}
+            profile['catalog']['roster']=str(roster.relative_to(cloud))
+            nonce='a'*32;guest=base/'g';fixture=guest/'qa/local-peer-fixture'/nonce;fixture.mkdir(parents=True)
+            for folder,uid,gid,mode in [('recordings',65534,65534,0o700),('ipc',65534,65533,0o750),('local-ipc',65534,65532,0o750)]:
+                path=fixture/folder;path.mkdir(mode=mode);os.chown(path,uid,gid)
+            with patch.object(qa,'ROOT',guest),patch('commander_gym.qa_local_probes.pwd.getpwuid',side_effect=lambda uid:SimpleNamespace(pw_uid=uid,pw_gid=uid)):
+                result=recorder_peer(profile,nonce)
+            self.assertTrue(result['fixtureWorkerReaped']);self.assertFalse(result['activeRecordingTreeTouched'])
+            self.assertEqual(result['cloudBindingScope'],'authenticated-rejection')
+            self.assertEqual(result['localBindingScope'],'authenticated-rejection')
+            self.assertTrue(result['duplicateReceiptsIdentical']);self.assertFalse(result['nativeTerminalFabricated'])
+            self.assertFalse(Path(profile['paths']['recordingRoot']).exists())
+            self.assertTrue((fixture/'recordings'/result['gameId']/'native-000000.ndjson').is_file())
+            self.assertFalse(any((fixture/sub/name).exists() for sub,name in [('ipc','native.sock'),('ipc','sidecar.sock'),('local-ipc','local.sock')]))
+
     def test_local_uid_has_its_own_socket_and_cannot_enter_luna_socket(self):
         fixture = bridge_fixtures.RecorderBridgeTests()
         fixture.setUp()
