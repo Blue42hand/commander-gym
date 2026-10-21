@@ -129,8 +129,10 @@ def collect_workflow(api, repo, repository_id, path, spec, sha, raw):
     return checks, run
 
 
-def collect(api, policy, *, now=None):
+def collect(api, policy, *, now=None, gym_sha=None):
     validate_policy(policy)
+    if gym_sha is not None:
+        gym_sha = full_sha(gym_sha)
     now = datetime.now(timezone.utc).timestamp() if now is None else now
     pins, heads, raw_workflows = {}, {}, {}
     for role, repo in REPOSITORIES.items():
@@ -140,6 +142,8 @@ def collect(api, policy, *, now=None):
                 'source_repository_identity')
         heads[role] = full_sha(api.get(f'repos/{repo}/commits/main')['sha'])
     pins.update(heads)
+    if gym_sha is not None:
+        pins['gym'] = gym_sha
     gym_raw = workflow_bytes(api, REPOSITORIES['gym'], GYM_WORKFLOW, pins['gym'])
     matches = list(PIN.finditer(gym_raw))
     require(len(matches) == 1, 'source_engine_pin')
@@ -148,7 +152,7 @@ def collect(api, policy, *, now=None):
     sources, gym_run = {}, None
     for role, repo in REPOSITORIES.items():
         sha, spec = pins[role], policy['repositories'][role]
-        # A matched engine pin may precede engine main, but cannot be off-main.
+        # A frozen Gym or matched engine pin may precede main, but cannot be off-main.
         ancestry = api.get(f'repos/{repo}/compare/{sha}...{heads[role]}')
         require(ancestry['status'] in ('ahead', 'identical')
                 and ancestry['merge_base_commit']['sha'] == sha, 'source_not_main_ancestor')
@@ -199,10 +203,11 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--policy', required=True)
     parser.add_argument('--policy-sha256', required=True)
+    parser.add_argument('--gym-sha', help='Frozen full Gym commit; must be a main ancestor with passing exact-commit CI')
     args = parser.parse_args(argv)
     try:
         policy = pinned_json(args.policy, args.policy_sha256)
-        result = collect(GitHub(), policy)
+        result = collect(GitHub(), policy, gym_sha=args.gym_sha)
         result['policySha256'] = args.policy_sha256
     except ManualRuntimeError as error:
         result = {'state': 'held-source-evidence', 'reason': str(error), 'promotionEnabled': False}

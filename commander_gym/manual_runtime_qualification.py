@@ -30,6 +30,10 @@ def inspect_matched_artifacts(profile: dict) -> dict:
         imports = archive.read("META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports").decode().splitlines()
         require("org.commandergym.argentum.CommanderGymAutoConfiguration" in imports
                 and "org/commandergym/argentum/CommanderGymControllerProvider.class" in archive.namelist(), "compiled_provider_missing")
+        if 'localInference' in profile:
+            require('org.commandergym.argentum.CommanderGymLocalAutoConfiguration' in imports
+                    and 'org/commandergym/argentum/CommanderGymLocalAutoConfiguration.class' in archive.namelist(),
+                    'compiled_local_provider_missing')
     with zipfile.ZipFile(io.BytesIO(server_bytes)) as archive:
         require(_manifest(archive).get("Argentum-Revision") == profile["engineSha"], "server_source_mismatch")
         embedded = [name for name in archive.namelist() if name.startswith("BOOT-INF/lib/") and name.endswith(".jar") and "commander-gym-argentum-adapter" in name]
@@ -88,7 +92,13 @@ def inspect_runtime(profile: dict) -> dict:
     matched = inspect_matched_artifacts(profile)
     catalog = inspect_catalog(profile)
     lock = dependency_lock(profile)
+    local_gates = []
+    if 'localInference' in profile:
+        from .manual_runtime_local import GATES, local_recording_registry
+        local_gates = sorted(GATES)
+        registry = local_recording_registry(profile)
+        catalog['local'] = {'profiles': sorted(registry.binding_fingerprints), 'externalProviderCalls': 0}
     return {"schemaVersion": 1, "profileSha256": digest(profile), "matchedArtifacts": matched,
             "catalog": catalog, "dependencyLockSha256": digest(lock), "externalProviderCalls": 0,
             "activationEligible": False,
-            "missingBehavioralGates": ["dependencyRuntime", "fakeProviderAdmission", "singleRecorder", "recordingRestore", "idlePromotionRollback", "httpsIngress", "cleanup"]}
+            "missingBehavioralGates": ["dependencyRuntime", "fakeProviderAdmission", "singleRecorder", "recordingRestore", "idlePromotionRollback", "httpsIngress", "cleanup"] + local_gates}

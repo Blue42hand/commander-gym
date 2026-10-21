@@ -16,6 +16,8 @@ from types import SimpleNamespace
 from typing import Any, Mapping
 
 from .lmstudio_provider import LMStudioConfig, LMStudioError, LMStudioTransport, require_loaded_model
+from .local_callback_context import current_cancel
+from .observation_projection import compact_seat_observation
 from .openai_responses_pilot import (
     OpenAIResponsesPilot, OpenAIResponsesPilotError, _DEFAULT_INSTRUCTIONS,
     _native_action_format, _native_decision_format, _without_live_routing,
@@ -25,6 +27,11 @@ from .pilot import PilotChoice, PilotContractError, _require_observation, valida
 
 class LMStudioPilotError(OpenAIResponsesPilotError):
     """Uses the existing failure-receipt contract, carrying provider=lmstudio."""
+
+    def __init__(self, message, *, model_io=None):
+        super().__init__(message, model_io=model_io if model_io is not None else {
+            "schemaVersion": 1, "provider": "lmstudio", "selectedAttempt": None, "attempts": [],
+        })
 
 
 def _local_native_format(observation: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -167,10 +174,14 @@ class LMStudioPilot:
 
     def choose(self, observation: Mapping[str, Any]) -> PilotChoice:
         _require_observation(observation)
+        cancel = self.cancel if self.cancel is not None else current_cancel.get()
         started = monotonic()
         deadline = started + self.config.timeout_seconds
         attempts = []
-        schema_format = _local_native_format(observation)
+        try:
+            schema_format = _local_native_format(observation)
+        except (OpenAIResponsesPilotError, PilotContractError) as exc:
+            raise LMStudioPilotError(str(exc)) from exc
         if schema_format is None:
             raise LMStudioPilotError("llmster requires a supported native JSON schema; no JSON-mode downgrade")
         try:
@@ -188,7 +199,17 @@ class LMStudioPilot:
                 "If canAutoPayNow is false, do not use autoPay. If autoPay is true, selectedSources "
                 "must be empty. CancelDecisionResponse is allowed only when the schema permits it."
             )
-        base_input = json.dumps(_without_live_routing(observation), sort_keys=True, separators=(",", ":"))
+        model_observation = _without_live_routing(observation)
+        if self.config.compact_observation:
+            model_observation = compact_seat_observation(model_observation)
+            instructions += (
+                "\nThis request uses argentum-seat-sparse-cards-v1. The observation is inside "
+                "observation; cardDefaults lists exact values for omitted fields on every "
+                "state.cards entry. Restore these fields before choosing. No other state "
+                "fields or legal choices are omitted. Use semanticId from observation.legalActions."
+            )
+        instructions += "\nThe current native parameterSpec and response schema define all allowed fields, including additional cost payments."
+        base_input = json.dumps(model_observation, sort_keys=True, separators=(",", ":"))
         request = {
             "model": self.config.model,
             "messages": [{"role": "system", "content": instructions}, {"role": "user", "content": base_input}],
@@ -196,7 +217,7 @@ class LMStudioPilot:
                 key: deepcopy(value) for key, value in schema_format.items() if key != "type"
             }},
             "max_tokens": self.config.max_output_tokens,
-            "stream": False, "reasoning_effort": "none", "temperature": 0,
+            "stream": self.config.stream, "reasoning_effort": "none", "temperature": 0,
         }
         validator = OpenAIResponsesPilot(
             client=SimpleNamespace(responses=SimpleNamespace(create=lambda **_: None)), model=self.config.model,
@@ -209,7 +230,7 @@ class LMStudioPilot:
             } if attempts else None)
 
         def remaining():
-            if self.cancel is not None and self.cancel.is_set():
+            if cancel is not None and cancel.is_set():
                 raise LMStudioError("cancelled")
             value = deadline - monotonic()
             if value <= 0:
@@ -222,19 +243,22 @@ class LMStudioPilot:
             if len(json.dumps(request, ensure_ascii=False).encode()) > self.config.max_prompt_bytes:
                 fail("local_prompt_byte_limit_exceeded")
             try:
-                discovery = self.transport.request("/api/v1/models", None, timeout=remaining(), cancel=self.cancel)
+                discovery_started = monotonic()
+                discovery = self.transport.request("/api/v1/models", None, timeout=remaining(), cancel=cancel)
                 identity = require_loaded_model(discovery, self.config)
+                discovery_ms = round((monotonic() - discovery_started) * 1000, 3)
                 remaining()
             except LMStudioError as exc:
                 fail(str(exc))
-            attempt = {"attempt": index, "request": deepcopy(request), "response": {}}
+            attempt = {"attempt": index, "request": deepcopy(request),
+                       "response": {"discoveryWallTimeMs": discovery_ms}}
             attempts.append(attempt)
             dispatch = monotonic()
             try:
-                response = self.transport.request("/v1/chat/completions", request, timeout=remaining(), cancel=self.cancel)
+                response = self.transport.request("/v1/chat/completions", request, timeout=remaining(), cancel=cancel)
             except LMStudioError as exc:
-                attempt["response"] = {"transportError": str(exc), "httpStatus": exc.status,
-                                       "providerWallTimeMs": round((monotonic() - dispatch) * 1000, 3)}
+                attempt["response"].update({"transportError": str(exc), "httpStatus": exc.status,
+                                           "providerWallTimeMs": round((monotonic() - dispatch) * 1000, 3)})
                 if exc.status in {502, 503, 504} and index + 1 < self.config.max_attempts:
                     continue
                 fail(str(exc))
@@ -242,7 +266,8 @@ class LMStudioPilot:
             snapshot.update({"providerWallTimeMs": round((monotonic() - dispatch) * 1000, 3),
                              "modelIdentity": identity})
             for source, target in (("id", "responseId"), ("model", "responseModel"),
-                                   ("usage", "usage"), ("stats", "stats")):
+                                   ("usage", "usage"), ("stats", "stats"),
+                                   ("_localTransport", "transport")):
                 if source in response:
                     snapshot[target] = deepcopy(response[source])
             choices = response.get("choices")
@@ -255,6 +280,15 @@ class LMStudioPilot:
                             snapshot[target] = message[source]
             try:
                 remaining()  # Discard late or cancelled results before selection.
+                usage = response.get("usage")
+                if isinstance(usage, dict):
+                    for field in ("prompt_tokens", "completion_tokens"):
+                        if field in usage and (type(usage[field]) is not int or usage[field] < 0):
+                            raise LMStudioError("invalid_usage")
+                    if (usage.get("prompt_tokens", 0) > self.config.max_prompt_bytes + self.config.template_reserve_tokens
+                        or usage.get("completion_tokens", 0) > self.config.max_output_tokens
+                        or usage.get("prompt_tokens", 0) + usage.get("completion_tokens", 0) > self.config.context_window):
+                        raise LMStudioError("provider_context_budget_exceeded")
                 content, parsed = _parse_final(response, self.config.model)
                 _schema_check(schema_format["schema"], parsed, validate=True)
                 choice = validator._choice_from_response(
@@ -263,11 +297,12 @@ class LMStudioPilot:
                 choice = validate_pilot_choice(choice, observation)
             except (LMStudioError, OpenAIResponsesPilotError, PilotContractError) as exc:
                 snapshot["validationError"] = str(exc)
-                if str(exc) in {"cancelled", "deadline_exceeded"}:
+                if str(exc) in {"cancelled", "deadline_exceeded", "invalid_usage", "provider_context_budget_exceeded"}:
                     fail(str(exc))
                 request["messages"][1]["content"] = base_input + "\nPrevious output was invalid. Return JSON matching the schema and current native offer."
                 continue
             metadata = {**dict(choice.metadata), "provider": "lmstudio", "model": self.config.model,
+                        "choiceWallTimeMs": round((monotonic() - started) * 1000, 3),
                         "providerWallTimeMs": round(sum(a["response"]["providerWallTimeMs"] for a in attempts), 3),
                         "modelIo": {"schemaVersion": 1, "provider": "lmstudio",
                                     "selectedAttempt": index, "attempts": attempts}}
