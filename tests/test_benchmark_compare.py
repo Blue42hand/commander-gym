@@ -5,6 +5,7 @@ from commander_gym.benchmark import (
     BENCHMARK_SUITE_IDENTITY_SCHEMA,
     BenchmarkCase,
     BenchmarkJudgment,
+    BenchmarkScenario,
     benchmark_suite_identity,
 )
 from commander_gym.benchmark_compare import (
@@ -166,6 +167,46 @@ class BenchmarkComparisonTests(unittest.TestCase):
         with self.assertRaisesRegex(BenchmarkComparisonError, "missing benchmark identity"):
             compare_benchmark_reports(legacy, report)
 
+
+    def test_comparison_accepts_matching_v2_input_scenario_suite(self):
+        scenario = BenchmarkScenario(
+            case_id="scenario-v2",
+            category="interaction",
+            decision_type="priority",
+            seat=0,
+            observation_schema="synthetic-v1",
+            observation={"public": {"turn": 8}},
+            legal_actions=[
+                ActionRecord(action_id="pass", payload={"kind": "pass"}),
+                ActionRecord(action_id="cast", payload={"kind": "cast"}),
+            ],
+            judgment=BenchmarkJudgment(preferred_action_ids=["cast"]),
+            tags=["project_synthetic"],
+        )
+        baseline = run_benchmark([scenario], first_legal_pilot("baseline-v2", "1"))
+        candidate = run_benchmark(
+            [scenario], CallablePilot("candidate-v2", "1", lambda _: "cast")
+        )
+        comparison = compare_benchmark_reports(baseline, candidate)
+        self.assertEqual(comparison["benchmark"]["schema"], "commander-gym-benchmark-suite@v2")
+
+    def test_comparison_rejects_v1_v2_identity_mismatch(self):
+        recorded = self.cases[0]
+        scenario = BenchmarkScenario(
+            case_id=recorded.case_id,
+            category=recorded.category,
+            decision_type=recorded.decision.decision_type,
+            seat=recorded.decision.seat,
+            observation_schema=recorded.decision.observation_schema,
+            observation=recorded.decision.observation,
+            legal_actions=recorded.decision.legal_actions,
+            judgment=recorded.judgment,
+            tags=recorded.tags,
+        )
+        baseline = run_benchmark([recorded], first_legal_pilot("baseline-v1", "1"))
+        candidate = run_benchmark([scenario], first_legal_pilot("candidate-v2", "1"))
+        with self.assertRaisesRegex(BenchmarkComparisonError, "identities differ"):
+            compare_benchmark_reports(baseline, candidate)
 
 if __name__ == "__main__":
     unittest.main()
