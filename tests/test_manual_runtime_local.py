@@ -50,7 +50,7 @@ def local_profile(root, *, source_entries=True):
     launcher = profile['artifacts']['launcher']
     for name in ('scripts/local_sidecar_entry.py', 'commander_gym/manual_runtime_local.py', 'commander_gym/lmstudio_provider.py', 'commander_gym/lmstudio_http_worker.py'):
         path = Path(launcher['root'])/name;path.parent.mkdir(parents=True,exist_ok=True)
-        path.write_bytes(Path(name).read_bytes() if source_entries else b'# nonexecuted credential fixture entry');launcher['files'][name]=hashlib.sha256(path.read_bytes()).hexdigest()
+        path.write_bytes((Path(__file__).resolve().parents[1] / name).read_bytes() if source_entries else b'# nonexecuted credential fixture entry');launcher['files'][name]=hashlib.sha256(path.read_bytes()).hexdigest()
     return profile
 
 
@@ -169,7 +169,7 @@ class LocalRuntimeTests(unittest.TestCase):
         import subprocess,sys
         launcher=Path(self.profile['artifacts']['launcher']['root'])
         package=launcher/'commander_gym';package.mkdir(exist_ok=True)
-        for path in Path('commander_gym').glob('manual_runtime_*.py'):
+        for path in (Path(__file__).resolve().parents[1] / 'commander_gym').glob('manual_runtime_*.py'):
             (package/path.name).write_bytes(path.read_bytes())
         (package/'__init__.py').write_text('')
         source=Path(self.tmp.name)/'profile.json';source.write_bytes(canonical(self.profile))

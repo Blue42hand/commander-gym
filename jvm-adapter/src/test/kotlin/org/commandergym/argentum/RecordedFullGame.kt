@@ -55,7 +55,8 @@ fun main() {
         val ws = Mockito.mock(WebSocketSession::class.java)
         Mockito.`when`(ws.id).thenReturn("fixture-${seat.value}")
         val cards = library(spec)
-        session.addPlayer(PlayerSession(ws, seat, seat.value), cards, spec.getValue("commander").jsonPrimitive.content)
+        session.addPlayer(PlayerSession(ws, seat, seat.value), cards,
+            commanderCardNames = listOf(spec.getValue("commander").jsonPrimitive.content))
     }
     val local = EngineAiPlayerController(registry, talrand, { session.getStateSnapshot() })
     val remote = CommanderGymPlayerController(lathril, URI.create(text("sidecarUrl")),

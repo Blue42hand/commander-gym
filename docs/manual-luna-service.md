@@ -7,8 +7,10 @@ No launcher creates a game. No private catalog, credential or deck is shipped he
 
 ## Matched build and inspection
 
-Use clean checkouts of the reviewed native and Gym commits, JDK 21, and the
-repository build semaphore. Run from the native checkout:
+Use clean checkouts of the reviewed native and Gym commits, JDK 25, and the
+repository build semaphore. Set `JAVA_HOME` and `PATH` to the same JDK 25 for
+Gradle and the native runtime. The adapter and native modules target JVM 25.
+Run from the native checkout:
 
 ```sh
 ARGENTUM_ENGINE_DIR=/absolute/native just gradle -p /absolute/gym/jvm-adapter test jar

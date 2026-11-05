@@ -28,6 +28,12 @@ the copied catalog and cannot read native journals. The provider source remains
 owner-only0600 under owner-only0700 parents; recorder group membership grants no
 access to that file. No new account or group is created by this source.
 
+For the current upstream-integrated native/Gym pair, the sealed dependency tree
+must contain a JDK 25 runtime. `runtime-lock.json` selects its indexed `java`
+executable; changing the host `JAVA_HOME` does not replace that sealed runtime.
+Prepare the matching dependency inventory and qualify the resulting artifact pair
+before requesting activation.
+
 ## Credential boundary and one recorder
 
 Root validates exact all-artifact/CI/qualification/approval/previous-runtime/sequence

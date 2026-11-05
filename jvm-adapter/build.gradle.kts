@@ -1,6 +1,6 @@
 plugins {
-    kotlin("jvm") version "2.4.0"
-    kotlin("plugin.serialization") version "2.4.0"
+    kotlin("jvm") version "2.4.21"
+    kotlin("plugin.serialization") version "2.4.21"
 }
 
 dependencies {
@@ -12,14 +12,14 @@ dependencies {
     compileOnly("com.wingedsheep:argentum-rules-engine")
     compileOnly("com.wingedsheep:argentum-sdk")
 
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
-    implementation("org.springframework.boot:spring-boot-autoconfigure:4.1.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.12.0")
+    implementation("org.springframework.boot:spring-boot-autoconfigure:4.1.2")
 
     testImplementation(kotlin("test"))
     // Composite project substitution does not carry Argentum's Spring dependency-management
     // plugin into this standalone build. Import the same Boot BOM so versionless runtime
     // dependencies declared by game-server (Flyway/Postgres, etc.) resolve exactly as upstream.
-    testImplementation(platform("org.springframework.boot:spring-boot-dependencies:4.1.0"))
+    testImplementation(platform("org.springframework.boot:spring-boot-dependencies:4.1.2"))
     testImplementation("com.wingedsheep:argentum-ai")
     // Acceptance tests boot the actual Argentum game-server from the composite build and exercise
     // AiPlayerController directly. Keep those host modules test-only so the adapter artifact itself
@@ -28,11 +28,11 @@ dependencies {
     testImplementation("com.wingedsheep:argentum-game-server")
     testImplementation("com.wingedsheep:argentum-rules-engine")
     testImplementation("com.wingedsheep:argentum-sdk")
-    testImplementation("org.springframework.boot:spring-boot-starter-test:4.1.0")
+    testImplementation("org.springframework.boot:spring-boot-starter-test:4.1.2")
     testImplementation("org.springframework:spring-websocket")
 }
 
-kotlin { jvmToolchain(21) }
+kotlin { jvmToolchain(25) }
 tasks.test { useJUnitPlatform() }
 
 val nativeCheckout = file(providers.environmentVariable("ARGENTUM_ENGINE_DIR").orElse("../argentum-engine").get())
