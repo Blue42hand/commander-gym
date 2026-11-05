@@ -28,7 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 35
     env:
-      ARGENTUM_REVISION: ec8380b157957259493ec248c75b92330151177e
+      ARGENTUM_REVISION: 12ab2f0ed5bd018334521dc52497e6444f26f5a9
     steps:
       - name: Check out Commander Gym revision under test
         uses: actions/checkout@v6
@@ -86,7 +86,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 35
     env:
-      ARGENTUM_REVISION: ec8380b157957259493ec248c75b92330151177e
+      ARGENTUM_REVISION: 12ab2f0ed5bd018334521dc52497e6444f26f5a9
     steps:
       - name: Check out Commander Gym revision under test
         uses: actions/checkout@v6
