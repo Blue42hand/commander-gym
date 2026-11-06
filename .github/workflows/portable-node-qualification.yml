@@ -112,6 +112,11 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
+      # Cold compilation of the expanded native corpus must finish before the
+      # existing service-readiness deadline starts. Keep the readiness gate intact.
+      - name: Compile pinned native service before readiness timing
+        run: ./argentum-engine/gradlew -p argentum-engine :gym-server:bootJar
+
       - name: Expose Java 25 to system services
         shell: bash
         run: |
