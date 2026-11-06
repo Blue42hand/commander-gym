@@ -4,6 +4,7 @@ import json
 import hashlib
 from pathlib import Path
 import signal
+import socket
 import shutil
 import subprocess
 import os
@@ -148,8 +149,15 @@ class HumanGuiTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, ExitStack() as stack:
             root=Path(tmp)
             plan={gate:True for gate in launcher.GATES}
-            plan.update(runtimeLock=str(root/'runtime.lock'),wallSeconds=100,serverPort=18080,
-                        sidecarPort=18083,frontendPort=15175,engineDir=str(root/'engine'),
+            # Reserve three distinct ephemeral ports, then release before supervise probes them.
+            # This unit fixture must not collide with an existing local native service.
+            with ExitStack() as ports:
+                sockets = [ports.enter_context(socket.socket()) for _ in range(3)]
+                for listener in sockets:
+                    listener.bind(('127.0.0.1', 0))
+                server_port, sidecar_port, frontend_port = [listener.getsockname()[1] for listener in sockets]
+            plan.update(runtimeLock=str(root/'runtime.lock'),wallSeconds=100,serverPort=server_port,
+                        sidecarPort=sidecar_port,frontendPort=frontend_port,engineDir=str(root/'engine'),
                         catalogRoot=str(root/'catalog'),budgetLedger=str(root/'budget'),
                         cumulativeCapUsd=5,cumulativeMaxRequests=100)
             proof={'classpath':['/tmp/offline.class'], 'snapshot':{'unsettledRequests':0,'requests':0,'estimatedUsd':0},

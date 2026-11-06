@@ -35,6 +35,11 @@ Reference host:
 
 Recommended initial capacity for benchmark/development work: 8 dedicated vCPU, 16 GiB RAM.
 
+The baseline above records the September 2026 host. The current upstream-integrated
+native/Gym pair requires JDK 25 for both builds and runtime. Prepare and qualify
+that JDK with the matched release before any approved host update; this document
+does not establish that the historical host has been upgraded.
+
 ## Filesystem layout
 
 ```text

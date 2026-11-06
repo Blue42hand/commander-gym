@@ -23,6 +23,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 import json
+import math
 import re
 from time import perf_counter
 from typing import Any, Mapping
@@ -295,6 +296,13 @@ def _require_string(value: Any, label: str) -> str:
 def _matches_native_field_kind(value: Any, kind: str) -> bool:
     """Check the machine-readable Argentum wire kind before native submission."""
 
+    if kind == "NUMBER":
+        if type(value) not in (int, float):
+            return False
+        try:
+            return math.isfinite(value)
+        except OverflowError:
+            return False
     if kind == "BOOLEAN":
         return type(value) is bool
     if kind == "INTEGER":
@@ -318,6 +326,7 @@ def _matches_native_field_kind(value: Any, kind: str) -> bool:
 
 
 _NATIVE_DECISION_FIELD_SCHEMAS: dict[str, dict[str, Any]] = {
+    "NUMBER": {"type": "number"},
     "BOOLEAN": {"type": "boolean"},
     "INTEGER": {"type": "integer", "minimum": -(2**31), "maximum": 2**31 - 1},
     "STRING": {"type": "string"},
@@ -397,6 +406,9 @@ _ACTION_PARAM_SCHEMAS: dict[str, dict[str, Any]] = {
     # to constrain the named ActionParams fields to Argentum's declared wire kinds.
     "ENTITY_ID_MAP": {"type": "object"},
     "ENTITY_ID_ARRAY_MAP": {"type": "object"},
+    "ENTITY_ID_ARRAY_ARRAY": {
+        "type": "array", "items": {"type": "array", "items": {"type": "string"}},
+    },
     "ENTITY_ID_ARRAY": {"type": "array", "items": {"type": "string"}},
     "INTEGER": {"type": "integer"},
 }
@@ -462,7 +474,7 @@ def _native_attack_targets(action: Mapping[str, Any]) -> tuple[list[str], list[s
 
 
 def _native_action_field_schema(action: Mapping[str, Any], name: str, kind: str) -> dict[str, Any]:
-    if name == "bouncedPermanents" and kind == "ENTITY_ID_ARRAY":
+    if name in {"bouncedPermanents", "bounce"} and kind == "ENTITY_ID_ARRAY":
         try:
             offer = native_bounce_offer(action)
         except RecordValidationError as exc:
@@ -829,6 +841,8 @@ def _with_native_cancel_schema(format_: dict[str, Any], spec: Mapping[str, Any])
 
 
 def _matches_action_param_kind(value: Any, kind: str) -> bool:
+    if kind == "ENTITY_ID_ARRAY_ARRAY":
+        return _matches_native_field_kind(value, kind)
     if kind == "INTEGER":
         return type(value) is int
     if kind == "ENTITY_ID_ARRAY":

@@ -95,6 +95,10 @@ class CommanderGymPlayerControllerParameterTest {
                 },
             )
 
+            // New native search hooks must not make opponent decks or unmasked state policy inputs.
+            controller.setOpponentDeckListSource { error("External policy must not read opponent decklists") }
+            assertEquals(false, controller.wantsPriority(com.wingedsheep.engine.state.GameState()))
+
             val evidence = com.wingedsheep.gameserver.recording.aiSeatEvidence(minimalState(playerId), listOf(legal), playerId.value)
             val response = controller.chooseRecordedAction(minimalState(playerId), listOf(legal), emptyList(), evidence)
 

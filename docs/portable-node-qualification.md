@@ -18,7 +18,7 @@ Two bounded qualifications exercise that deployment contract. They intentionally
 8. runs `commander_gym.service_doctor` through that gateway while requiring the exact pinned Argentum build revision;
 9. retains the normalized package/storage manifests, service logs, and service-doctor JSON as qualification evidence.
 
-The `clean-host-start` job in `Portable Node Qualification` runs this sequence on a fresh Ubuntu runner with Java 21 and Python 3.12. It pins an exact Commander Gym revision under test and an exact Argentum integration revision.
+The `clean-host-start` job in `Portable Node Qualification` runs this sequence on a fresh Ubuntu runner with Java 25 and Python 3.12. It pins an exact Commander Gym revision under test and an exact Argentum integration revision.
 
 ## Systemd clean-host qualification
 
@@ -34,7 +34,7 @@ The `clean-host-start` job in `Portable Node Qualification` runs this sequence o
 8. captures `systemctl show` state plus both service journals as qualification evidence;
 9. stops and removes the temporary units on exit.
 
-The `systemd-host-start` GitHub Actions job runs this on a fresh Ubuntu VM with systemd active. The workflow exposes its pinned Java 21 runtime through a system-visible `java` executable before service startup; that is host dependency setup, not Commander Gym artifact identity.
+The `systemd-host-start` GitHub Actions job runs this on a fresh Ubuntu VM with systemd active. The workflow exposes its pinned Java 25 runtime through a system-visible `java` executable before service startup; that is host dependency setup, not Commander Gym artifact identity.
 
 A green systemd-host job closes the clean-host **installation/start mechanics** acceptance gap for the rendered package: the checked-in package renderer, ordinary preflight, rendered units, real system manager, pinned source guards, authenticated gateway, and compatibility doctor all work together on a host with no pre-existing Commander Gym service installation.
 

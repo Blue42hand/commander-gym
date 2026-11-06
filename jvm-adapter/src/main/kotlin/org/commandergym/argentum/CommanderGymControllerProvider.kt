@@ -344,7 +344,7 @@ class CommanderGymPlayerController(
         }
     }
 
-    override fun chooseDraftPick(pack: List<CardSummary>, pickedSoFar: List<CardSummary>, packNumber: Int, pickNumber: Int, picksRequired: Int, passDirection: String): List<String> =
+    override fun chooseDraftPick(pack: List<CardSummary>, pickedSoFar: List<CardSummary>, packNumber: Int, pickNumber: Int, picksRequired: Int, passDirection: String, podSize: Int?): List<String> =
         error("Commander Gym game-server adapter does not support draft callbacks")
     override fun chooseWinstonAction(pileCards: List<CardSummary>, pileIndex: Int, pileSizes: List<Int>, pickedSoFar: List<CardSummary>): Boolean =
         error("Commander Gym game-server adapter does not support draft callbacks")

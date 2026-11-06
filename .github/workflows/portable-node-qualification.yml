@@ -28,7 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 35
     env:
-      ARGENTUM_REVISION: ec8380b157957259493ec248c75b92330151177e
+      ARGENTUM_REVISION: 12ab2f0ed5bd018334521dc52497e6444f26f5a9
     steps:
       - name: Check out Commander Gym revision under test
         uses: actions/checkout@v6
@@ -50,7 +50,7 @@ jobs:
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: '21'
+          java-version: '25'
 
       - uses: gradle/actions/setup-gradle@v4
 
@@ -86,7 +86,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 35
     env:
-      ARGENTUM_REVISION: ec8380b157957259493ec248c75b92330151177e
+      ARGENTUM_REVISION: 12ab2f0ed5bd018334521dc52497e6444f26f5a9
     steps:
       - name: Check out Commander Gym revision under test
         uses: actions/checkout@v6
@@ -108,11 +108,16 @@ jobs:
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: '21'
+          java-version: '25'
 
       - uses: gradle/actions/setup-gradle@v4
 
-      - name: Expose Java 21 to system services
+      # Cold compilation of the expanded native corpus must finish before the
+      # existing service-readiness deadline starts. Keep the readiness gate intact.
+      - name: Compile pinned native service before readiness timing
+        run: ./argentum-engine/gradlew -p argentum-engine :gym-server:bootJar
+
+      - name: Expose Java 25 to system services
         shell: bash
         run: |
           set -euo pipefail
