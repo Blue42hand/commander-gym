@@ -305,7 +305,8 @@ class OpenAIRunBudget:
                 cached_tokens=cached, cache_write_tokens=writes,
             )
             def settle(data: dict[str, Any]) -> None:
-                data["estimatedUsd"] -= reserved - actual
+                # Concurrent reservations can leave a tiny negative rounding residue at zero.
+                data["estimatedUsd"] = max(0.0, data["estimatedUsd"] - reserved + actual)
                 data["inputTokens"] += input_tokens
                 data["outputTokens"] += output_tokens
                 data["unsettledRequests"] -= 1

@@ -86,6 +86,32 @@ class BatchTests(unittest.TestCase):
         self.assertEqual(a.choose(None),'legal-choice')
         with self.assertRaises(ValueError):b.choose(None)
         self.assertEqual(json.loads((self.root/'progress.json').read_text())['state'],'Limit reached')
+    def test_zero_usage_concurrent_settlement_never_invalidates_ledger(self):
+        from commander_gym.openai_run_budget import OpenAIRunBudget
+        budget=OpenAIRunBudget(self.root/'openai.json',1,max_requests=100,initialize_new_ledger=True)
+        budget.snapshot()
+        import threading
+        barrier=threading.Barrier(4)
+        def provider(**request):
+            barrier.wait(timeout=5)
+            return SimpleNamespace(usage=SimpleNamespace(input_tokens=0,output_tokens=0))
+        def call(n):
+            return budget.create(provider,{'model':'gpt-6-luna','max_output_tokens':2048,'input':'masked'*(n+1)})
+        with concurrent.futures.ThreadPoolExecutor(4) as pool:list(pool.map(call,range(4)))
+        self.assertGreaterEqual(budget.snapshot()['estimatedUsd'],0)
+        self.assertEqual(budget.snapshot()['unsettledRequests'],0)
+
+    def test_finish_uses_latest_pause_and_no_empty_resume(self):
+        b=self.start(self.draft());attempt=self.store.new_attempt(b['id'])
+        b=self.store.get(b['id']);self.command('pause',b,version=b['version'])
+        attempt.update(state='Completed',message='Native terminal observed')
+        self.store.finish_attempt(attempt)
+        self.assertEqual(self.store.get(b['id'])['state'],'Paused')
+        b=self.store.get(b['id']);b=self.command('resume',b,version=b['version']);a=self.store.new_attempt(b['id'])
+        a.update(state='Failed',message='Explicit worker failure');self.store.finish_attempt(a)
+        b=self.store.get(b['id']);self.assertEqual(b['state'],'Failed')
+        with self.assertRaises(BatchConflict):self.command('resume',b,version=b['version'])
+
     def test_supervisor_cannot_address_human_units(self):
         supervisor=object.__new__(Supervisor)
         with self.assertRaises(ValueError):supervisor.unit('stop','argentum-play.service')

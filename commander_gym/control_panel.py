@@ -573,7 +573,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             path, query = self.route()
             if path == '/api/overview':
-                self.response(200, panel.overview())
+                self.response(200, {**panel.overview(), 'managed_batch':batch_rpc.summary(panel.config, self.headers['Tailscale-User-Login'])})
             elif path == '/api/batches' or re.fullmatch(r'/api/batches/(?:catalog|batch-[a-f0-9]{32})', path):
                 tail = path.split('/')[-1]
                 op = 'list' if tail == 'batches' else 'catalog' if tail == 'catalog' else 'get'

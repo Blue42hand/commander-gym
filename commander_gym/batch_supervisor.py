@@ -175,7 +175,7 @@ class Supervisor:
                 if self.store.get(batch['id'])['desired']=='Cancelled':raise RuntimeError('Owner requested interruption during startup')
                 try:
                     status=exchange(self.runtime/'native/lifecycle.sock',{'protocol':1,'op':'status'})
-                    if status.get('releaseId')==attempt['runtime_id'] and status.get('engineSha')==self.config['pins']['engine'] and status.get('gymSha')==self.config['pins']['gym'] and status.get('recordingHealthy') and status.get('recoveryComplete'):
+                    if status.get('releaseId')==attempt['runtime_id'] and status.get('engineSha')==self.config['pins']['engine'] and status.get('gymSha')==self.config['pins']['gym'] and status.get('recordingHealthy') and status.get('recoveryComplete') and status.get('activeGames')==0:
                         break
                 except (OSError,ValueError):pass
                 self.last_tick=time.time();self.stop.wait(1)
@@ -201,6 +201,9 @@ class Supervisor:
                 if any(self.unit('is-active',u)!='active' for u in (UNITS[3],UNITS[2],UNITS[1] if batch['plan']['execution_mode']=='fixture' else UNITS[0])):
                     message='An isolated runtime service stopped';break
                 try:
+                    health=exchange(self.runtime/'native/lifecycle.sock',{'protocol':1,'op':'status'})
+                    if health.get('releaseId')!=attempt['runtime_id'] or not health.get('recordingHealthy'):
+                        message='Native recorder unhealthy or runtime identity changed';break
                     observed=native_http(self.config['native_port'],'GET','/api/dev/ai-tournament/'+lobby)
                     last_good=time.time()
                     lives=observed.get('liveGames',[]);finished=observed.get('completedGames',[])

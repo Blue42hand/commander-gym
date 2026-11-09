@@ -138,6 +138,8 @@ class BatchStore:
                         batch.update(state='Draining' if state=='Running' else 'Paused',desired='Paused',message='Pause requested; current game may finish')
                     elif op=='resume':
                         if state!='Paused':raise BatchConflict('Resume requires a reconciled Paused batch')
+                        count=db.execute('SELECT count(*) FROM attempts WHERE batch_id=?',(batch_id,)).fetchone()[0]
+                        if count>=batch['plan']['game_count']:raise BatchConflict('No unstarted games remain; create a linked retry draft')
                         batch.update(state='Queued',desired='Running',message='Queued to resume remaining planned games')
                     elif op=='finish':
                         if state in TERMINAL or state=='Needs reconciliation':raise BatchConflict('Batch cannot accept this command in its current state')
@@ -223,10 +225,10 @@ class BatchStore:
             batch=self._get(db,attempt['batch_id'])
             count=db.execute('SELECT count(*) FROM attempts WHERE batch_id=?',(batch['id'],)).fetchone()[0]
             desired=batch['desired']
-            state='Completed' if count>=batch['plan']['game_count'] else 'Queued'
+            state=('Completed' if attempt['state']=='Completed' else 'Failed') if count>=batch['plan']['game_count'] else 'Queued'
             if desired=='Paused':state='Paused'
             elif desired in ('Stopped','Cancelled'):state='Stopped'
-            elif attempt['state']!='Completed' and batch['plan']['failure_policy']=='pause':state='Paused';desired='Paused'
+            elif attempt['state']!='Completed' and batch['plan']['failure_policy']=='pause':state='Failed' if count>=batch['plan']['game_count'] else 'Paused';desired='Paused'
             batch.update(state=state,desired=desired,message=attempt['message'],version=batch['version']+1,updated_unix=time.time())
             self._save(db,batch)
             self._event(db,batch['id'],'attempt '+attempt['state'],'supervisor',attempt['id'])

@@ -28,7 +28,7 @@ function batchDetail(b){
  const controls=[];
  if(b.state==='Draft')controls.push(['start','Start reviewed batch']);
  if(['Queued','Running'].includes(b.state))controls.push(['pause','Pause after current']);
- if(b.state==='Paused')controls.push(['resume','Resume unstarted games']);
+ if(b.state==='Paused'&&b.counts.unstarted>0)controls.push(['resume','Resume unstarted games']);
  if(!['Completed','Failed','Stopped','Needs reconciliation'].includes(b.state))controls.push(['finish','Finish current and stop']);
  if(['Running','Draining'].includes(b.state))controls.push(['cancel','Interrupt current game']);
  controls.push(['clone','Clone to new draft']);
