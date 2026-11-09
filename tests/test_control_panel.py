@@ -35,14 +35,14 @@ class ControlPanelTests(unittest.TestCase):
             self.server.server_close()
         self.temp.cleanup()
 
-    def fixture(self, name='completed', outcome='native_terminal', closed=True, compress=True):
+    def fixture(self, name='completed', outcome='native_terminal', closed=True, compress=True, winner='a', draw=False):
         pins = {k:None for k in PIN_KEYS}
         pins.update(engine='a'*40, gym='b'*40, decks={'players':[{'playerId':'a','name':'Alice','commanderCardName':'Lathril','deck':{}}]})
         directory = self.root/name
         with PrivateGameJournal(directory, 'run-'+name, pins, game_id='game-'+name, compress_records=compress) as writer:
             writer.append('native_transition', {**TRANSITION,'game_id':'game-'+name,'message':'<img src=x onerror="alert(1)">','padding':'test '*1200}, source='native', source_sequence=0)
             if closed:
-                writer.finish({'kind':outcome, 'winner_id':'a'},expected_sources={'native':1},gaps=[])
+                writer.finish({'kind':outcome, 'winner_id':winner, 'draw':draw},expected_sources={'native':1},gaps=[])
         return directory
 
     def indexed(self):
@@ -86,8 +86,7 @@ class ControlPanelTests(unittest.TestCase):
             self.assertFalse(r['recording_complete'])
             self.assertTrue(r['ready_for_analysis'])
             self.assertEqual(r['review']['state'],'Unreviewed')
-        r=records[0];r['result']='Unknown'
-        self.assertNotEqual(r['result'],'Draw')
+
 
     def test_persistence_change_history_and_optimistic_conflict(self):
         self.fixture();r=self.indexed()[0]
@@ -103,6 +102,7 @@ class ControlPanelTests(unittest.TestCase):
         directory=self.fixture(closed=False);r=self.indexed()[0]
         self.panel.annotate(r['ref'],{**self.note(r),'state':'Reviewed'},'owner@example.test')
         (directory/'new-diagnostic.txt').write_text('additional evidence')
+        with self.assertRaises(Conflict):self.panel.annotate(r['ref'],{**self.note(r),'version':1},'owner@example.test')
         self.panel.index_once()
         changed=self.panel.get(r['ref'])
         self.assertTrue(changed['new_evidence'])
@@ -202,6 +202,20 @@ class ControlPanelTests(unittest.TestCase):
         value=sanitized({'headers':{'Authorization':'bad'},'env':{'password':'oops'},'text':'Bearer abc123 token API_KEY=secretvalue'})
         self.assertNotIn('bad',json.dumps(value));self.assertNotIn('oops',json.dumps(value))
         self.assertNotIn('abc123',value['text']);self.assertNotIn('secretvalue',value['text'])
+
+    def test_unknown_winner_is_not_a_draw_without_explicit_evidence(self):
+        self.fixture('unknown-winner', winner=None)
+        self.fixture('explicit-draw', winner=None, draw=True)
+        records=self.indexed()
+        self.assertEqual({r['result'] for r in records}, {'Unknown','Draw'})
+
+    def test_verification_budget_and_baseline_coverage_do_not_create_urgent_incidents(self):
+        record={'review':{'state':'Unreviewed','tags':[]},'lifecycle':'Completed',
+                'verification':'budget-limited','coverage':['canonical_training_evidence_unavailable'],
+                'issues':['Inspection time budget reached; verification incomplete']}
+        self.assertFalse(self.panel.needs_inspection(record))
+        record['issues'].append('Missing finalized manifest; outcome is not confirmed')
+        self.assertTrue(self.panel.needs_inspection(record))
 
     def test_state_inside_capture_root_rejected(self):
         with self.assertRaises(ValueError):Panel({**self.config,'state_directory':str(self.root/'notes')})

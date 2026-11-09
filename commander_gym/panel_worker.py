@@ -7,28 +7,36 @@ import time
 from pathlib import Path
 
 
-def inspect(directory: Path, seconds: float = 12) -> dict:
-    # Lower than the recorder's format maximum. Never change producer limits.
-    from . import record_codec
-    record_codec.MAX_RECORD_BYTES = 2 * 1024 * 1024
-    from . import game_journal
-    from .game_journal import JournalError, inspect_journal, verify_finalized_manifest
+def inspect(directory: Path, seconds: float = 30) -> dict:
+    # Panel-only reader limits in this isolated process. Never change producers.
+    from . import record_codec, game_journal
+    from .game_journal import JournalError, verify_finalized_manifest
+    limit = 2 * 1024 * 1024
     original_lines, original_decode = game_journal.physical_lines, game_journal.decode_record
-    def panel_lines(stream, **kwargs):
-        try:
-            yield from original_lines(stream, max_bytes=record_codec.MAX_RECORD_BYTES, **kwargs)
-        except record_codec.RecordCodecError as error:
-            raise JournalError(str(error)) from error
-    def panel_decode(physical, **kwargs):
-        try:
-            return original_decode(physical, max_bytes=record_codec.MAX_RECORD_BYTES, **kwargs)
-        except record_codec.RecordCodecError as error:
-            raise JournalError(str(error)) from error
-    game_journal.physical_lines, game_journal.decode_record = panel_lines, panel_decode
+    original_inspect = game_journal.inspect_journal
     deadline = time.monotonic() + seconds
     result = {'verification': 'unavailable', 'issues': [], 'verified_at': None}
-    try:
-        report = inspect_journal(directory, cancel=lambda: time.monotonic() > deadline)
+    anchors, physical_sequence = [], 0
+
+    def panel_lines(stream, **kwargs):
+        nonlocal physical_sequence
+        try:
+            for physical in original_lines(stream, max_bytes=limit, **kwargs):
+                if physical_sequence % 128 == 0 and len(anchors) < 5000:
+                    anchors.append([physical_sequence, int(Path(stream.name).stem), stream.tell() - len(physical)])
+                physical_sequence += 1
+                yield physical
+        except record_codec.RecordCodecError as error:
+            raise JournalError(str(error)) from error
+
+    def panel_decode(physical, **kwargs):
+        try:
+            return original_decode(physical, max_bytes=limit, **kwargs)
+        except record_codec.RecordCodecError as error:
+            raise JournalError(str(error)) from error
+
+    def observed_inspection(*args, **kwargs):
+        report = original_inspect(*args, **kwargs)
         result['issues'] = report['issues']
         result['prefix_rows'] = len(report['rows'])
         result['prefix_hash'] = report['root_sha256']
@@ -38,43 +46,30 @@ def inspect(directory: Path, seconds: float = 12) -> dict:
         if last:
             result['last_recorded_at'] = last.get('recorded_at')
             result['last_event'] = last['sequence']
-        if any('record_' in i or 'unsupported_record_frame' in i for i in result['issues']):
-            result['verification'] = 'too-large'
-        elif not report['integrity_ok']:
-            result['verification'] = 'damaged'
-        elif (directory / 'manifest.json').exists():
+        return report
+
+    game_journal.physical_lines, game_journal.decode_record = panel_lines, panel_decode
+    game_journal.inspect_journal = observed_inspection
+    try:
+        if (directory / 'manifest.json').exists():
+            # The existing verifier calls inspect_journal itself. Capture that
+            # report and sparse offsets, avoiding another full archive scan.
             manifest = verify_finalized_manifest(directory, cancel=lambda: time.monotonic() > deadline)
             result.update(verification='verified', verified_at=time.time(), artifact_hash=manifest['artifact_hash'])
         else:
-            result['verification'] = 'unsealed'
+            report = observed_inspection(directory, cancel=lambda: time.monotonic() > deadline)
+            result['verification'] = 'unsealed' if report['integrity_ok'] else 'damaged'
     except record_codec.ScanCancelled:
         result['verification'] = 'budget-limited'
         result['issues'].append('Inspection time budget reached; verification incomplete')
-    except (OSError, ValueError, TypeError, KeyError, MemoryError) as error:
+    except MemoryError:
+        result['verification'] = 'too-large'
+        result['issues'].append('Inspection memory budget reached')
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError) as error:
         result['verification'] = 'unavailable' if isinstance(error, OSError) else 'damaged'
-        # Never include raw parser content, host paths or possible model text.
         result['issues'].append('Inspection failed: ' + type(error).__name__)
-    # Rebuildable sparse seek map. It is never written into the capture.
-    # Keep enough offsets to jump to evidence without rescanning the whole game.
-    anchors = []
-    try:
-        for file_index, path in enumerate(sorted(directory.glob('*.jsonl'))):
-            if path.is_symlink():
-                break
-            with path.open('rb') as stream:
-                while time.monotonic() < deadline:
-                    offset = stream.tell()
-                    physical = stream.readline(record_codec.MAX_RECORD_BYTES + 1)
-                    if not physical or len(physical) > record_codec.MAX_RECORD_BYTES:
-                        break
-                    row = json.loads(record_codec.decode_record(physical, max_bytes=record_codec.MAX_RECORD_BYTES))
-                    sequence = row.get('sequence')
-                    if type(sequence) is int and sequence % 128 == 0 and len(anchors) < 5000:
-                        anchors.append([sequence, file_index, offset])
-                if time.monotonic() >= deadline:
-                    break
-    except (OSError, ValueError, TypeError):
-        pass
+    if any('record_size' in i or 'unsupported_record_frame' in i for i in result['issues']):
+        result['verification'] = 'too-large'
     result['evidence_index'] = anchors
     return result
 

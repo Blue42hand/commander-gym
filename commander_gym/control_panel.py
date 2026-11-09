@@ -169,8 +169,8 @@ class Panel:
         return hashlib.sha256(json.dumps(sorted(entries)).encode()).hexdigest(), entries
 
     def quick_record(self, directory, ref, revision, entries):
-        record = {'ref': ref, 'diagnostic_ref': ref, 'run_id': None, 'game_id': None, 'participants': [],
-                  'source_revision': revision, 'observed_at': utc(), 'verification': 'pending', 'issues': [],
+        record = {'index_version': 2, 'seal_state': 'Unsealed', 'ref': ref, 'diagnostic_ref': ref, 'run_id': None, 'game_id': None, 'participants': [],
+                  'source_revision': revision, 'inventory_bytes': sum(e[1] for e in entries), 'observed_at': utc(), 'verification': 'pending', 'issues': [],
                   'lifecycle': 'Unknown', 'result': 'Unknown', 'recording_complete': None, 'ready_for_analysis': None,
                   'turns': None, 'duration': None, 'pins': {}, 'coverage': [], 'artifacts': [], 'reports': [],
                   'termination': None, 'supervisor_termination': None, 'source_kind': 'diagnostic capture'}
@@ -188,6 +188,7 @@ class Panel:
                 record['issues'].append('Legacy or missing journal; unsupported summary schema')
             p = directory / 'manifest.json'
             if p.exists():
+                record['seal_state'] = 'Finalized manifest present'
                 m = read_json(p, cap=8 * 1024 * 1024)
                 _safe(m)
                 if not isinstance(m, dict) or not isinstance(m.get('artifacts'), list):
@@ -252,7 +253,7 @@ class Panel:
                 record = self.quick_record(directory, ref, revision, entries)
                 try:
                     saved = read_json(self.indexdir / (ref + '.json'))
-                    if saved['source_revision'] == revision and saved.get('verification') not in ('pending', 'unavailable'):
+                    if saved['source_revision'] == revision and saved.get('index_version') == 2 and saved.get('verification') not in ('pending', 'unavailable'):
                         record = saved
                 except (OSError, ValueError, KeyError, TypeError):
                     pass
@@ -262,6 +263,7 @@ class Panel:
                     self.coverage['observed'] = len(self.records)
             except (OSError, ValueError, TypeError, AttributeError, RecursionError):
                 pass  # The detailed pass below publishes the diagnostic.
+        found.sort(key=lambda item: self.records.get('capture-' + hashlib.sha256((str(item[0]) + ':' + item[1]).encode()).hexdigest()[:24], {}).get('inventory_bytes', 0))
         for root_index, name in found:
             if self.stop.is_set():
                 return
@@ -283,7 +285,7 @@ class Panel:
                 cache = self.indexdir / (ref + '.json')
                 try:
                     saved = read_json(cache)
-                    if saved['source_revision'] == revision and saved.get('verification') not in ('pending', 'unavailable'):
+                    if saved['source_revision'] == revision and saved.get('index_version') == 2 and saved.get('verification') not in ('pending', 'unavailable'):
                         with self.lock:
                             self.records[ref] = saved
                         continue
@@ -293,11 +295,12 @@ class Panel:
                     start = time.monotonic()
                     try:
                         process = subprocess.run([sys.executable, '-B', '-m', 'commander_gym.panel_worker', str(directory)],
-                                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=20,
+                                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=40,
                                                  env={k: v for k, v in os.environ.items() if k in ('PATH', 'LANG', 'PYTHONPATH')}, check=True)
                         inspected = json.loads(process.stdout)
+                        metadata_issues = record['issues']
                         record.update(inspected)
-                        record['issues'] = list(dict.fromkeys(record['issues']))
+                        record['issues'] = list(dict.fromkeys(metadata_issues + record['issues']))
                         if record.get('verification') == 'verified':
                             record['source_kind'] = 'verified finalized manifest'
                         elif record.get('verification') == 'damaged':
@@ -396,7 +399,7 @@ class Panel:
         if review['state'] == 'Reviewed' and not r.get('new_evidence'):
             return False
         # Baseline replay/conversion gaps are coverage, not recurring urgent bugs.
-        urgent = r.get('lifecycle') in ('Failed', 'Interrupted') or r.get('verification') in ('damaged', 'unsealed', 'unavailable') or bool(r.get('issues'))
+        urgent = r.get('lifecycle') in ('Failed', 'Interrupted') or r.get('verification') in ('damaged', 'unsealed', 'unavailable') or any(not i.startswith('Inspection time budget') and not i.startswith('Inspection exceeded resource') for i in r.get('issues', []))
         return urgent or bool(review.get('tags')) or review['state'] in ('Needs follow-up', 'Investigating')
 
     def overview(self):

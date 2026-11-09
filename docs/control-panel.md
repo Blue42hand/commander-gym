@@ -57,11 +57,11 @@ run ID. Partial and unavailable root inventories are explicit. Record metadata i
 indexed incrementally in a background thread, not on each browser request.
 
 Verification runs in an isolated subprocess with a 320 MiB address-space limit,
-a 30-second CPU limit, a 12-second cooperative work budget, and a 20-second parent
+a 30-second CPU limit, a 30-second cooperative work budget, and a 40-second parent
 timeout. Its panel-only codec wrappers limit physical and decoded records to
 2 MiB, preserving the producers' larger format limits. Over-limit records are
 reported as too large, never silently treated as verified. The panel unit is
-limited to 512 MiB, 25% of one CPU, and 32 tasks. Unchanged scans are cached.
+limited to 512 MiB, 50% of one CPU, and 32 tasks. Unchanged scans are cached. Finalized verification reuses its single existing journal scan; sparse seek offsets are collected during that scan. Smaller captures are verified first after all metadata is published. Verification-budget and baseline replay limitations remain coverage indicators, rather than new urgent incidents.
 
 Evidence uses existing mixed plaintext/compressed record decoding. Each page
 consumes at most 200 source records, displays at most 20 excerpts / 128 KiB, and
