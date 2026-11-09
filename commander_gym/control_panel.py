@@ -592,7 +592,16 @@ class Handler(BaseHTTPRequestHandler):
                 parts = path.strip('/').split('/')
                 ref = parts[2]
                 if len(parts) == 3:
-                    self.response(200, {**panel.get(ref), 'review_history':panel.changes(ref)})
+                    record=panel.get(ref)
+                    if panel.config.get('batch_socket') and record.get('game_id'):
+                        try:
+                            context=batch_rpc.call(panel.config,self.headers['Tailscale-User-Login'],'game_context',data={'game_id':record['game_id']})
+                            if context and panel.locations[ref].parent.name==context['attempt_id']:
+                                record['managed_batch']=context
+                                record['supervisor_termination']=context['supervisor_termination']
+                        except batch_rpc.BatchRPCError:
+                            record['batch_context_availability']='Unavailable'
+                    self.response(200, {**record, 'review_history':panel.changes(ref)})
                 elif parts[3] == 'evidence' and len(parts) == 4:
                     self.response(200, panel.evidence(ref, query.get('cursor',[''])[0], query.get('q',[''])[0][:200], query.get('anchor',[None])[0]))
                 elif parts[3] == 'artifact' and len(parts) == 4:

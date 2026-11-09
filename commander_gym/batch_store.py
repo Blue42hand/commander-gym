@@ -34,6 +34,7 @@ class BatchStore:
             db.executescript('''CREATE TABLE IF NOT EXISTS batches(id TEXT PRIMARY KEY, version INTEGER NOT NULL, value TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS attempts(id TEXT PRIMARY KEY, batch_id TEXT NOT NULL, value TEXT NOT NULL);
                 CREATE INDEX IF NOT EXISTS attempts_batch ON attempts(batch_id);
+                CREATE INDEX IF NOT EXISTS attempts_game ON attempts(json_extract(value,'$.game_id'));
                 CREATE TABLE IF NOT EXISTS commands(key TEXT PRIMARY KEY, digest TEXT NOT NULL, value TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY, batch_id TEXT NOT NULL, value TEXT NOT NULL);''')
 
@@ -240,3 +241,13 @@ class BatchStore:
             batch=json.loads(row['value'])
             if batch['state']=='Queued' and batch['desired']=='Running':return batch
         return None
+
+    def game_context(self, game_id):
+        if not isinstance(game_id,str) or not 1<=len(game_id)<=128:raise ValueError('Invalid game identity')
+        with self.db() as db:
+            row=db.execute("SELECT value FROM attempts WHERE json_extract(value,'$.game_id')=? ORDER BY rowid DESC LIMIT 1",(game_id,)).fetchone()
+            if row is None:return None
+            attempt=json.loads(row['value'])
+            batch=self._get(db,attempt['batch_id'])
+        return {'batch_id':batch['id'],'attempt_id':attempt['id'],'state':attempt['state'],
+                'supervisor_termination':attempt.get('supervisor_termination'),'execution_mode':batch['plan']['execution_mode']}

@@ -100,6 +100,7 @@ class Supervisor:
                                   'native_seed':'Assigned by native engine; retained in recording'}
         if op=='list':return {**self.store.list(offset=int(data.get('offset',0))), 'health':self.health()}
         if op=='get':return self.store.get(request['batch_id'])
+        if op=='game_context':return self.store.game_context(data.get('game_id'))
         if op=='create':return self.store.create(data.get('plan'),request['actor'],request.get('key'))
         return self.store.command(request.get('batch_id'),op,data,request['actor'],request.get('key'))
 

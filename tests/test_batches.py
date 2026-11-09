@@ -160,6 +160,15 @@ class BatchTests(unittest.TestCase):
         attempt=self.terminal_supervisor({'gameSessionId':'native-game','nativeGameOver':True,'isSimulated':True,'winnerId':'seat-a','isDraw':False})
         self.assertEqual(attempt['state'],'Interrupted');self.assertIsNone(attempt['winner_id'])
 
+    def test_game_context_preserves_supervisor_reason_separately(self):
+        b=self.start(self.draft());a=self.store.new_attempt(b['id'])
+        a.update(game_id='native-id',state='Interrupted',supervisor_termination='Owner requested interruption')
+        self.store.record_attempt(a)
+        context=self.store.game_context('native-id')
+        self.assertEqual(context['attempt_id'],a['id'])
+        self.assertEqual(context['supervisor_termination'],'Owner requested interruption')
+        self.assertIsNone(self.store.game_context('missing-game'))
+
     def test_supervisor_cannot_address_human_units(self):
         supervisor=object.__new__(Supervisor)
         with self.assertRaises(ValueError):supervisor.unit('stop','argentum-play.service')
