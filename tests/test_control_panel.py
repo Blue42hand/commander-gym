@@ -226,6 +226,30 @@ class ControlPanelTests(unittest.TestCase):
         record['issues'].append('Missing finalized manifest; outcome is not confirmed')
         self.assertTrue(self.panel.needs_inspection(record))
 
+    def test_grouped_batch_captures_are_visible_and_do_not_follow_symlinks(self):
+        grouped=self.base/'batch-captures';grouped.mkdir(mode=0o700)
+        attempt=grouped/'attempt-a';attempt.mkdir(mode=0o700)
+        original=self.fixture('batch-game')
+        original.rename(attempt/'game-a')
+        (grouped/'unsafe').symlink_to(self.root)
+        self.panel=Panel({**self.config,'grouped_capture_roots':[str(grouped)]})
+        records=self.indexed()
+        self.assertEqual(len(records),1)
+        self.assertEqual(records[0]['game_id'],'game-batch-game')
+
+    def test_batch_routes_require_owner_csrf_and_use_narrow_rpc(self):
+        code,_=self.request('/gym/api/batches');self.assertEqual(code,403)
+        headers={'Tailscale-User-Login':'owner@example.test'}
+        code,_=self.request('/gym/api/batches','POST',{'plan':{}},headers);self.assertEqual(code,403)
+        code,session=self.request('/gym/api/session',headers=headers)
+        headers.update({'Origin':self.config['origin'],'X-CSRF-Token':session['csrf'],'Content-Type':'application/json','Idempotency-Key':'stable-test-command'})
+        with patch('commander_gym.batch_rpc.call',return_value={'accepted':True}) as rpc:
+            code,result=self.request('/gym/api/batches','POST',{'plan':{'name':'draft'}},headers)
+            self.assertEqual(code,200);self.assertTrue(result['accepted'])
+            self.assertEqual(rpc.call_args.args[2],'create')
+            self.assertEqual(rpc.call_args.kwargs['key'],'stable-test-command')
+        code,_=self.request('/gym/api/batches/../../stop','POST',{},headers);self.assertEqual(code,404)
+
     def test_state_inside_capture_root_rejected(self):
         with self.assertRaises(ValueError):Panel({**self.config,'state_directory':str(self.root/'notes')})
 

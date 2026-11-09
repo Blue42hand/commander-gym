@@ -23,7 +23,7 @@ def main():
                'NATIVE_RECORDING_SCHEMA_VERSION':'1', 'GAME_AI_MODE':'engine','GAME_AI_ENABLED':'true','GAME_DEBUG_MODE':'false',
                'GAME_DEV_ENDPOINTS_ENABLED':'true', 'GAME_AI_INSIGHT_ENABLED':'false','GAME_EASTER_EGGS_ENABLED':'false',
                'GAME_TOURNAMENT_SIMULATE_AI_MATCHES':'false','ACCOUNTS_ENABLED':'false','CACHE_REDIS_ENABLED':'false',
-               'COMMANDER_GYM_ENABLED':'true','COMMANDER_GYM_MANUAL_ONLY':'false',
+               'COMMANDER_GYM_ENABLED':'true','COMMANDER_GYM_MANUAL_ONLY':'false','COMMANDER_GYM_RECORDING_MANAGED_BATCH':'true',
                'COMMANDER_GYM_SIDECAR_URL':'http://127.0.0.1:'+str(config['provider_port']), 'COMMANDER_GYM_SIDECAR_TIMEOUT_MS':'120000'}
         args = [config['java'],'-Xms256m','-Xmx2g','-Dcommander-gym.recorder.socket=/ipc/native/native.sock',
                 '-Dgame.recording.root=/captures','-Dgame.recording.engine-revision='+config['pins']['engine'],
@@ -37,7 +37,7 @@ def main():
         registry = recording_registry(Path('/catalog')/config['roster'], Path('/catalog'))
         bridge = RecorderBridge(capture, registry, native_socket=Path('/ipc/native/native.sock'),
                                 sidecar_socket=Path('/ipc/provider/sidecar.sock'), native_uid=config['engine_uid'],
-                                sidecar_uid=config['provider_uid'], sidecar_gid=config['provider_gid'])
+                                sidecar_uid=config['provider_uid'], sidecar_gid=config['provider_gid'], managed_batch=True)
         reporter = RecordingHealthReporter(capture, Path('/ipc/native/lifecycle.sock'))
         try:
             bridge.start(); reporter.start()
@@ -74,6 +74,8 @@ def main():
         cfg.budget.dispatch_deadline_unix=config['deadline']
         remote=RemoteCaptureSink(Path('/ipc/provider/sidecar.sock'), recorder_uid=config['engine_uid'])
         server=build_binding_openai_game_server_sidecar(cfg, client=client, game_capture=remote)
+        from dataclasses import replace
+        server.sidecar_config=replace(server.sidecar_config, require_managed_batch_game=True)
         guard=ChoiceGuard(plan['max_decisions'],config['deadline'],Path('/progress/provider.json'))
         factory=server._profile_seat_factory
         def guarded(*args):

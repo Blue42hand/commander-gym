@@ -25,6 +25,7 @@ class CommanderGymAutoConfiguration {
         return CommanderGymControllerProvider(
             URI.create(endpoint), token, Duration.ofMillis(timeout),
             requireHumanParticipant = environment.getProperty("commander-gym.manual-only", Boolean::class.java, false),
+            allowRecordedManagedBatch = environment.getProperty("commander-gym.recording-managed-batch", Boolean::class.java, false),
             recorder = environment.getProperty("commander-gym.recorder.socket")?.let { RecorderCallbackClient(Path.of(it)) },
         )
     }

@@ -112,7 +112,8 @@ class BatchStore:
                 if type(data.get('version')) is not int or batch['version']!=data['version']:raise BatchConflict('Batch changed. Reload before issuing this command.')
                 state=batch['state']
                 if op=='clone':
-                    plan=batch['plan'];now=time.time()
+                    fields={'name','purpose','bindings','game_count','wall_seconds','max_decisions','budget_usd','max_requests','max_tokens','failure_policy','execution_mode'}
+                    plan=self.validate({k:v for k,v in batch['plan'].items() if k in fields});now=time.time()
                     batch={'id':'batch-'+uuid.uuid4().hex,'version':1,'state':'Draft','desired':'Paused','plan':plan,
                            'fingerprint':digest(plan),'actor':actor,'created_unix':now,'updated_unix':now,
                            'parent_batch_id':batch_id,'message':'Cloned draft; review before Start','observation':None}
@@ -121,7 +122,8 @@ class BatchStore:
                     if not attempt:raise ValueError('Select a failed or interrupted attempt')
                     attempt=json.loads(attempt['value'])
                     if attempt['state'] not in ('Failed','Interrupted'):raise ValueError('Only reconciled failed/interrupted attempts can be retried')
-                    plan={**batch['plan'],'game_count':1,'name':batch['plan']['name']+' · retry'};now=time.time()
+                    fields={'name','purpose','bindings','game_count','wall_seconds','max_decisions','budget_usd','max_requests','max_tokens','failure_policy','execution_mode'}
+                    plan=self.validate({**{k:v for k,v in batch['plan'].items() if k in fields},'game_count':1,'name':batch['plan']['name'][:90]+' · retry'});now=time.time()
                     batch={'id':'batch-'+uuid.uuid4().hex,'version':1,'state':'Draft','desired':'Paused','plan':plan,
                            'fingerprint':digest(plan),'actor':actor,'created_unix':now,'updated_unix':now,
                            'parent_attempt_id':attempt['id'],'parent_batch_id':batch_id,

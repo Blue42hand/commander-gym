@@ -245,6 +245,22 @@ class RecorderBridgeTests(unittest.TestCase):
         self.capture.scan()
         self.assertTrue((completed / 'manifest.json').exists())
 
+    def test_managed_batch_admission_is_explicit_and_separate_from_human(self):
+        batch={k:v for k,v in self.request.items() if k!='manualHumanGame'}
+        batch['managedBatchGame']=True
+        with self.assertRaises(RecorderBridgeError):
+            self.bridge.ingest(dict(self.identity,op='register',request=batch),native=True)
+        self.bridge.managed_batch=True
+        with self.assertRaises(RecorderBridgeError):self.register()
+        missing={k:v for k,v in batch.items() if k!='managedBatchGame'}
+        with self.assertRaises(RecorderBridgeError):self.bridge.ingest(dict(self.identity,op='register',request=missing),native=True)
+        wrong={**batch,'playerId':'other-seat'}
+        with self.assertRaises(RecorderBridgeError):self.bridge.ingest(dict(self.identity,op='register',request=wrong),native=True)
+        self.assertTrue(self.bridge.ingest(dict(self.identity,op='register',request=batch),native=True)['ok'])
+        with self.assertRaises(RecorderBridgeError):self.bridge.ingest(dict(self.identity,op='register',request=batch),native=False)
+        event=_expected_event(self.registry,batch,self.identity['callback'],True)
+        self.assertNotIn('DO-NOT-SEND-ADMIN-SECRET',json.dumps(event))
+
     def test_fsync_ack_idempotent_conflicting_duplicates_and_restart(self):
         self.register()
         event = self.event()

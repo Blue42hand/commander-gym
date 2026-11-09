@@ -40,7 +40,12 @@ def main():
     registry=recording_registry(catalog/profile['catalog']['roster'],catalog)
     pins={'engine':profile['engineSha'],'gym':args.gym_sha,'bindings':profile['catalog']['bindings'],
           'pilot':profile['catalog']['pilotFingerprint'],'catalog':profile['artifacts']['catalog']['sha256'] if 'sha256' in profile['artifacts']['catalog'] else catalog.name}
-    verify={}
+    batch_runtime=Path('/opt/commander-gym-batch-runtime')/args.gym_sha
+    receipt=json.loads((batch_runtime/'receipt.json').read_text())
+    if receipt['engineSha']!=profile['engineSha'] or receipt['gymSha']!=args.gym_sha or receipt['unchangedOtherArchiveMembers'] is not True:
+        parser.error('Matching isolated runtime receipt required')
+    pins.update(server_sha256=receipt['serverSha256'],adapter_sha256=receipt['adapterSha256'])
+    verify={str(batch_runtime/'server.jar'):receipt['serverSha256']}
     for role in ('server','catalog'):
         artifact=profile['artifacts'][role]
         for name,sha in artifact['files'].items():verify[str(Path(artifact['root'])/name)]=sha
@@ -67,7 +72,7 @@ def main():
                f'BindReadOnlyPaths={root}/active/role.json:/config/role.json',
                'BindReadOnlyPaths=/etc/passwd /etc/group /etc/nsswitch.conf /etc/resolv.conf /etc/ssl/certs']
         if role=='native':
-            server=Path(profile['artifacts']['server']['root'])
+            server=batch_runtime
             binds += [f'BindReadOnlyPaths={server}:/server {root}/active/native-config:/native-config',
                       f'BindPaths={root}/active/captures:/captures {runtime}/native:/ipc/native']
         elif role=='recorder':

@@ -55,6 +55,7 @@ class GameServerSidecarConfig:
     bind_host: str = "127.0.0.1"
     port: int = 8083
     require_manual_human_game: bool = False
+    require_managed_batch_game: bool = False
 
     def __post_init__(self) -> None:
         if not self.token or not self.token.strip():
@@ -63,6 +64,8 @@ class GameServerSidecarConfig:
             raise GameServerSidecarConfigurationError("sidecar must bind to a loopback address")
         if not (1 <= self.port <= 65535):
             raise GameServerSidecarConfigurationError("sidecar port must be between 1 and 65535")
+        if type(self.require_managed_batch_game) is not bool or (self.require_manual_human_game and self.require_managed_batch_game):
+            raise GameServerSidecarConfigurationError("exclusive managed batch admission required")
         if type(self.require_manual_human_game) is not bool:
             raise GameServerSidecarConfigurationError("manual game admission must be boolean")
 
@@ -256,6 +259,9 @@ class GameServerSidecarHandler(BaseHTTPRequestHandler):
             if self.server.sidecar_config.require_manual_human_game:  # type: ignore[attr-defined]
                 if request.get("manualHumanGame") is not True or not request.get("gameSessionId") or not request.get("profileId"):
                     raise ValueError("manual service requires native human-game admission and an explicit Binding")
+            if self.server.sidecar_config.require_managed_batch_game:
+                if request.get("managedBatchGame") is not True or request.get("manualHumanGame") is not None or not request.get("gameSessionId") or not request.get("profileId"):
+                    raise ValueError("managed batch admission and explicit Binding required")
             player_id = request.get("playerId")
             if not isinstance(player_id, str) or not player_id:
                 raise ValueError("callback requires playerId")
@@ -314,6 +320,8 @@ class GameServerSidecarHandler(BaseHTTPRequestHandler):
         common = {"playerId", "profileId", "gameSessionId"}
         if self.server.sidecar_config.require_manual_human_game:  # type: ignore[attr-defined]
             common.add("manualHumanGame")
+        if getattr(self.server.sidecar_config, "require_managed_batch_game", False):
+            common.add("managedBatchGame")
         if callback == "chooseAction":
             self._require_keys(
                 request,

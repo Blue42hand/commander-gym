@@ -112,6 +112,7 @@ class Supervisor:
         for key in ('native','provider'):
             folder=self.runtime/key
             folder.mkdir(mode=0o700 if key=='native' else 0o750,exist_ok=True)
+            folder.chmod(0o700 if key=='native' else 0o750)
             os.chown(folder,engine,group if key=='provider' else engine_group)
             if any(folder.iterdir()):raise RuntimeError('Stale isolated IPC remains; admission refused')
         captures=self.root/'captures';captures.mkdir(mode=0o700,exist_ok=True)
