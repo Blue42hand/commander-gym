@@ -58,7 +58,9 @@ def main():
         role_root=Path('/var/lib/commander-gym-batch-'+role+'-root');role_root.mkdir(mode=0o755,exist_ok=True)
         for name,target in [('lib','usr/lib'),('lib64','usr/lib64'),('bin','usr/bin')]:
             link=role_root/name
-            if not link.exists():link.symlink_to(target)
+            if link.is_symlink():
+                if os.readlink(link)!=target:raise ValueError('Unexpected role root symlink')
+            elif not link.exists():link.symlink_to(target)
         is_provider=role in ('provider','fixture')
         user='commander-batch-provider' if is_provider else 'commander-batch-engine'
         binds=[f'BindReadOnlyPaths=/usr {deps} {release}:/app {catalog}:/catalog',
