@@ -347,7 +347,7 @@ class Panel:
             self.stop.wait(60)
 
     def health(self):
-        result = {'observed_at': utc(), 'running': None, 'runner_state': 'Unknown', 'live_coverage': 'No complete authoritative active-game source configured',
+        result = {'observed_at': utc(), 'freshness_seconds': self.config.get('health_fresh_seconds', 20), 'running': None, 'runner_state': 'Unknown', 'live_coverage': 'No complete authoritative active-game source configured',
                   'recorder_state': 'Unavailable', 'sources': {}, 'services': {}}
         for name, path in self.config.get('health_snapshots', {}).items():
             try:
