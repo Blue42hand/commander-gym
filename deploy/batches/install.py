@@ -34,6 +34,7 @@ def main():
     engine=pwd.getpwnam('commander-batch-engine');provider=pwd.getpwnam('commander-batch-provider');panel=pwd.getpwnam('commander-panel')
     root=Path('/var/lib/commander-gym-batches');root.mkdir(mode=0o700,exist_ok=True)
     (root/'captures').mkdir(mode=0o700,exist_ok=True);(root/'active').mkdir(mode=0o700,exist_ok=True)
+    write('/etc/tmpfiles.d/commander-gym-batches.conf', 'd /run/commander-gym-batches 0755 root root -\nd /run/commander-gym-batches/panel 0755 root root -\n', 0o644)
     runtime=Path('/run/commander-gym-batches');runtime.mkdir(mode=0o755,exist_ok=True);runtime.chmod(0o755)
     catalog=Path(profile['artifacts']['catalog']['root']);deps=Path(profile['artifacts']['dependencies']['root'])
     lock=json.loads((deps/'runtime-lock.json').read_text());python=deps/lock['python'];java=deps/lock['java']

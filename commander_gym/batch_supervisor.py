@@ -72,6 +72,13 @@ class Supervisor:
         # Never addresses any human service, process group, or recording root.
         for unit in UNITS:self.unit('stop',unit)
         if not self.inactive():raise RuntimeError('Owned runtime termination not confirmed')
+        import stat
+        for directory in ('native','provider'):
+            for path in (self.runtime/directory).glob('*.sock'):
+                info=path.lstat()
+                if not stat.S_ISSOCK(info.st_mode) or info.st_uid!=self.config['engine_uid']:
+                    raise RuntimeError('Unexpected isolated IPC custody; reconciliation required')
+                path.unlink()
 
     def recover(self):
         self.store.recover()
