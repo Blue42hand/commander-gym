@@ -112,6 +112,23 @@ class BatchTests(unittest.TestCase):
         b=self.store.get(b['id']);self.assertEqual(b['state'],'Failed')
         with self.assertRaises(BatchConflict):self.command('resume',b,version=b['version'])
 
+    def test_clone_reviews_current_pins_and_preserves_original_plan(self):
+        b=self.draft()
+        new=BatchStore(self.root,self.catalog,{'engine':'new-engine','gym':'new-gym'})
+        clone=new.command(b['id'],'clone',{'version':b['version']},self.actor,'clone-current-pins')['batch']
+        self.assertEqual(clone['plan']['pins']['engine'],'new-engine')
+        self.assertEqual(self.store.get(b['id'])['plan']['pins']['engine'],'exact-engine')
+        self.assertEqual(clone['state'],'Draft')
+
+    def test_fixture_selects_only_current_unconstrained_masked_options(self):
+        from commander_gym.batch_fixture import value
+        pending={'kind':'SelectCardsDecision','minSelections':1,'maxSelections':1,'options':['a','b'],
+                 'responseSpec':{'responseType':'CardsSelectedResponse','requiredFields':{'selectedCards':'ENTITY_ID_ARRAY'}}}
+        with patch('commander_gym.batch_fixture._observation',return_value={'pendingDecision':pending}):
+            self.assertEqual(value({})['response']['selectedCards'],['a'])
+            pending['onePerColor']=True
+            with self.assertRaises(ValueError):value({})
+
     def test_supervisor_cannot_address_human_units(self):
         supervisor=object.__new__(Supervisor)
         with self.assertRaises(ValueError):supervisor.unit('stop','argentum-play.service')

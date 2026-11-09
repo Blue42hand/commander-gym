@@ -295,7 +295,9 @@ def main():
     config=json.loads(args.config.read_text());supervisor=Supervisor(config)
     lock=(supervisor.root/'supervisor.lock').open('a');fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
     supervisor.recover()
-    path=supervisor.runtime/'control.sock'
+    control=supervisor.runtime/'panel'
+    control.mkdir(mode=0o755,exist_ok=True);control.chmod(0o755)
+    path=control/'control.sock'
     if path.exists():path.unlink()
     class Server(socketserver.ThreadingUnixStreamServer):daemon_threads=True;request_queue_size=8
     server=Server(str(path),RPC);server.supervisor=supervisor

@@ -21,7 +21,7 @@ def main():
                'APP_VERSION':config['pins']['engine'], 'NATIVE_RELEASE_ID':config['runtime_id'], 'NATIVE_GYM_SHA':config['pins']['gym'],
                'NATIVE_LIFECYCLE_ENABLED':'true','NATIVE_LIFECYCLE_SOCKET':'/ipc/native/lifecycle.sock','NATIVE_UPDATER_USER':'root',
                'NATIVE_RECORDING_SCHEMA_VERSION':'1', 'GAME_AI_MODE':'engine','GAME_AI_ENABLED':'true','GAME_DEBUG_MODE':'false',
-               'GAME_DEV_ENDPOINTS_ENABLED':'true', 'GAME_AI_INSIGHT_ENABLED':'false','GAME_EASTER_EGGS_ENABLED':'false',
+               'GAME_DEV_ENDPOINTS_ENABLED':'true','GAME_AI_THINKING_DELAY_MS':'0', 'GAME_AI_INSIGHT_ENABLED':'false','GAME_EASTER_EGGS_ENABLED':'false',
                'GAME_TOURNAMENT_SIMULATE_AI_MATCHES':'false','ACCOUNTS_ENABLED':'false','CACHE_REDIS_ENABLED':'false',
                'COMMANDER_GYM_ENABLED':'true','COMMANDER_GYM_MANUAL_ONLY':'false','COMMANDER_GYM_RECORDING_MANAGED_BATCH':'true',
                'COMMANDER_GYM_SIDECAR_URL':'http://127.0.0.1:'+str(config['provider_port']), 'COMMANDER_GYM_SIDECAR_TIMEOUT_MS':'120000'}
@@ -51,10 +51,8 @@ def main():
         fixture=plan['execution_mode']=='fixture'
         if fixture:
             key='fixture-no-provider-credential'
-            from . import qa_legal_responses
-            qa_legal_responses.MAX_CALLS = plan['max_requests']
-            qa_legal_responses.MAX_SECONDS = plan['wall_seconds']
-            client=qa_legal_responses.NativeLegalFixtureClient()
+            from .batch_fixture import BatchFixtureClient
+            client=BatchFixtureClient(plan['max_requests'],plan['wall_seconds']+120)
         else:
             from .manual_runtime_launch import parse_existing_key
             from .bounded_provider_process import BoundedProcessClient
