@@ -31,6 +31,6 @@ def summary(config,actor):
         known=healthy and all(a.get('observation') and time.time()-a['observation']['observed_unix']<=20 for a in active)
         running=sum(len(a['observation']['live_games']) for a in active) if known else None
         return {'state':'Fresh' if known else 'Unavailable or stale','running':running,
-                'queued_batches':sum(b['state']=='Queued' for b in value['batches']),
+                'queued_batches':sum(b['state']=='Queued' for b in value['batches']) if value['total']<=30 else None,
                 'scope':'Managed batch runtime only; interactive games are outside this source'}
     except (BatchRPCError,KeyError,TypeError):return {'state':'Unavailable','running':None,'scope':'Managed batch runtime only'}
