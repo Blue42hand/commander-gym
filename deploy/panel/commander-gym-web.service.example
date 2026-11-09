@@ -1,0 +1,58 @@
+[Unit]
+Description=Private Commander Gym observation and review panel
+After=network.target tailscaled.service
+
+[Service]
+Type=simple
+User=commander-panel
+Group=commander-panel
+RootDirectory=/var/lib/commander-gym-panel-root
+MountAPIVFS=yes
+WorkingDirectory=/app
+ExecStart=/usr/bin/python3 -B -m commander_gym.control_panel --config /config/panel.json
+StateDirectory=commander-gym-panel
+StateDirectoryMode=0700
+BindReadOnlyPaths=/usr
+BindReadOnlyPaths=/opt/commander-gym-web/current:/app
+BindReadOnlyPaths=/etc/commander-gym-web:/config
+BindReadOnlyPaths=/var/lib/commander-gym/runs/native:/evidence/native
+BindReadOnlyPaths=/run/argentum-play:/health
+BindReadOnlyPaths=/run/dbus/system_bus_socket
+BindReadOnlyPaths=/etc/passwd /etc/group /etc/nsswitch.conf
+BindPaths=/var/lib/commander-gym-panel:/state
+InaccessiblePaths=-/health/lifecycle.sock
+ReadWritePaths=/state
+ReadOnlyPaths=/app /config /evidence /health
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH
+AmbientCapabilities=CAP_DAC_READ_SEARCH
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectProc=invisible
+ProcSubset=pid
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+RestrictAddressFamilies=AF_INET AF_UNIX
+IPAddressDeny=any
+IPAddressAllow=localhost
+UMask=0077
+MemoryMax=512M
+TasksMax=32
+CPUQuota=25%
+Nice=10
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=25
+
+[Install]
+WantedBy=multi-user.target

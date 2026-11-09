@@ -1,0 +1,15 @@
+{
+  "port": 8787,
+  "base_path": "/gym",
+  "origin": "https://YOUR-HOST.YOUR-TAILNET.ts.net",
+  "allowed_logins": ["YOUR-TAILSCALE-LOGIN"],
+  "capture_roots": ["/evidence/native"],
+  "state_directory": "/state",
+  "scope": "Configured production native captures; older batch and qualification roots excluded",
+  "health_fresh_seconds": 20,
+  "health_snapshots": {
+    "Native recorder": "/evidence/native/.native-health.json",
+    "Recording disposition": "/health/.recording-disposition-health.json"
+  },
+  "services": ["argentum-play.service", "argentum-recorder.service", "argentum-luna-sidecar.service"]
+}
