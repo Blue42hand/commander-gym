@@ -139,6 +139,15 @@ class ControlPanelTests(unittest.TestCase):
         self.assertIn('2 MiB',evidence['diagnostic'])
         self.assertEqual(evidence['events'],[])
 
+    def test_compressed_oversized_and_unsupported_frames_are_distinct(self):
+        for name, data in [('oversized', encode_record(b'{"data":"'+b'x'*(3*1024*1024)+b'"}\n')),
+                           ('unsupported', b'{"recordCodec":9,"encoding":"unknown","decodedBytes":10,"data":"bad"}\n')]:
+            directory=self.root/name;directory.mkdir(mode=0o700)
+            (directory/'000000.jsonl').write_bytes(data)
+            (directory/'000000.jsonl').chmod(0o600)
+        records=self.indexed()
+        self.assertEqual({r['verification'] for r in records},{'too-large','damaged'})
+
     def test_pagination_cursors_signed_and_evidence_scope_bounded(self):
         pins={k:None for k in PIN_KEYS}
         with PrivateGameJournal(self.root/'many','run',pins,game_id='game') as w:

@@ -33,6 +33,12 @@ def inspect(directory: Path, seconds: float = 30) -> dict:
         try:
             return original_decode(physical, max_bytes=limit, **kwargs)
         except record_codec.RecordCodecError as error:
+            # An over-limit decoded frame is a panel size limitation; an
+            # unsupported codec/version remains a malformed-source diagnostic.
+            if str(error) == 'unsupported_record_frame':
+                frame = json.loads(physical)
+                if isinstance(frame, dict) and type(frame.get('decodedBytes')) is int and frame['decodedBytes'] > limit:
+                    raise JournalError('record_size_or_framing_limit') from error
             raise JournalError(str(error)) from error
 
     def observed_inspection(*args, **kwargs):
@@ -67,8 +73,8 @@ def inspect(directory: Path, seconds: float = 30) -> dict:
         result['issues'].append('Inspection memory budget reached')
     except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError) as error:
         result['verification'] = 'unavailable' if isinstance(error, OSError) else 'damaged'
-        result['issues'].append('Inspection failed: ' + type(error).__name__)
-    if any('record_size' in i or 'unsupported_record_frame' in i for i in result['issues']):
+        result['issues'].append('Inspection failed: ' + (str(error)[:200] if isinstance(error, JournalError) else type(error).__name__))
+    if any('record_size' in i for i in result['issues']):
         result['verification'] = 'too-large'
     result['evidence_index'] = anchors
     return result

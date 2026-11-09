@@ -15,7 +15,7 @@ bounded evidence/artifact reads, provenance, independent verification badges,
 SQLite notes/change history, optimistic conflicts, source-bound review identity,
 and investigation brief implemented. Review never alters analysis claims.
 
-Checks: 17 focused backend tests and 20 existing journal tests pass. Synthetic
+Checks: 18 focused backend tests and 20 existing journal tests pass. Synthetic
 Chromium checks pass for desktop Overview/History/Game detail/Triage, deck search,
 escaped model/log HTML, evidence anchor selection, review save, two-tab conflict
 preserving draft, and 390px phone layout without horizontal page overflow.

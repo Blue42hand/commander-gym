@@ -21,6 +21,7 @@ import sys
 import threading
 import time
 from datetime import datetime, timezone
+from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
@@ -102,11 +103,16 @@ class Panel:
                 CREATE INDEX IF NOT EXISTS change_ref ON changes(ref, id);''')
         self.key = secrets.token_bytes(32)
 
+    @contextmanager
     def db(self):
         db = sqlite3.connect(self.database, timeout=5)
-        db.execute('PRAGMA journal_mode=WAL')
-        db.execute('PRAGMA synchronous=FULL')
-        return db
+        try:
+            db.execute('PRAGMA journal_mode=WAL')
+            db.execute('PRAGMA synchronous=FULL')
+            with db:
+                yield db
+        finally:
+            db.close()
 
     def review(self, ref):
         with self.db() as db:
