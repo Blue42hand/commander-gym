@@ -235,6 +235,33 @@ class Panel:
                             found.append((root_index, entry.name))
             except OSError:
                 errors.append('Capture root ' + str(root_index + 1) + ' unavailable')
+        # Publish bounded metadata for the whole inventory before spending a
+        # per-capture verification budget. A large first game must not hide the
+        # rest of the archive while the background verifier works.
+        for root_index, name in found:
+            directory = self.roots[root_index] / name
+            ref = 'capture-' + hashlib.sha256((str(root_index) + ':' + name).encode()).hexdigest()[:24]
+            try:
+                if directory.is_symlink():
+                    continue
+                revision, entries = self.signature(directory)
+                with self.lock:
+                    current = self.records.get(ref)
+                if current and current.get('source_revision') == revision:
+                    continue
+                record = self.quick_record(directory, ref, revision, entries)
+                try:
+                    saved = read_json(self.indexdir / (ref + '.json'))
+                    if saved['source_revision'] == revision and saved.get('verification') not in ('pending', 'unavailable'):
+                        record = saved
+                except (OSError, ValueError, KeyError, TypeError):
+                    pass
+                with self.lock:
+                    self.records[ref] = record
+                    self.locations[ref] = directory
+                    self.coverage['observed'] = len(self.records)
+            except (OSError, ValueError, TypeError, AttributeError, RecursionError):
+                pass  # The detailed pass below publishes the diagnostic.
         for root_index, name in found:
             if self.stop.is_set():
                 return
@@ -246,7 +273,7 @@ class Panel:
                 revision, entries = self.signature(directory)
                 with self.lock:
                     current = self.records.get(ref)
-                if current and current.get('source_revision') == revision:
+                if current and current.get('source_revision') == revision and current.get('verification') != 'pending':
                     continue
                 record = self.quick_record(directory, ref, revision, entries)
                 with self.lock:
