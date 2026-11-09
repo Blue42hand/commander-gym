@@ -29,6 +29,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 from .record_codec import decode_record, physical_lines
 from .game_journal import _safe
 from .panel_worker import metadata
+from . import batch_rpc
 
 STATES = ('Unreviewed', 'Needs follow-up', 'Investigating', 'Reviewed')
 TAGS = ('Engine or rules issue', 'Pilot decision', 'Timeout or stall', 'Recorder or infrastructure',
@@ -82,7 +83,8 @@ class Conflict(Exception):
 class Panel:
     def __init__(self, config):
         self.config = config
-        self.roots = [Path(p).resolve(strict=True) for p in config['capture_roots']]
+        self.grouped_start = len(config['capture_roots'])
+        self.roots = [Path(p).resolve(strict=True) for p in config['capture_roots'] + config.get('grouped_capture_roots', [])]
         self.state = Path(config['state_directory']).resolve()
         if any(self.state == r or r in self.state.parents for r in self.roots):
             raise ValueError('annotation state must be outside capture roots')
@@ -239,7 +241,16 @@ class Panel:
                         if entry.name.startswith('.'):
                             continue
                         if entry.is_dir(follow_symlinks=False) or entry.is_symlink():
-                            found.append((root_index, entry.name))
+                            if root_index < self.grouped_start:
+                                found.append((root_index, entry.name))
+                            elif entry.is_dir(follow_symlinks=False):
+                                with os.scandir(entry.path) as nested:
+                                    for child in nested:
+                                        if len(found) >= 500:
+                                            limited = True
+                                            break
+                                        if not child.name.startswith('.') and (child.is_dir(follow_symlinks=False) or child.is_symlink()):
+                                            found.append((root_index, entry.name + '/' + child.name))
             except OSError:
                 errors.append('Capture root ' + str(root_index + 1) + ' unavailable')
         # Publish bounded metadata for the whole inventory before spending a
@@ -563,6 +574,11 @@ class Handler(BaseHTTPRequestHandler):
             path, query = self.route()
             if path == '/api/overview':
                 self.response(200, panel.overview())
+            elif path == '/api/batches' or re.fullmatch(r'/api/batches/(?:catalog|batch-[a-f0-9]{32})', path):
+                tail = path.split('/')[-1]
+                op = 'list' if tail == 'batches' else 'catalog' if tail == 'catalog' else 'get'
+                self.response(200, batch_rpc.call(panel.config, self.headers['Tailscale-User-Login'], op,
+                    batch_id=tail if op == 'get' else None, data={'offset':int(query.get('offset',['0'])[0])}))
             elif path == '/api/history':
                 self.response(200, panel.history(query))
             elif path == '/api/session':
@@ -583,9 +599,9 @@ class Handler(BaseHTTPRequestHandler):
                     self.response(200, panel.artifact(ref, query.get('name',[''])[0]), 'text/plain; charset=utf-8')
                 else:
                     raise KeyError('unknown route')
-            elif path in ('/', '/history', '/triage') or re.fullmatch(r'/games/capture-[a-f0-9]{24}', path):
+            elif path in ('/', '/history', '/triage', '/batches', '/batches/new') or re.fullmatch(r'/(?:games/capture-[a-f0-9]{24}|batches/batch-[a-f0-9]{32})', path):
                 self.response(200, (STATIC/'index.html').read_bytes(), 'text/html; charset=utf-8')
-            elif path in ('/app.js','/style.css') or re.fullmatch(r'/fonts/[a-z0-9-]+\.(?:woff2|ttf)',path):
+            elif path in ('/app.js','/batches.js','/style.css') or re.fullmatch(r'/fonts/[a-z0-9-]+\.(?:woff2|ttf)',path):
                 file = STATIC / path.lstrip('/')
                 mime = 'text/javascript; charset=utf-8' if path.endswith('.js') else 'text/css; charset=utf-8' if path.endswith('.css') else 'font/ttf' if path.endswith('.ttf') else 'font/woff2'
                 self.response(200, file.read_bytes(), mime)
@@ -593,6 +609,8 @@ class Handler(BaseHTTPRequestHandler):
                 raise KeyError('unknown route')
         except KeyError:
             self.response(404, {'error':'Record or route not found'})
+        except batch_rpc.BatchRPCError as error:
+            self.response(error.status, {'error':str(error)})
         except Conflict as error:
             self.response(409, {'error':str(error)})
         except (ValueError, TypeError, OSError, IndexError, AttributeError, RecursionError):
@@ -610,7 +628,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             path, query = self.route()
             match = re.fullmatch(r'/api/games/(capture-[a-f0-9]{24})/review', path)
-            if not match:
+            batch_match = re.fullmatch(r'/api/batches(?:/(batch-[a-f0-9]{32})/(start|pause|resume|finish|cancel|clone|retry))?', path)
+            if not match and not batch_match:
                 raise KeyError()
             size = int(self.headers.get('Content-Length','0'))
             if not 0 < size <= 16000 or self.headers.get_content_type() != 'application/json':
@@ -618,7 +637,14 @@ class Handler(BaseHTTPRequestHandler):
             data = json.loads(self.rfile.read(size))
             if not isinstance(data, dict):
                 raise ValueError()
-            self.response(200, panel.annotate(match[1], data, actor))
+            if batch_match:
+                batch_id, op = batch_match.groups()
+                self.response(200, batch_rpc.call(panel.config, actor, op or 'create', batch_id=batch_id,
+                    data=data, key=self.headers.get('Idempotency-Key')))
+            else:
+                self.response(200, panel.annotate(match[1], data, actor))
+        except batch_rpc.BatchRPCError as error:
+            self.response(error.status, {'error':str(error)})
         except Conflict as error:
             self.response(409, {'error':str(error)})
         except KeyError:
