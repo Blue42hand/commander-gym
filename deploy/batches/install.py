@@ -49,7 +49,7 @@ def main():
         verify[str(file)]=hashlib.sha256(file.read_bytes()).hexdigest()
     for name in ('runtime-lock.json',lock['python'],lock['java']):verify[str(deps/name)]=profile['artifacts']['dependencies']['files'][name]
     config={'state_directory':str(root),'runtime_directory':str(runtime),'allowed_logins':['Blue42hand@github'],
-            'engine_uid':engine.pw_uid,'provider_uid':provider.pw_uid,'provider_gid':provider.pw_gid,
+            'engine_uid':engine.pw_uid,'engine_gid':engine.pw_gid,'provider_uid':provider.pw_uid,'provider_gid':provider.pw_gid,
             'panel_uid':panel.pw_uid,'panel_gid':panel.pw_gid,'native_port':8879,'provider_port':8880,
             'java':str(java),'python_packages':str(deps/lock['pythonPath'][0]),'roster':profile['catalog']['roster'],
             'catalog':list(registry.profile_payloads()),'pins':pins,'recording_pins':recording_pins(profile),'verify_files':verify}
@@ -145,7 +145,7 @@ RestrictNamespaces=yes
 RestrictAddressFamilies=AF_UNIX AF_INET
 IPAddressDeny=any
 IPAddressAllow=localhost
-CapabilityBoundingSet=CAP_CHOWN CAP_DAC_READ_SEARCH CAP_FOWNER
+CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_FOWNER
 NoNewPrivileges=yes
 UMask=0077
 MemoryMax=256M

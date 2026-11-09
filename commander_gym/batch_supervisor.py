@@ -102,7 +102,7 @@ class Supervisor:
 
     def prepare(self,batch,attempt):
         if not self.inactive():raise RuntimeError('Isolated units are not stopped')
-        cfg=self.config; plan=batch['plan']; engine=cfg['engine_uid'];provider=cfg['provider_uid'];group=cfg['provider_gid']
+        cfg=self.config; plan=batch['plan']; engine=cfg['engine_uid'];engine_group=cfg['engine_gid'];provider=cfg['provider_uid'];group=cfg['provider_gid']
         # Frozen version pins must still describe the installed immutable artifacts.
         if plan['pins']!=cfg['pins']:raise RuntimeError('Frozen batch pins differ from installed runtime; clone a new draft')
         for path,expected in cfg['verify_files'].items():
@@ -112,10 +112,10 @@ class Supervisor:
         for key in ('native','provider'):
             folder=self.runtime/key
             folder.mkdir(mode=0o700 if key=='native' else 0o750,exist_ok=True)
-            os.chown(folder,engine,group if key=='provider' else engine)
+            os.chown(folder,engine,group if key=='provider' else engine_group)
             if any(folder.iterdir()):raise RuntimeError('Stale isolated IPC remains; admission refused')
         captures=self.root/'captures';captures.mkdir(mode=0o700,exist_ok=True)
-        capture=captures/attempt['id'];capture.mkdir(mode=0o700);os.chown(capture,engine,engine)
+        capture=captures/attempt['id'];capture.mkdir(mode=0o700);os.chown(capture,engine,engine_group)
         progress=self.root/'progress';progress.mkdir(mode=0o700,exist_ok=True)
         progress=progress/attempt['id'];progress.mkdir(mode=0o700);os.chown(progress,provider,group)
         budgets=self.root/'budgets';budgets.mkdir(mode=0o700,exist_ok=True)
@@ -133,7 +133,7 @@ class Supervisor:
         for filename in ('openai.json','tokens.json'):
             if not (budget/filename).is_file():raise RuntimeError('Batch budget ledger lost')
         token=secrets.token_urlsafe(32)
-        for role,uid,gid in [('native',engine,engine),('provider',provider,group)]:
+        for role,uid,gid in [('native',engine,engine_group),('provider',provider,group)]:
             folder=self.active/(role+'-config');folder.mkdir(mode=0o700,exist_ok=True);os.chown(folder,uid,gid)
             file=folder/('commander-gym.sidecar.token' if role=='native' else 'token');file.write_text(token);file.chmod(0o600);os.chown(file,uid,gid)
         for name,target in [('captures',capture),('progress',progress),('budget',budget)]:
@@ -226,7 +226,10 @@ class Supervisor:
                     manifests=list((self.root/'captures'/attempt['id']).glob('*/manifest.json'))
                     if manifests:break
                     self.last_tick=time.time();self.stop.wait(1)
-        except Exception:
+        except Exception as failure:
+            import traceback
+            frame=traceback.extract_tb(failure.__traceback__)[-1]
+            print('Batch attempt failed:',type(failure).__name__,Path(frame.filename).name,frame.lineno,flush=True)
             # Fixed diagnostic only: never return transport bodies, model text or secrets.
             message='Isolated runtime preflight or create failed; no create retry. Inspect retained capture and service diagnostics.'
             if attempt.get('create_intent_unix'):outcome='Interrupted'
