@@ -129,6 +129,37 @@ class BatchTests(unittest.TestCase):
             pending['onePerColor']=True
             with self.assertRaises(ValueError):value({})
 
+    def terminal_supervisor(self, terminal):
+        b=self.start(self.draft());attempt=self.store.new_attempt(b['id'])
+        supervisor=object.__new__(Supervisor)
+        supervisor.store=self.store;supervisor.root=self.root;supervisor.runtime=self.root/'ipc'
+        (supervisor.runtime/'native').mkdir(parents=True);(supervisor.runtime/'provider').mkdir()
+        supervisor.config={'native_port':8879,'pins':self.store.pins,'catalog':self.catalog}
+        supervisor.error=None;supervisor.stop=unittest.mock.MagicMock()
+        import itertools
+        supervisor.stop.is_set.side_effect=itertools.chain([False,False],itertools.repeat(True))
+        supervisor.prepare=unittest.mock.Mock(return_value={})
+        supervisor.unit=unittest.mock.Mock(side_effect=lambda op,_:'active' if op=='is-active' else 'fixed-invocation')
+        supervisor.close_runtime=unittest.mock.Mock()
+        supervisor.budget_snapshot=unittest.mock.Mock(return_value={'reported_tokens':0})
+        attempt['runtime_id']='owned-runtime'
+        health={'ok':True,'releaseId':'owned-runtime','engineSha':'exact-engine','gymSha':'exact-gym','activeGames':0,
+                'recordingHealthy':True,'recoveryComplete':True,'bootId':'boot'}
+        with patch('commander_gym.batch_supervisor.exchange',return_value=health),patch('commander_gym.batch_supervisor.native_http',side_effect=[
+            {'lobbyId':'native-lobby'}, {'complete':True,'liveGames':[],'completedGames':[terminal]}]):
+            supervisor.run_attempt(b,attempt)
+        return self.store.get(b['id'])['attempts'][0]
+
+    def test_only_confirmed_unsimulated_native_terminal_counts_completed(self):
+        attempt=self.terminal_supervisor({'gameSessionId':'native-game','nativeGameOver':True,'isSimulated':False,'winnerId':'seat-a','isDraw':False})
+        self.assertEqual(attempt['state'],'Completed');self.assertEqual(attempt['winner_id'],'seat-a')
+        self.assertIsNone(attempt['recording_complete'])
+        self.assertIn('Open or unavailable',attempt['recording_state'])
+
+    def test_simulated_terminal_and_discovery_completion_do_not_invent_result(self):
+        attempt=self.terminal_supervisor({'gameSessionId':'native-game','nativeGameOver':True,'isSimulated':True,'winnerId':'seat-a','isDraw':False})
+        self.assertEqual(attempt['state'],'Interrupted');self.assertIsNone(attempt['winner_id'])
+
     def test_supervisor_cannot_address_human_units(self):
         supervisor=object.__new__(Supervisor)
         with self.assertRaises(ValueError):supervisor.unit('stop','argentum-play.service')

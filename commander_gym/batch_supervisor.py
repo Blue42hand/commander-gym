@@ -221,7 +221,7 @@ class Supervisor:
                     if progress['state'] in ('Limit reached','Callback failed'):message='Provider callback failed or attempt limit reached';break
                 except (OSError,ValueError,KeyError):pass
                 attempt['budget']=self.budget_snapshot(batch);self.store.record_attempt(attempt);self.stop.wait(1)
-            if self.stop.is_set():outcome='Interrupted';message='Supervisor stopping'
+            if self.stop.is_set() and native_terminal is None:outcome='Interrupted';message='Supervisor stopping'
             if native_terminal:
                 attempt.update(game_id=native_terminal.get('gameSessionId'),winner_id=native_terminal.get('winnerId'),
                                is_draw=native_terminal.get('isDraw'),native_result=native_terminal)
