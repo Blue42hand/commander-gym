@@ -125,4 +125,6 @@ def local_arguments(profile):
 def local_ipc(profile):
     if profile['purpose'] == 'native-manual-play':
         return Path('/run/argentum-local-ipc')
-    return Path(profile['paths']['recorderSocket']).parent / 'local-ipc'
+    # The cloud socket parent is private to the cloud group. Keep local IPC
+    # beside it so the local account never needs traversal through that parent.
+    return Path(profile['paths']['recorderSocket']).parent.parent / 'local-ipc'
