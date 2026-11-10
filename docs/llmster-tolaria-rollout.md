@@ -14,18 +14,17 @@ match the release. The local batch unit's D-Bus `LoadCredential` array is empty;
 network access is restricted to localhost and the configured inference IP.
 No new paid or local game was started during this deployment.
 
-Human local play is **staged, not activated**. The existing installed native/Gym
-pair already includes the local provider. Six local Bindings and separate sealed
-configuration artifacts were prepared, and their exact identity and file checks
-passed. The live human service has not been restarted and its original runtime
-seals and healthy recorder were rechecked.
+Human local play is **activated**. Protected idle-only promotion completed at
+sequence 14 after recovery validated the existing 6 GB recording archive. The
+recorder is healthy, pending record writes are zero, and new-game admission is
+open. The live native catalog, verified through the existing TLS WebSocket,
+exposes six local Bindings alongside the six existing cloud Bindings.
 
 The configured llmster endpoint, `http://192.168.0.242:1234`, is reachable.
-Discovery identifies `qwen3.5-9b`, and a short synthetic inference succeeded with
-an 8,192-token compatibility configuration. The loaded model still advertises
-8,192 tokens. The sealed production configuration requires 65,536; neither batch
-nor human inference may bypass that check. Reload the model with at least 65,536
-tokens before attempting the protected human cutover.
+The owner reloaded `qwen3.5-9b` with a 65,536-token context, and production model
+readiness passed. A real inference using the exact production configuration and
+a synthetic one-action observation returned the valid action in 2.74 seconds.
+This verifies transport and action validation, not a completed human game.
 
 The minimal human candidate is Gym
 `b0802af8153a90eb59dc252416acd807bbdf1a03`, matched to the same engine. Its four
@@ -49,18 +48,17 @@ equality validators. Failed runs remain retained separately.
 
 A validated production qualification receipt was issued for the exact candidate
 profile, bound to both isolated results and the supplemental production checks.
-The final real-endpoint readiness check returned
-`loaded_context_below_configured_budget`. Human activation is held solely on the
-loaded context requirement; no approval/activation tuple was consumed and no
-live human service was restarted. After reloading the model, rerun the protected
-readiness and idle-only promotion while the qualification evidence is fresh
-(within 24 hours); stale evidence requires qualification again.
+Following the model reload, the real-endpoint readiness check passed and the
+protected promotion returned `promoted`. The qualification remained within its
+24-hour validity window. Retained receipts include `activation-result.json`,
+`post-activation-health.json`, `live-native-local-catalog.json`, and
+`live-production-config-inference.json` in the candidate evidence bank.
 
 Production supplemental checks passed for exact artifact readability, Python
 dependencies, read-only credential delivery, local discovery under the actual
 local service identity and network restrictions, original recording preservation,
 and unchanged HTTPS ingress. Existing human play remains healthy at runtime
-`112b4f8f7af7c4d87c71df47b0393629c3d04e159e65bd674ee6f2674ce7a7a0`, sequence 13.
+`83bc09a3bf31a123d3bd5a4e4204f27d118bc68b6bd30ec48a504a658e61a07f`, sequence 14.
 
 Deployment checks passed 137 focused Python tests and 13 JVM adapter tests.
 The initial Java 21 build invocation was rejected and rerun using sealed Java 25.
@@ -71,7 +69,7 @@ packaging, not a completed native game or human acceptance.
 Private backups, exact unit/configuration observations, SQLite backups, test
 status, and staging scripts are retained in
 `/var/lib/commander-gym-local-rollout/20261110-9f2499b/`. Isolated guest evidence
-are retained in their original staging banks. The current human candidate and
+is retained in their original staging banks. The current human candidate and
 its evidence are under
 `/srv/argentum-luna/prepared/llmster-human-b0802af-20261110/`.
 
