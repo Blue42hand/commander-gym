@@ -20,20 +20,47 @@ configuration artifacts were prepared, and their exact identity and file checks
 passed. The live human service has not been restarted and its original runtime
 seals and healthy recorder were rechecked.
 
-Two conditions remain before human activation:
+The configured llmster endpoint, `http://192.168.0.242:1234`, is reachable.
+Discovery identifies `qwen3.5-9b`, and a short synthetic inference succeeded with
+an 8,192-token compatibility configuration. The loaded model still advertises
+8,192 tokens. The sealed production configuration requires 65,536; neither batch
+nor human inference may bypass that check. Reload the model with at least 65,536
+tokens before attempting the protected human cutover.
 
-- The owner-confirmed inference endpoint currently refuses connections. Startup
-  requires discovery of the exact configured model and sufficient loaded context;
-  these checks were preserved.
-- The isolated whole-runtime qualification failed because a native-UID QA
-  readiness check tried to read the private local catalog. The guest reported
-  `rollback_unconfirmed`; it was shut down, and its failure evidence was retained.
-  This was a disposable guest with no production filesystem shares or external
-  network. Source commit `0e95e72990bdc2e1ca4181c04650656031a044b6` corrects discovery
-  checks to use sealed profile IDs without granting catalog access. Its 15 local
-  QA regression tests pass. The corrected candidate still needs fresh isolated
-  qualification and the normal exact promotion tuple. No successful human
-  qualification or activation receipt was issued.
+The minimal human candidate is Gym
+`b0802af8153a90eb59dc252416acd807bbdf1a03`, matched to the same engine. Its four
+GitHub checks passed in run `42770223793`; 28 focused runtime/QA tests and 13 JVM
+adapter tests passed. Draft PR: https://github.com/Blue42hand/commander-gym/pull/283.
+It corrects QA catalog readiness and places local recorder IPC beside the private
+cloud IPC directory, preserving the separate provider identities and access rules.
+The candidate production profile is
+`83bc09a3bf31a123d3bd5a4e4204f27d118bc68b6bd30ec48a504a658e61a07f`.
+
+The isolated rollback test passed: a controlled publication failure restored the
+previous profile, healthy and accepting. Local callback admission, provider
+isolation, recorder peer access, failure cancellation, and recorder reopen checks
+passed in the positive runs. Earlier failed runs remain retained: staging file
+permissions, QA IPC placement, an unstable inventory read, and a final cleanup
+health observation. The final positive run (`guest-11-local-positive`) passed all checks, including
+unchanged recordings across recorder reopen, stopped role closure, and reacquired
+writer locks. Operator cleanup takes a fresh healthy idle observation after
+hashing the copied recordings; it retains the exact identity, drain, and inventory
+equality validators. Failed runs remain retained separately.
+
+A validated production qualification receipt was issued for the exact candidate
+profile, bound to both isolated results and the supplemental production checks.
+The final real-endpoint readiness check returned
+`loaded_context_below_configured_budget`. Human activation is held solely on the
+loaded context requirement; no approval/activation tuple was consumed and no
+live human service was restarted. After reloading the model, rerun the protected
+readiness and idle-only promotion while the qualification evidence is fresh
+(within 24 hours); stale evidence requires qualification again.
+
+Production supplemental checks passed for exact artifact readability, Python
+dependencies, read-only credential delivery, local discovery under the actual
+local service identity and network restrictions, original recording preservation,
+and unchanged HTTPS ingress. Existing human play remains healthy at runtime
+`112b4f8f7af7c4d87c71df47b0393629c3d04e159e65bd674ee6f2674ce7a7a0`, sequence 13.
 
 Deployment checks passed 137 focused Python tests and 13 JVM adapter tests.
 The initial Java 21 build invocation was rejected and rerun using sealed Java 25.
@@ -44,8 +71,9 @@ packaging, not a completed native game or human acceptance.
 Private backups, exact unit/configuration observations, SQLite backups, test
 status, and staging scripts are retained in
 `/var/lib/commander-gym-local-rollout/20261110-9f2499b/`. Isolated guest evidence
-and the held human candidate are under
-`/srv/argentum-luna/prepared/llmster-20261110-9f2499b/`.
+are retained in their original staging banks. The current human candidate and
+its evidence are under
+`/srv/argentum-luna/prepared/llmster-human-b0802af-20261110/`.
 
 To roll back only the batch/panel deployment, first resolve all active or queued
 batches, then run as root:
