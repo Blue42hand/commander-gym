@@ -10,6 +10,7 @@ import base64
 import hashlib
 import hmac
 import json
+import math
 import os
 import re
 import secrets
@@ -357,7 +358,39 @@ class Panel:
             self.index_once()
             self.stop.wait(60)
 
-    def health(self):
+    def live_snapshot(self):
+        fallback={'available':False,'fresh':False,'running':None,'running_known':0,'coverage_complete':False,
+                  'runner_state':'Unavailable','runtimes':[],'batch':{'available':False,'active':[],'issues':[],'queued':None},
+                  'scope':'Live observer unavailable','limitations':[],'age_seconds':None}
+        if not self.config.get('live_snapshot'):return fallback
+        try:
+            value=read_json(Path(self.config['live_snapshot']),512*1024)
+            if value.get('schema_version')!=1:raise ValueError()
+            observed=value['observed_unix']
+            if type(observed) not in (int,float) or not math.isfinite(observed):raise ValueError()
+            age=time.time()-observed
+            if age < -5:raise ValueError()
+            fresh=age<=20
+            runtimes=value['runtimes']
+            if not isinstance(runtimes,list) or len(runtimes)!=2:raise ValueError()
+            for r in runtimes:
+                stamp=r.get('observed_unix')
+                r['age_seconds']=max(0,time.time()-stamp) if type(stamp) in (int,float) else None
+                r['fresh']=fresh and r.get('available') is True and r['age_seconds'] is not None and r['age_seconds']<=20
+                if not r['fresh']:
+                    r['running']=None;r['complete']=False
+                    if r.get('available'):r['state']='Stale observation'
+            complete=fresh and all(r.get('complete') and r['fresh'] for r in runtimes)
+            value.update(available=True,fresh=fresh,age_seconds=max(0,age),coverage_complete=complete,
+                         running=value.get('running') if complete else None,
+                         running_known=sum(r.get('running') or 0 for r in runtimes))
+            if not fresh:value['runner_state']='Stale observation'
+            elif not complete and not value['running_known'] and value.get('runner_state')=='Idle':value['runner_state']='Unavailable'
+            if not fresh:value['batch']={'available':False,'active':[],'issues':[],'queued':None}
+            return value
+        except (OSError,ValueError,TypeError,KeyError,AttributeError):return fallback
+
+    def health(self, live=None):
         result = {'observed_at': utc(), 'freshness_seconds': self.config.get('health_fresh_seconds', 20), 'running': None, 'runner_state': 'Unknown', 'live_coverage': 'No complete authoritative active-game source configured',
                   'recorder_state': 'Unavailable', 'sources': {}, 'services': {}}
         for name, path in self.config.get('health_snapshots', {}).items():
@@ -378,17 +411,35 @@ class Panel:
             result['recorder_state'] = 'Healthy' if all(x['value'].get('recordingHealthy') is True for x in sources.values()) else 'Warning'
         elif any(x.get('value') for x in sources.values()):
             result['recorder_state'] = 'Stale observation'
-        from .local_display import _run
-        for name in self.config.get('services', []):
-            if re.fullmatch(r'[a-zA-Z0-9_.@-]+\.service', name):
-                result['services'][name] = _run('systemctl', 'is-active', name) or 'unavailable'
+        live=live if live is not None else self.live_snapshot()
+        if self.config.get('live_snapshot'):
+            result.update(running=live['running'],runner_state=live['runner_state'],live_coverage=live['scope'])
+            if live['fresh']:
+                recorder=[r['recorder_state'] for r in live['runtimes']]
+                result['recorder_state']='Warning' if 'Warning' in recorder else 'Unavailable' if 'Unavailable' in recorder else 'Healthy'
+                result['services']=live.get('services',{})
+            else:result['recorder_state']='Stale observation' if live['available'] else 'Unavailable'
+        if not result['services']:
+            from .local_display import _run
+            for name in self.config.get('services', []):
+                if re.fullmatch(r'[a-zA-Z0-9_.@-]+\.service', name):
+                    result['services'][name] = _run('systemctl', 'is-active', name) or 'unavailable'
         return result
 
+    def history_records(self):
+        with self.lock:records=[dict(r) for r in self.records.values()]
+        refs=[r['ref'] for r in records]
+        with self.db() as db:
+            reviews={r[0]:json.loads(r[1]) for r in db.execute('SELECT ref,value FROM reviews WHERE ref IN ('+','.join('?' for _ in refs)+')',refs)} if refs else {}
+        for r in records:
+            r.pop('evidence_index',None)
+            r['review']=reviews.get(r['ref'],{'version':0,'state':'Unreviewed','tags':[],'note':'','anchor':'','next_action':''})
+            r['new_evidence']=r['review'].get('source_revision') not in (None,r['source_revision'])
+        records.sort(key=lambda r:r.get('started_at') or '',reverse=True)
+        return records
+
     def history(self, query):
-        with self.lock:
-            refs = list(self.records)
-        records = [self.get(r) for r in refs]
-        records.sort(key=lambda r: r.get('started_at') or '', reverse=True)
+        records = self.history_records()
         text = query.get('q', [''])[0].lower()[:200]
         for key, field in [('lifecycle', 'lifecycle'), ('recording', 'verification')]:
             choice = query.get(key, [''])[0]
@@ -420,16 +471,30 @@ class Panel:
         return urgent or bool(review.get('tags')) or review['state'] in ('Needs follow-up', 'Investigating')
 
     def overview(self):
-        all_records = self.history({'limit':['100']})['records']
-        health = self.health()
-        since = time.time() - 86400
-        recent = lambda r: r.get('last_recorded_at') and datetime.fromisoformat(r['last_recorded_at']).timestamp() >= since
-        counts = {'running': None, 'completed': sum(r.get('lifecycle') == 'Completed' and bool(recent(r)) for r in all_records),
-                  'failed': sum(r.get('lifecycle') in ('Failed','Interrupted') and bool(recent(r)) for r in all_records),
-                  'triage': sum(self.needs_inspection(r) for r in all_records),
-                  'time_scope_partial': any(not r.get('last_recorded_at') for r in all_records)}
-        return {'health': health, 'counts': counts, 'coverage': self.coverage, 'recent': all_records[:8],
-                'triage': [r for r in all_records if self.needs_inspection(r)][:5], 'total': len(all_records)}
+        all_records=self.history_records();live=self.live_snapshot();health=self.health(live)
+        since=time.time()-86400
+        def recent(r):
+            try:return bool(r.get('last_recorded_at')) and datetime.fromisoformat(r['last_recorded_at']).timestamp()>=since
+            except (ValueError,TypeError):return False
+        batch=live['batch'];totals=batch.get('recent_totals') or {}
+        # The batch ledger owns supervisor dispositions. Exclude its capture roots
+        # from that union so a terminal/failed manifest cannot be counted twice.
+        ordinary=all_records
+        if live['fresh'] and batch.get('available'):
+            ordinary=[r for r in all_records if not any(self.locations.get(r['ref'],Path('/')).is_relative_to(root) for root in self.roots[self.grouped_start:])]
+        counts={'running':live['running'],'running_known':live['running_known'],
+                'completed':sum(r.get('lifecycle')=='Completed' and recent(r) for r in ordinary)+totals.get('completed',0),
+                'failed':sum(r.get('lifecycle') in ('Failed','Interrupted') and recent(r) for r in ordinary)+totals.get('failed',0),
+                'triage':sum(self.needs_inspection(r) for r in all_records),
+                'time_scope_partial':any(not r.get('last_recorded_at') for r in ordinary) or (bool(self.config.get('live_snapshot')) and not batch.get('available'))}
+        by_game={r.get('game_id'):r for r in all_records if r.get('game_id')}
+        for a in batch.get('active',[])+batch.get('issues',[]):
+            record=by_game.get(a.get('game_id'))
+            if record and self.locations[record['ref']].parent.name==a['id']:
+                a['capture_ref']=record['ref'];a['review_state']=record['review']['state']
+        triage=[r for r in all_records if self.needs_inspection(r)]
+        return {'health':health,'live':live,'counts':counts,'coverage':self.coverage,'recent':all_records[:8],
+                'triage':triage[:5],'total':len(all_records)}
 
     def evidence(self, ref, cursor='', search='', anchor=None):
         record = self.get(ref)
@@ -573,7 +638,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             path, query = self.route()
             if path == '/api/overview':
-                self.response(200, {**panel.overview(), 'managed_batch':batch_rpc.summary(panel.config, self.headers['Tailscale-User-Login'])})
+                self.response(200, panel.overview())
             elif path == '/api/batches' or re.fullmatch(r'/api/batches/(?:catalog|batch-[a-f0-9]{32})', path):
                 tail = path.split('/')[-1]
                 op = 'list' if tail == 'batches' else 'catalog' if tail == 'catalog' else 'get'
