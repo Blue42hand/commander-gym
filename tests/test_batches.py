@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 
 from commander_gym.batch_store import BatchStore, BatchConflict
-from commander_gym.batch_budget import TokenFence, ChoiceGuard, atomic_json
+from commander_gym.batch_budget import TokenFence, ChoiceGuard, atomic_json, BatchLimitError
 from commander_gym.batch_supervisor import Supervisor, UNITS
 
 
@@ -153,7 +153,7 @@ class BatchTests(unittest.TestCase):
             pending['onePerColor']=True
             with self.assertRaises(ValueError):value({})
 
-    def terminal_supervisor(self, terminal):
+    def terminal_supervisor(self, terminal, progress=None):
         b=self.start(self.draft());attempt=self.store.new_attempt(b['id'])
         supervisor=object.__new__(Supervisor)
         supervisor.store=self.store;supervisor.root=self.root;supervisor.runtime=self.root/'ipc'
@@ -167,6 +167,11 @@ class BatchTests(unittest.TestCase):
         supervisor.close_runtime=unittest.mock.Mock()
         supervisor.budget_snapshot=unittest.mock.Mock(return_value={'reported_tokens':0})
         attempt['runtime_id']='owned-runtime'
+        if progress:
+            supervisor.stop.is_set.side_effect=None
+            supervisor.stop.is_set.return_value=False
+            folder=self.root/'progress'/attempt['id'];folder.mkdir(parents=True)
+            atomic_json(folder/'provider.json',progress)
         health={'ok':True,'releaseId':'owned-runtime','engineSha':'exact-engine','gymSha':'exact-gym','activeGames':0,
                 'recordingHealthy':True,'recoveryComplete':True,'bootId':'boot'}
         with patch('commander_gym.batch_supervisor.exchange',return_value=health),patch('commander_gym.batch_supervisor.native_http',side_effect=[
@@ -179,6 +184,29 @@ class BatchTests(unittest.TestCase):
         self.assertEqual(attempt['state'],'Completed');self.assertEqual(attempt['winner_id'],'seat-a')
         self.assertIsNone(attempt['recording_complete'])
         self.assertIn('Open or unavailable',attempt['recording_state'])
+
+    def test_token_limit_reports_interruption_without_native_result(self):
+        attempt=self.terminal_supervisor({}, {'state':'Limit reached','reason':'batch_token_fence',
+            'used':929383,'reservation':96930,'limit':1000000,'decisions':78})
+        self.assertEqual(attempt['state'],'Interrupted')
+        self.assertIn('929,383 used or reserved + 96,930 next reservation > 1,000,000 limit',attempt['message'])
+        self.assertIsNone(attempt['winner_id'])
+
+    def test_wrapped_limit_is_structured_but_arbitrary_exception_text_is_private(self):
+        def fail(_):
+            try:raise BatchLimitError('batch_token_fence',used=929383,reservation=96930,limit=1000000)
+            except BatchLimitError as error:raise RuntimeError('private transport details') from error
+        guard=ChoiceGuard(100,time.time()+60,self.root/'progress.json')
+        pilot=SimpleNamespace(name='fixture',version='1',choose=fail)
+        with self.assertRaises(RuntimeError):guard.wrap(pilot).choose(None)
+        data=json.loads(guard.progress.read_text())
+        self.assertEqual(data['state'],'Limit reached');self.assertEqual(data['reason'],'batch_token_fence')
+        self.assertEqual(data['used'],929383);self.assertNotIn('private',json.dumps(data))
+        def unknown(_):raise ValueError('private headers and provider content')
+        pilot.choose=unknown
+        with self.assertRaises(ValueError):guard.wrap(pilot).choose(None)
+        data=json.loads(guard.progress.read_text())
+        self.assertEqual(data['state'],'Callback failed');self.assertNotIn('private',json.dumps(data))
 
     def test_simulated_terminal_and_discovery_completion_do_not_invent_result(self):
         attempt=self.terminal_supervisor({'gameSessionId':'native-game','nativeGameOver':True,'isSimulated':True,'winnerId':'seat-a','isDraw':False})

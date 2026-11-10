@@ -24,6 +24,26 @@ UNITS = ('commander-gym-batch-provider.service','commander-gym-batch-fixture.ser
          'commander-gym-batch-recorder.service','commander-gym-batch-native.service')
 
 
+def provider_stop(progress):
+    if progress.get('state') == 'Limit reached':
+        messages = {
+            'batch_token_fence': 'Batch total token limit reached before provider dispatch',
+            'batch_request_limit': 'Batch provider request limit reached before dispatch',
+            'batch_cost_limit': 'Batch estimated spending limit reached before provider dispatch',
+            'batch_decision_limit': 'Per-game decision limit reached',
+            'batch_time_limit': 'Per-game time limit reached',
+        }
+        message = messages.get(progress.get('reason'), 'Per-game decision or time limit reached')
+        if progress.get('reason') == 'batch_token_fence' and all(
+            type(progress.get(k)) is int and progress[k] >= 0 for k in ('used', 'reservation', 'limit')
+        ):
+            message += f" ({progress['used']:,} used or reserved + {progress['reservation']:,} next reservation > {progress['limit']:,} limit)"
+        return 'Interrupted', message
+    if progress.get('state') == 'Callback failed':
+        return 'Failed', 'Provider callback failed; inspect recorded decision evidence'
+    return None
+
+
 def exchange(path, message):
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
         sock.settimeout(3); sock.connect(str(path))
@@ -226,7 +246,10 @@ class Supervisor:
                 try:
                     progress=json.loads((self.root/'progress'/attempt['id']/'provider.json').read_text())
                     attempt['provider_progress']=progress
-                    if progress['state'] in ('Limit reached','Callback failed'):message='Provider callback failed or attempt limit reached';break
+                    stopped = provider_stop(progress)
+                    if stopped:
+                        outcome, message = stopped
+                        break
                 except (OSError,ValueError,KeyError):pass
                 attempt['budget']=self.budget_snapshot(batch);self.store.record_attempt(attempt);self.stop.wait(1)
             if self.stop.is_set() and native_terminal is None:outcome='Interrupted';message='Supervisor stopping'

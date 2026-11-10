@@ -7,6 +7,33 @@ import threading
 from collections.abc import Mapping
 
 
+class BatchLimitError(ValueError):
+    """Local admission rejection, with safe structured diagnostics only."""
+    def __init__(self, reason, **details):
+        super().__init__(reason)
+        self.details = {'reason': reason, **details}
+
+
+def limit_details(error):
+    from .openai_run_budget import OpenAIRunBudgetError
+    monetary_limits = {
+        'absolute request limit reached before dispatch': 'batch_request_limit',
+        'session request limit reached before dispatch': 'batch_request_limit',
+        'the next OpenAI request exceeds the cumulative run cap': 'batch_cost_limit',
+        'the next OpenAI request exceeds the session cap': 'batch_cost_limit',
+        'dispatch deadline reached before reservation': 'batch_time_limit',
+        'dispatch deadline reached after reservation': 'batch_time_limit',
+    }
+    # The pilot wraps provider errors; never publish arbitrary exception text.
+    for _ in range(8):
+        if isinstance(error, BatchLimitError): return error.details
+        if isinstance(error, OpenAIRunBudgetError) and str(error) in monetary_limits:
+            return {'reason': monetary_limits[str(error)]}
+        if error is None: break
+        error = error.__cause__
+    return None
+
+
 def atomic_json(path, value):
     path = Path(path)
     temporary = path.with_name(path.name + '.tmp')
@@ -33,7 +60,9 @@ class TokenFence:
                 if data['limit'] != self.limit: raise ValueError('batch_token_limit_changed')
                 change(data); atomic_json(self.path, data)
         def admit(data):
-            if data['reserved_or_used'] + reserve > self.limit: raise ValueError('batch_token_fence')
+            if data['reserved_or_used'] + reserve > self.limit:
+                raise BatchLimitError('batch_token_fence', limit=self.limit,
+                                      used=data['reserved_or_used'], reservation=reserve)
             data['reserved_or_used'] += reserve; data['unsettled'] += 1
         transact(admit)
         result = self.client.responses.create(**request)
@@ -62,13 +91,16 @@ class ChoiceGuard:
                 import time
                 with guard.lock:
                     if guard.count >= guard.maximum or time.time() >= guard.deadline:
-                        atomic_json(guard.progress, {'state':'Limit reached','decisions':guard.count,'observed_unix':time.time()})
-                        raise ValueError('batch_decision_or_time_limit')
+                        reason = 'batch_decision_limit' if guard.count >= guard.maximum else 'batch_time_limit'
+                        atomic_json(guard.progress, {'state':'Limit reached','reason':reason,'decisions':guard.count,'observed_unix':time.time()})
+                        raise BatchLimitError(reason)
                     guard.count += 1
                     atomic_json(guard.progress, {'state':'Active','decisions':guard.count,'observed_unix':time.time()})
                 try: return pilot.choose(observation)
-                except Exception:
+                except Exception as error:
                     with guard.lock:
-                        atomic_json(guard.progress, {'state':'Callback failed','decisions':guard.count,'observed_unix':time.time()})
+                        details = limit_details(error)
+                        atomic_json(guard.progress, {'state':'Limit reached' if details else 'Callback failed',
+                            **(details or {}),'decisions':guard.count,'observed_unix':time.time()})
                     raise
         return Guarded()
