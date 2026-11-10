@@ -34,7 +34,8 @@ def main():
         from .recording_health import RecordingHealthReporter
         from .recorder_bridge import RecorderBridge, recording_registry
         capture = NativeGameCapture(Path('/captures'), config['recording_pins'], background_finalization=True)
-        registry = recording_registry(Path('/catalog')/config['roster'], Path('/catalog'))
+        catalog_root=Path(config.get('catalog_root','/catalog'))
+        registry = recording_registry(catalog_root/config['roster'], catalog_root)
         bridge = RecorderBridge(capture, registry, native_socket=Path('/ipc/native/native.sock'),
                                 sidecar_socket=Path('/ipc/provider/sidecar.sock'), native_uid=config['engine_uid'],
                                 sidecar_uid=config['provider_uid'], sidecar_gid=config['provider_gid'], managed_batch=True)
@@ -44,10 +45,16 @@ def main():
             while not stop.wait(.2): pass
         finally:
             for owner in (reporter,bridge,capture): owner.close()
-    elif role == 'provider':
+    elif role in ('provider','local'):
+        plan=config['plan']
+        if (role=='local') != (plan['execution_mode']=='local'):
+            raise ValueError('Provider role differs from frozen execution mode')
+        if plan['execution_mode']=='local':
+            server=build_local_server(config)
+            serve(server, stop, config)
+            return
         from .game_server_binding_openai_sidecar import binding_openai_game_server_config_from_environment, build_binding_openai_game_server_sidecar
         from .recorder_bridge import RemoteCaptureSink
-        plan=config['plan']
         fixture=plan['execution_mode']=='fixture'
         if fixture:
             key='fixture-no-provider-credential'
@@ -72,18 +79,39 @@ def main():
         cfg.budget.dispatch_deadline_unix=config['deadline']
         remote=RemoteCaptureSink(Path('/ipc/provider/sidecar.sock'), recorder_uid=config['engine_uid'])
         server=build_binding_openai_game_server_sidecar(cfg, client=client, game_capture=remote)
-        from dataclasses import replace
-        server.sidecar_config=replace(server.sidecar_config, require_managed_batch_game=True)
-        guard=ChoiceGuard(plan['max_decisions'],config['deadline'],Path('/progress/provider.json'))
-        factory=server._profile_seat_factory
-        def guarded(*args):
-            seat=factory(*args); seat._pilot=guard.wrap(seat._pilot); return seat
-        server._profile_seat_factory=guarded
-        server._game_profile_seat_factory=lambda game_id, player_id, profile_id: guarded(player_id, profile_id, game_id)
-        thread=threading.Thread(target=server.serve_forever,daemon=True); thread.start()
-        try:
-            while not stop.wait(.2): pass
-        finally: server.shutdown();server.server_close()
+        serve(server, stop, config)
     else: raise ValueError('Unknown fixed role')
+
+def build_local_server(config):
+    from .game_server_binding_lmstudio_sidecar import LocalBindingConfig, build_binding_lmstudio_sidecar
+    from .game_server_sidecar import GameServerSidecarConfig
+    from .lmstudio_provider import LMStudioConfig
+    from .batch_local import LocalBatchTransport
+    from .recorder_bridge import RemoteCaptureSink
+    inference=LMStudioConfig(**config['local_inference'])
+    plan=config['plan']
+    transport=LocalBatchTransport(inference, Path('/budget'), plan, config['deadline'])
+    root=Path(config['catalog_root'])
+    return build_binding_lmstudio_sidecar(LocalBindingConfig(
+        GameServerSidecarConfig(Path('/provider-config/token').read_text(), port=config['provider_port'],
+                               require_managed_batch_game=True),
+        inference, root/config['roster'], root), transport=transport,
+        game_capture=RemoteCaptureSink(Path('/ipc/provider/sidecar.sock'), recorder_uid=config['engine_uid']))
+
+
+def serve(server, stop, config):
+    plan=config['plan']
+    from dataclasses import replace
+    server.sidecar_config=replace(server.sidecar_config, require_managed_batch_game=True)
+    guard=ChoiceGuard(plan['max_decisions'],config['deadline'],Path('/progress/provider.json'))
+    factory=server._profile_seat_factory
+    def guarded(*args):
+        seat=factory(*args); seat._pilot=guard.wrap(seat._pilot); return seat
+    server._profile_seat_factory=guarded
+    server._game_profile_seat_factory=lambda game_id, player_id, profile_id: guarded(player_id, profile_id, game_id)
+    thread=threading.Thread(target=server.serve_forever,daemon=True); thread.start()
+    try:
+        while not stop.wait(.2): pass
+    finally: server.shutdown();server.server_close()
 
 if __name__=='__main__': main()

@@ -18,6 +18,7 @@ def write(path,text,mode=0o600):
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--release',required=True,type=Path);parser.add_argument('--gym-sha',required=True)
+    parser.add_argument('--local-catalog',type=Path,help='Prepared local catalog root, containing catalog.json and inference.json')
     args=parser.parse_args()
     if os.getuid()!=0:parser.error('Root required for service preparation')
     release=args.release.resolve(strict=True)
@@ -59,19 +60,37 @@ def main():
             'panel_uid':panel.pw_uid,'panel_gid':panel.pw_gid,'native_port':8879,'provider_port':8880,
             'java':str(java),'python_packages':str(deps/lock['pythonPath'][0]),'roster':profile['catalog']['roster'],
             'catalog':list(registry.profile_payloads()),'pins':pins,'recording_pins':recording_pins(profile),'verify_files':verify}
+    local_catalog=None
+    if args.local_catalog:
+        from dataclasses import asdict
+        from commander_gym.lmstudio_provider import LMStudioConfig
+        from commander_gym.local_catalog import validate_local_catalog
+        local_catalog=args.local_catalog.resolve(strict=True)
+        if local_catalog.is_relative_to(Path('/home')):parser.error('Local catalog must be readable below a service artifact root outside /home')
+        inference=LMStudioConfig(**json.loads((local_catalog/'inference.json').read_text()))
+        local_registry=validate_local_catalog(local_catalog/'catalog.json',local_catalog,inference)
+        if set(local_registry.binding_fingerprints)&set(pins['bindings']):parser.error('Local/cloud Binding collision')
+        pins['bindings']={**pins['bindings'],**local_registry.binding_fingerprints}
+        pins['local_inference']=asdict(inference)
+        config.update(local_inference=asdict(inference),local_roster='catalog.json')
+        config['catalog'] += [{**entry,'execution_modes':['local']} for entry in local_registry.profile_payloads()]
+        for file in local_catalog.rglob('*'):
+            if file.is_file():verify[str(file)]=hashlib.sha256(file.read_bytes()).hexdigest()
     write('/etc/commander-gym-batches/config.json',json.dumps(config,indent=2))
-    for role in ('native','recorder','provider','fixture'):
+    for role in ('native','recorder','provider','fixture','local'):
         role_root=Path('/var/lib/commander-gym-batch-'+role+'-root');role_root.mkdir(mode=0o755,exist_ok=True)
         for name,target in [('lib','usr/lib'),('lib64','usr/lib64'),('bin','usr/bin')]:
             link=role_root/name
             if link.is_symlink():
                 if os.readlink(link)!=target:raise ValueError('Unexpected role root symlink')
             elif not link.exists():link.symlink_to(target)
-        is_provider=role in ('provider','fixture')
+        is_provider=role in ('provider','fixture','local')
         user='commander-batch-provider' if is_provider else 'commander-batch-engine'
         binds=[f'BindReadOnlyPaths=/usr {deps} {release}:/app {catalog}:/catalog',
                f'BindReadOnlyPaths={root}/active/role.json:/config/role.json',
                'BindReadOnlyPaths=/etc/passwd /etc/group /etc/nsswitch.conf /etc/resolv.conf /etc/ssl/certs']
+        if local_catalog and role in ('recorder','local'):
+            binds += [f'BindReadOnlyPaths={local_catalog}:/local-catalog']
         if role=='native':
             server=batch_runtime
             binds += [f'BindReadOnlyPaths={server}:/server {root}/active/native-config:/native-config',
@@ -83,6 +102,10 @@ def main():
                       f'BindPaths={root}/active/budget:/budget {root}/active/progress:/progress {runtime}/provider:/ipc/provider']
         credentials='LoadCredential=provider.env:/srv/commander-runtime/.config/commander-gym/openai.env\n' if role=='provider' else ''
         network='IPAddressDeny=any\nIPAddressAllow=localhost\n' if not is_provider else ''
+        if role=='local':
+            from urllib.parse import urlsplit
+            endpoint_ip=urlsplit(config['local_inference']['endpoint']).hostname if local_catalog else '127.0.0.1'
+            network=f'IPAddressDeny=any\nIPAddressAllow=localhost\nIPAddressAllow={endpoint_ip}\n'
         supplement='SupplementaryGroups=commander-batch-provider\n' if role=='recorder' else ''
         unit=f'''[Unit]
 Description=Isolated Commander Gym batch {role}
@@ -95,7 +118,7 @@ Group={user}
 {supplement}{credentials}RootDirectory={role_root}
 MountAPIVFS=yes
 WorkingDirectory=/app
-ExecStart={python} -I -S -B /app/scripts/batch_role_entry.py {'provider' if is_provider else role}
+ExecStart={python} -I -S -B /app/scripts/batch_role_entry.py {'local' if role=='local' else 'provider' if is_provider else role}
 Environment=PYTHONPATH=/app:{deps/lock['pythonPath'][0]}
 {chr(10).join(binds)}
 CapabilityBoundingSet=CAP_DAC_READ_SEARCH

@@ -21,7 +21,11 @@ from .batch_budget import atomic_json
 from .batch_store import BatchStore, BatchConflict, digest
 
 UNITS = ('commander-gym-batch-provider.service','commander-gym-batch-fixture.service',
-         'commander-gym-batch-recorder.service','commander-gym-batch-native.service')
+         'commander-gym-batch-recorder.service','commander-gym-batch-native.service','commander-gym-batch-local.service')
+
+
+def provider_unit(mode):
+    return {'paid':UNITS[0], 'fixture':UNITS[1], 'local':UNITS[4]}[mode]
 
 
 def provider_stop(progress):
@@ -116,7 +120,7 @@ class Supervisor:
         if not isinstance(request,dict) or request.get('actor') not in self.config['allowed_logins']:raise PermissionError('Owner identity required')
         op=request.get('operation');data=request.get('data',{})
         if op=='catalog':return {'catalog':self.config['catalog'],'pins':self.config['pins'],'concurrency':1,
-                                  'provider':'gpt-6-luna','cost_note':'Conservative estimates and reservations; not a billing guarantee',
+                                  'provider':'gpt-6-luna','execution_modes':['paid','fixture']+(['local'] if self.config.get('local_inference') else []),'cost_note':'Conservative estimates and reservations; not a billing guarantee',
                                   'native_seed':'Assigned by native engine; retained in recording'}
         if op=='list':return {**self.store.list(offset=int(data.get('offset',0))), 'health':self.health()}
         if op=='get':return self.store.get(request['batch_id'])
@@ -133,6 +137,9 @@ class Supervisor:
         cfg=self.config; plan=batch['plan']; engine=cfg['engine_uid'];engine_group=cfg['engine_gid'];provider=cfg['provider_uid'];group=cfg['provider_gid']
         # Frozen version pins must still describe the installed immutable artifacts.
         if plan['pins']!=cfg['pins']:raise RuntimeError('Frozen batch pins differ from installed runtime; clone a new draft')
+        if plan['execution_mode']=='local':
+            if not cfg.get('local_inference') or plan['pins'].get('local_inference')!=cfg['local_inference']:
+                raise RuntimeError('Local inference configuration is not pinned')
         for path,expected in cfg['verify_files'].items():
             with open(path,'rb') as stream:
                 sha=hashlib.file_digest(stream,'sha256').hexdigest()
@@ -154,12 +161,15 @@ class Supervisor:
             if attempt['ordinal']!=1:raise RuntimeError('Batch budget directory lost')
             budget.mkdir(mode=0o700)
             from .openai_run_budget import OpenAIRunBudget
-            OpenAIRunBudget(budget/'openai.json',plan['budget_usd'],authorized_max_usd=plan['budget_usd'],
-                            max_requests=plan['max_requests'],initialize_new_ledger=True).snapshot()
+            if plan['execution_mode']=='local':
+                atomic_json(budget/'local.json',{'requests':0,'input_tokens':0,'output_tokens':0,'unsettled_requests':0})
+            else:
+                OpenAIRunBudget(budget/'openai.json',plan['budget_usd'],authorized_max_usd=plan['budget_usd'],
+                                max_requests=plan['max_requests'],initialize_new_ledger=True).snapshot()
             atomic_json(budget/'tokens.json',{'limit':plan['max_tokens'],'reserved_or_used':0,'reported_tokens':0,'unsettled':0})
             for file in budget.iterdir():os.chown(file,provider,group)
             os.chown(budget,provider,group)
-        for filename in ('openai.json','tokens.json'):
+        for filename in (('local.json','tokens.json') if plan['execution_mode']=='local' else ('openai.json','tokens.json')):
             if not (budget/filename).is_file():raise RuntimeError('Batch budget ledger lost')
         token=secrets.token_urlsafe(32)
         for role,uid,gid in [('native',engine,engine_group),('provider',provider,group)]:
@@ -174,7 +184,12 @@ class Supervisor:
                       'executionMode':plan['execution_mode'],'paidProvidersEnabled':plan['execution_mode']=='paid','manualOnly':False},
             'models':{'provider':'qa-native-legal-fixture' if plan['execution_mode']=='fixture' else 'openai-responses',
                       'model':'none' if plan['execution_mode']=='fixture' else 'gpt-6-luna'}}
+        if plan['execution_mode']=='local':
+            recording_pins['models']=cfg['local_inference']
+            recording_pins['bindings']={b:cfg['pins']['bindings'][b] for b in plan['bindings']}
         role_config={k:cfg[k] for k in ('native_port','provider_port','java','python_packages','roster','engine_uid','provider_uid','provider_gid','pins')}
+        if plan['execution_mode']=='local':
+            role_config.update(local_inference=cfg['local_inference'], roster=cfg['local_roster'], catalog_root='/local-catalog')
         role_config.update(plan=plan,recording_pins=recording_pins,deadline=time.time()+plan['wall_seconds']+120,
                            runtime_id=digest([batch['fingerprint'],attempt['id']]))
         atomic_json(self.active/'role.json',role_config);(self.active/'role.json').chmod(0o444)
@@ -185,7 +200,13 @@ class Supervisor:
     def budget_snapshot(self,batch):
         root=self.root/'budgets'/batch['id']
         try:
-            money=json.loads((root/'openai.json').read_text());tokens=json.loads((root/'tokens.json').read_text())
+            tokens=json.loads((root/'tokens.json').read_text())
+            if batch['plan']['execution_mode']=='local':
+                local=json.loads((root/'local.json').read_text())
+                return {**local,'estimated_usd':0,'reported_tokens':tokens['reported_tokens'],
+                        'reserved_or_used_tokens':tokens['reserved_or_used'],'unsettled_token_requests':tokens['unsettled'],
+                        'observed_unix':time.time(),'provider':'lmstudio'}
+            money=json.loads((root/'openai.json').read_text())
             return {'estimated_usd':money['estimatedUsd'],'requests':money['requests'],'unsettled_requests':money['unsettledRequests'],
                     'reported_tokens':tokens['reported_tokens'],'reserved_or_used_tokens':tokens['reserved_or_used'],'unsettled_token_requests':tokens['unsettled'],
                     'input_tokens':money.get('inputTokens'),'output_tokens':money.get('outputTokens'),'observed_unix':time.time()}
@@ -199,7 +220,7 @@ class Supervisor:
             attempt['budget_start']=self.budget_snapshot(batch)
             self.store.record_attempt(attempt)
             self.unit('start',UNITS[3]); self.unit('start',UNITS[2])
-            self.unit('start',UNITS[1] if batch['plan']['execution_mode']=='fixture' else UNITS[0])
+            self.unit('start',provider_unit(batch['plan']['execution_mode']))
             attempt['unit_invocations']={u:self.unit('show',u) for u in UNITS};self.store.record_attempt(attempt)
             limit=time.monotonic()+120
             status=None
@@ -230,7 +251,7 @@ class Supervisor:
                 current=self.store.get(batch['id'])
                 if current['desired']=='Cancelled':outcome='Interrupted';message='Owner requested interruption';break
                 if time.time()>deadline:outcome='Interrupted';message='Per-game wall-time limit reached';break
-                if any(self.unit('is-active',u)!='active' for u in (UNITS[3],UNITS[2],UNITS[1] if batch['plan']['execution_mode']=='fixture' else UNITS[0])):
+                if any(self.unit('is-active',u)!='active' for u in (UNITS[3],UNITS[2],provider_unit(batch['plan']['execution_mode']))):
                     message='An isolated runtime service stopped';break
                 try:
                     health=exchange(self.runtime/'native/lifecycle.sock',{'protocol':1,'op':'status'})

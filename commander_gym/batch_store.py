@@ -89,7 +89,9 @@ class BatchStore:
         if not isinstance(name,str) or not 1<=len(name.strip())<=100:raise ValueError('Batch name must contain 1–100 characters')
         if not isinstance(purpose,str) or len(purpose)>1000:raise ValueError('Purpose exceeds limit')
         bindings=raw.get('bindings')
-        available={p['id']:p for p in self.catalog}
+        mode=raw.get('execution_mode','paid')
+        if mode not in ('paid','fixture','local'):raise ValueError('Invalid execution mode')
+        available={p['id']:p for p in self.catalog if mode in p.get('execution_modes', ('paid','fixture'))}
         if not isinstance(bindings,list) or len(bindings)!=4 or any(not isinstance(x,str) or x not in available for x in bindings):
             raise ValueError('Select exactly four approved Binding snapshots in seat order')
         result={'name':name.strip(),'purpose':purpose,'bindings':bindings,'seats':[available[x] for x in bindings]}
@@ -98,10 +100,10 @@ class BatchStore:
             if type(value) is not int or not low<=value<=high:raise ValueError(f'{key} must be between {low} and {high}')
             result[key]=value
         budget=raw.get('budget_usd')
-        if type(budget) not in (float,int) or not math.isfinite(budget) or not 0<budget<=5:raise ValueError('Estimated spending fence must be positive and at most $5')
+        if type(budget) not in (float,int) or not math.isfinite(budget) or not (0<=budget<=5 if mode=='local' else 0<budget<=5):raise ValueError('Estimated spending fence must be positive and at most $5 (zero for local)')
+        if mode=='local' and budget!=0:raise ValueError('Local inference requires a zero provider spending fence')
         result['budget_usd']=float(budget)
         if raw.get('failure_policy','pause') not in ('pause','continue'):raise ValueError('Invalid failure policy')
-        if raw.get('execution_mode','paid') not in ('paid','fixture'):raise ValueError('Invalid execution mode')
         result.update(failure_policy=raw.get('failure_policy','pause'),execution_mode=raw.get('execution_mode','paid'),
                       concurrency=1,seed_policy='Native assigned; recorded seed retained, caller-selected seed unsupported',pins=self.pins)
         return result

@@ -39,4 +39,11 @@ Costs are conservative estimates/reservations, not billing guarantees. Missing l
 
 ## Rollback
 
-Stop/disable only `commander-gym-batches.service`; its `BindsTo` units stop with it. Confirm all four fixed worker units are inactive/failed. Restore the backed-up panel unit/config and previous `/opt/commander-gym-web/current` target, daemon-reload and restart only the panel. Leave the Tailscale Serve configuration alone. Preserve `/var/lib/commander-gym-batches`, the existing review database and all original evidence. No host reboot is required.
+Stop/disable only `commander-gym-batches.service`; its `BindsTo` units stop with it. Confirm all five fixed worker units are inactive/failed. Restore the backed-up panel unit/config and previous `/opt/commander-gym-web/current` target, daemon-reload and restart only the panel. Leave the Tailscale Serve configuration alone. Preserve `/var/lib/commander-gym-batches`, the existing review database and all original evidence. No host reboot is required.
+
+## Local inference
+
+The optional `--local-catalog` preparation flag adds credential-free llmster
+execution and local Binding choices to the batch panel. See
+[llmster play](../../docs/llmster-play.md) for catalog preparation, human-play
+integration, limits and validation boundaries.
