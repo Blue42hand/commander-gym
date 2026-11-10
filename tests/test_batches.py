@@ -86,6 +86,30 @@ class BatchTests(unittest.TestCase):
         self.assertEqual(a.choose(None),'legal-choice')
         with self.assertRaises(ValueError):b.choose(None)
         self.assertEqual(json.loads((self.root/'progress.json').read_text())['state'],'Limit reached')
+
+    def test_bounded_worker_mapping_usage_settles_across_requests(self):
+        from commander_gym.bounded_provider_process import _ResponseDict
+        path=self.root/'tokens.json'
+        atomic_json(path,{'limit':10000,'reserved_or_used':0,'reported_tokens':0,'unsettled':0})
+        response=_ResponseDict(usage={'total_tokens':17})
+        client=SimpleNamespace(responses=SimpleNamespace(create=lambda **_:response))
+        for _ in range(20):
+            self.assertIs(TokenFence(client,path,10000).create(input='masked'),response)
+        self.assertEqual(json.loads(path.read_text()),
+                         {'limit':10000,'reserved_or_used':340,'reported_tokens':340,'unsettled':0})
+
+    def test_invalid_mapping_usage_keeps_reservation_and_enforces_limit(self):
+        for value in (None,-1,True,'17',17.0):
+            with self.subTest(value=value):
+                path=self.root/'tokens.json'
+                atomic_json(path,{'limit':10000,'reserved_or_used':0,'reported_tokens':0,'unsettled':0})
+                client=SimpleNamespace(responses=SimpleNamespace(create=lambda **_:{'usage':{'total_tokens':value}}))
+                fence=TokenFence(client,path,10000)
+                fence.create(input='masked')
+                before=json.loads(path.read_text())
+                self.assertEqual(before['unsettled'],1)
+                with self.assertRaisesRegex(ValueError,'batch_token_fence'):fence.create(input='masked')
+                self.assertEqual(json.loads(path.read_text()),before)
     def test_zero_usage_concurrent_settlement_never_invalidates_ledger(self):
         from commander_gym.openai_run_budget import OpenAIRunBudget
         budget=OpenAIRunBudget(self.root/'openai.json',1,max_requests=100,initialize_new_ledger=True)

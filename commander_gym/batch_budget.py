@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import threading
+from collections.abc import Mapping
 
 
 def atomic_json(path, value):
@@ -36,8 +37,8 @@ class TokenFence:
             data['reserved_or_used'] += reserve; data['unsettled'] += 1
         transact(admit)
         result = self.client.responses.create(**request)
-        usage = getattr(result, 'usage', None)
-        actual = getattr(usage, 'total_tokens', None)
+        usage = result.get('usage') if isinstance(result, Mapping) else getattr(result, 'usage', None)
+        actual = usage.get('total_tokens') if isinstance(usage, Mapping) else getattr(usage, 'total_tokens', None)
         if type(actual) is int and actual >= 0:
             def settle(data):
                 data['reserved_or_used'] += actual - reserve
