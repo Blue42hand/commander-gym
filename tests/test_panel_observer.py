@@ -66,10 +66,26 @@ class ObserverTests(unittest.TestCase):
         store.record_attempt(attempt)
         for n in range(35):store.create({**plan,'name':'New draft '+str(n)},'owner','newer-draft-key-'+str(n))
         before=hashlib.sha256(store.path.read_bytes()).hexdigest()
-        result=observer.batch_metadata(store.path)
+        def read_page(config,actor,op,**kwargs):
+            self.assertEqual(op,'list')
+            return {**store.list(offset=kwargs['data']['offset']),'health':{'supervisor':'Available','observed_unix':time.time()}}
+        with patch('commander_gym.batch_rpc.call',side_effect=read_page):
+            result,health=observer.batch_metadata({'control_socket':'fixture','actor':'owner'})
+        self.assertTrue(result['metadata_complete']);self.assertTrue(health['available'])
         self.assertEqual(result['active_count'],1);self.assertEqual(result['active'][0]['game_id'],'private-game')
         self.assertEqual(result['active'][0]['turn'],7);self.assertNotIn('MUST NOT LEAK',json.dumps(result))
         self.assertEqual(hashlib.sha256(store.path.read_bytes()).hexdigest(),before)
+    def test_changing_read_inventory_reports_unknown_queue_instead_of_zero(self):
+        call_count=0
+        def page(*args,**kwargs):
+            nonlocal call_count
+            call_count+=1
+            return {'total':call_count+10,'batches':[], 'health':{'supervisor':'Available','observed_unix':time.time()}}
+        with patch('commander_gym.batch_rpc.call',side_effect=page):
+            result,_=observer.batch_metadata({'control_socket':'fixture','actor':'owner'})
+        self.assertFalse(result['metadata_complete']);self.assertIsNone(result['queued']);self.assertIsNone(result['active_count'])
+        self.assertLessEqual(call_count,8)
+
     def panel(self,snapshot):
         captures=self.root/'captures';captures.mkdir(exist_ok=True)
         path=self.root/'live.json';path.write_text(json.dumps(snapshot))

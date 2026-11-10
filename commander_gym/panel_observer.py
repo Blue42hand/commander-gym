@@ -12,7 +12,6 @@ from pathlib import Path
 import re
 import signal
 import socket
-import sqlite3
 import struct
 import subprocess
 import threading
@@ -62,51 +61,57 @@ def service_states(units):
     return {u:values.get(u,'unknown') for u in units}
 
 
-def broker_health(config):
-    # An existing read route supplies supervisor freshness; it cannot admit work.
+def batch_metadata(config):
+    """Bounded pages of the existing owner read API; never opens the control DB.
+
+    Native status supplies authoritative running counts. A changing or oversized
+    metadata inventory is explicitly partial, never a false empty queue.
+    """
     from .batch_rpc import call
-    value=call({'batch_socket':config['control_socket']},config['actor'],'list')['health']
-    return {'available':value.get('supervisor')=='Available' and
-            type(value.get('observed_unix')) in (int,float) and 0<=time.time()-value['observed_unix']<=FRESH_SECONDS,
-            'observed_unix':value.get('observed_unix')}
-
-
-def batch_metadata(path):
-    """Bounded details plus full SQL counts; no history-page limit hides active work."""
-    uri=Path(path).absolute().as_uri()+'?mode=ro'
-    with sqlite3.connect(uri,uri=True,timeout=1) as db:
-        db.execute('PRAGMA query_only=ON')
-        queued=db.execute("SELECT count(*) FROM batches WHERE json_extract(value,'$.state')='Queued' AND json_extract(value,'$.desired')='Running'").fetchone()[0]
-        active_count=db.execute("SELECT count(*) FROM attempts WHERE json_extract(value,'$.state') IN ('Starting','Running','Stopping')").fetchone()[0]
-        recent={s:n for s,n in db.execute("SELECT json_extract(value,'$.state'),count(*) FROM attempts WHERE json_extract(value,'$.ended_unix')>=? GROUP BY json_extract(value,'$.state')",(time.time()-86400,))}
-        def rows(where,parameters=(),limit=8):
-            sql="""SELECT a.value,json_extract(b.value,'$.plan.name'),json_extract(b.value,'$.plan.execution_mode'),
-                          json_extract(b.value,'$.plan.seats'),json_extract(b.value,'$.plan.game_count')
-                   FROM attempts a JOIN batches b ON b.id=a.batch_id WHERE """+where+' ORDER BY a.rowid DESC LIMIT ?'
-            output=[]
-            for raw,name,mode,seats,planned in db.execute(sql,(*parameters,limit)):
-                if len(raw)>131072:raise ValueError('Attempt metadata exceeds limit')
-                a=json.loads(raw)
-                if not ID.fullmatch(a['id']) or not ID.fullmatch(a['batch_id']):raise ValueError('Invalid stored identity')
-                game=a.get('game_id')
-                if game is not None and not ID.fullmatch(game):raise ValueError('Invalid native identity')
-                observation=a.get('observation') or {};lives=observation.get('live_games') or []
-                current=next((g for g in lives[:8] if g.get('gameSessionId')==game),{})
-                progress=a.get('provider_progress') or {};budget=a.get('budget') or {}
-                output.append({'id':a['id'],'batch_id':a['batch_id'],'name':str(name or '')[:100],
-                    'execution_mode':mode if mode in ('paid','fixture') else 'unknown','state':a['state'],
-                    'ordinal':a.get('ordinal'),'planned':planned,'game_id':game,'started_unix':a.get('started_unix') or a.get('created_unix'),
-                    'ended_unix':a.get('ended_unix'),'message':str(a.get('message',''))[:300],
-                    'native_observed_unix':observation.get('observed_unix'),'turn':current.get('turnNumber'),
-                    'decisions':progress.get('decisions'),'provider_state':str(progress.get('state','Not observed'))[:40],
-                    'requests':budget.get('requests'),'estimated_usd':budget.get('estimated_usd'),
-                    'seats':[{'seat':i+1,'deck':str(s.get('deck',{}).get('label','Unknown deck'))[:150]} for i,s in enumerate(json.loads(seats or '[]')[:6])]})
-            return output
-        active=rows("json_extract(a.value,'$.state') IN ('Starting','Running','Stopping')")
-        issues=rows("json_extract(a.value,'$.state') IN ('Failed','Interrupted') AND json_extract(a.value,'$.ended_unix')>=?",(time.time()-86400,))
-    return {'available':True,'queued':queued,'active_count':active_count,'active':active,
-            'details_complete':active_count<=len(active),'recent_totals':{'completed':recent.get('Completed',0),'failed':recent.get('Failed',0)+recent.get('Interrupted',0)},
-            'issues':issues,'observed_unix':time.time()}
+    batches={};total=None;consistent=True;health={};started=time.monotonic()
+    for page in range(8):
+        value=call({'batch_socket':config['control_socket']},config['actor'],'list',data={'offset':page*30})
+        health=value['health'];observed_total=value['total']
+        if total is None:total=observed_total
+        elif total!=observed_total:consistent=False
+        for batch in value['batches']:batches[batch['id']]=batch
+        if len(batches)>=observed_total:break
+        if time.monotonic()-started>=3:break
+    complete=consistent and len(batches)==total
+    active=[];issues=[];queued=0;recent={'completed':0,'failed':0};now=time.time()
+    for batch in batches.values():
+        plan=batch['plan'];queued+=batch['state']=='Queued' and batch['desired']=='Running'
+        for a in batch.get('attempts',[]):
+            is_active=a['state'] in ('Starting','Running','Stopping')
+            ended=a.get('ended_unix');in_window=type(ended) in (int,float) and ended>=now-86400
+            if in_window:
+                recent['completed']+=a['state']=='Completed'
+                recent['failed']+=a['state'] in ('Failed','Interrupted')
+            if not is_active and not (in_window and a['state'] in ('Failed','Interrupted')):continue
+            if not ID.fullmatch(a['id']) or not ID.fullmatch(a['batch_id']):raise ValueError('Invalid stored identity')
+            game=a.get('game_id')
+            if game is not None and not ID.fullmatch(game):raise ValueError('Invalid native identity')
+            observation=a.get('observation') or {};lives=observation.get('live_games') or []
+            current=next((g for g in lives[:8] if g.get('gameSessionId')==game),{})
+            progress=a.get('provider_progress') or {};budget=a.get('budget') or {}
+            item={'id':a['id'],'batch_id':a['batch_id'],'name':str(plan.get('name',''))[:100],
+                'execution_mode':plan.get('execution_mode','unknown'),'state':a['state'],
+                'ordinal':a.get('ordinal'),'planned':plan.get('game_count'),'game_id':game,
+                'started_unix':a.get('started_unix') or a.get('created_unix'),'ended_unix':ended,
+                'message':str(a.get('message',''))[:300],'native_observed_unix':observation.get('observed_unix'),
+                'turn':current.get('turnNumber'),'decisions':progress.get('decisions'),
+                'provider_state':str(progress.get('state','Not observed'))[:40],
+                'requests':budget.get('requests'),'estimated_usd':budget.get('estimated_usd'),
+                'seats':[{'seat':i+1,'deck':str(seat.get('deck',{}).get('label','Unknown deck'))[:150]} for i,seat in enumerate(plan.get('seats',[])[:6])]}
+            (active if is_active else issues).append(item)
+    issues.sort(key=lambda a:a['ended_unix'],reverse=True)
+    result={'available':True,'metadata_complete':complete,'queued':queued if complete else None,
+            'active_count':len(active) if complete else None,'active':active[:8],
+            'details_complete':complete and len(active)<=8,'recent_totals':recent,
+            'issues':issues[:8],'observed_unix':now}
+    broker={'available':health.get('supervisor')=='Available' and type(health.get('observed_unix')) in (int,float)
+            and 0<=now-health['observed_unix']<=FRESH_SECONDS,'observed_unix':health.get('observed_unix')}
+    return result,broker
 
 
 def runtime(config, services, batch=None, broker=None):
@@ -134,17 +139,18 @@ def collect(config):
     units=list(dict.fromkeys(u for r in config['runtimes'] for u in [r['unit'],*r.get('worker_units',[])]))+[config['supervisor_unit'],*config.get('services',[])]
     try:services=service_states(units)
     except (OSError,ValueError,subprocess.SubprocessError):services={u:'unknown' for u in units}
-    try:batch=batch_metadata(config['batch_database'])
-    except (OSError,ValueError,TypeError,KeyError,sqlite3.Error):batch={'available':False,'active':[],'issues':[],'queued':None}
-    try:broker=broker_health(config)
-    except Exception:broker={'available':False,'observed_unix':None}
+    try:batch,broker=batch_metadata(config)
+    except Exception:
+        batch={'available':False,'active':[],'issues':[],'queued':None}
+        broker={'available':False,'observed_unix':None}
     runtimes=[runtime(r,services,batch,broker) for r in config['runtimes']]
     complete=all(r['complete'] for r in runtimes)
     known=sum(r['running'] or 0 for r in runtimes)
     states=[r['state'] for r in runtimes]
     if known:runner='Running'
-    elif 'Starting' in states or batch.get('active_count',0):runner='Starting' if any(a['state']=='Starting' for a in batch['active']) else 'Unknown'
+    elif 'Starting' in states or batch.get('active_count'):runner='Starting' if any(a['state']=='Starting' for a in batch['active']) else 'Unknown'
     elif not complete:runner='Unavailable'
+    elif not batch.get('available') or batch.get('metadata_complete') is False:runner='Unknown'
     elif batch.get('queued'):runner='Queued'
     elif any(s not in ('Idle','Queued') for s in states):runner='Busy' if 'Busy' in states else 'Unavailable'
     elif broker['available']:runner='Idle'
@@ -153,7 +159,8 @@ def collect(config):
             'scope':config['scope'],'coverage_complete':complete,'running':known if complete else None,'running_known':known,
             'runner_state':runner,'runtimes':runtimes,'batch':batch,'supervisor':broker,'services':services,
             'limitations':['Game identities and turns for human games are not exposed by the configured native status socket.',
-                           'Scope covers the configured human-play and managed-batch runtimes; legacy training/gateway sessions are outside it.']}
+                           'Scope covers the configured human-play and managed-batch runtimes; legacy training/gateway sessions are outside it.']+
+                          (['Batch metadata inventory is partial; queue totals are unknown.'] if batch.get('metadata_complete') is False else [])}
 
 
 def main():

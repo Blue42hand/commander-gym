@@ -25,7 +25,7 @@ def main():
     workers=['commander-gym-batch-'+role+'.service' for role in ('native','recorder','provider','fixture')]
     state=Path('/var/lib/commander-gym-observer');state.mkdir(mode=0o700,exist_ok=True)
     config={'output':str(state/'overview.json'),'scope':'Human-play and managed-batch runtimes, including private games',
-            'batch_database':batch['state_directory']+'/batches.sqlite3','control_socket':batch['runtime_directory']+'/panel/control.sock',
+            'control_socket':batch['runtime_directory']+'/panel/control.sock',
             'actor':panel['allowed_logins'][0],'supervisor_unit':'commander-gym-batches.service','services':panel.get('services',[]),
             'runtimes':[{'id':'human','name':'Human play','scope':'Native human-play server · public and private sessions',
                          'unit':'argentum-play.service','socket':human['paths']['lifecycleSocket'],'uid':human['identities']['nativeUid']},
@@ -59,7 +59,7 @@ LockPersonality=yes
 RestrictAddressFamilies=AF_UNIX
 CapabilityBoundingSet=CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH
 NoNewPrivileges=yes
-InaccessiblePaths=-/srv/commander-runtime/.config/commander-gym -/etc/argentum-luna/sidecar.token -/run/credentials
+InaccessiblePaths=-/srv/commander-runtime/.config/commander-gym -/etc/argentum-luna/sidecar.token -/run/credentials -/var/lib/commander-gym-batches
 UMask=0077
 MemoryMax=128M
 TasksMax=16

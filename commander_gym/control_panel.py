@@ -386,7 +386,7 @@ class Panel:
                          running_known=sum(r.get('running') or 0 for r in runtimes))
             if not fresh:value['runner_state']='Stale observation'
             elif not complete and not value['running_known'] and value.get('runner_state')=='Idle':value['runner_state']='Unavailable'
-            if not fresh:value['batch']={'available':False,'active':[],'issues':[],'queued':None}
+            if not fresh:value['batch']={**value.get('batch',{}),'available':False,'queued':None,'recent_totals':{}}
             return value
         except (OSError,ValueError,TypeError,KeyError,AttributeError):return fallback
 
@@ -486,7 +486,7 @@ class Panel:
                 'completed':sum(r.get('lifecycle')=='Completed' and recent(r) for r in ordinary)+totals.get('completed',0),
                 'failed':sum(r.get('lifecycle') in ('Failed','Interrupted') and recent(r) for r in ordinary)+totals.get('failed',0),
                 'triage':sum(self.needs_inspection(r) for r in all_records),
-                'time_scope_partial':any(not r.get('last_recorded_at') for r in ordinary) or (bool(self.config.get('live_snapshot')) and not batch.get('available'))}
+                'time_scope_partial':any(not r.get('last_recorded_at') for r in ordinary) or (bool(self.config.get('live_snapshot')) and (not batch.get('available') or batch.get('metadata_complete') is False))}
         by_game={r.get('game_id'):r for r in all_records if r.get('game_id')}
         for a in batch.get('active',[])+batch.get('issues',[]):
             record=by_game.get(a.get('game_id'))
