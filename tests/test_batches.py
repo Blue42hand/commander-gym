@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from commander_gym.batch_store import BatchStore, BatchConflict
+from commander_gym.batch_store import BatchStore, BatchConflict, game_usage
 from commander_gym.batch_budget import TokenFence, ChoiceGuard, atomic_json, BatchLimitError
 from commander_gym.batch_supervisor import Supervisor, UNITS
 
@@ -220,6 +220,45 @@ class BatchTests(unittest.TestCase):
         self.assertEqual(context['attempt_id'],a['id'])
         self.assertEqual(context['supervisor_termination'],'Owner requested interruption')
         self.assertIsNone(self.store.game_context('missing-game'))
+
+    def test_usage_is_per_game_across_multiple_games_and_restart(self):
+        zero={'estimated_usd':0.0,'requests':0,'reported_tokens':0,'reserved_or_used_tokens':0,
+              'unsettled_requests':0,'unsettled_token_requests':0,'input_tokens':0,'output_tokens':0}
+        first={**zero,'estimated_usd':.1,'requests':2,'reported_tokens':100,'reserved_or_used_tokens':100,
+               'input_tokens':80,'output_tokens':20}
+        second={**first,'estimated_usd':.25,'requests':5,'reported_tokens':175,'reserved_or_used_tokens':175,
+                'input_tokens':140,'output_tokens':35}
+        b=self.start(self.draft());a=self.store.new_attempt(b['id'])
+        a.update(game_id='first',state='Completed',budget_start=zero,budget=first)
+        self.store.finish_attempt(a)
+        a=self.store.new_attempt(b['id'])
+        a.update(game_id='second',state='Completed',budget_start=first,budget=second)
+        self.store.finish_attempt(a)
+        reopened=BatchStore(self.root,self.catalog,self.store.pins)
+        u=reopened.game_context('second')['game_usage']
+        self.assertEqual(u['reported_tokens'],75);self.assertEqual(u['requests'],3)
+        self.assertEqual(u['input_tokens'],60);self.assertEqual(u['output_tokens'],15)
+        self.assertAlmostEqual(u['estimated_usd'],.15)
+        self.assertEqual(reopened.get(b['id'])['attempts'][1]['budget']['reported_tokens'],175)
+        self.assertEqual(reopened.game_context('first')['game_usage']['reported_tokens'],100)
+
+    def test_legacy_first_game_attribution_but_later_game_not_invented(self):
+        end={'estimated_usd':.23,'requests':52,'reported_tokens':904483,'reserved_or_used_tokens':904483,
+             'unsettled_requests':1,'unsettled_token_requests':0}
+        u=game_usage({'ordinal':1,'budget':end})
+        self.assertEqual(u['state'],'Available');self.assertEqual(u['reported_tokens'],904483)
+        self.assertEqual(u['unsettled_requests'],1);self.assertIsNone(u['input_tokens'])
+        self.assertEqual(game_usage({'ordinal':2,'budget':end})['state'],'Unavailable')
+        self.assertEqual(game_usage({'ordinal':1})['state'],'Unavailable')
+
+    def test_missing_or_regressing_usage_remains_unknown(self):
+        a={'ordinal':2,'budget_start':{'reported_tokens':100,'estimated_usd':.5},
+           'budget':{'reported_tokens':90,'estimated_usd':.2}}
+        u=game_usage(a)
+        self.assertEqual(u['state'],'Partial')
+        self.assertIsNone(u['reported_tokens']);self.assertIsNone(u['estimated_usd'])
+        a['budget_start']={'state':'Unavailable'}
+        self.assertEqual(game_usage(a)['state'],'Unavailable')
 
     def test_supervisor_cannot_address_human_units(self):
         supervisor=object.__new__(Supervisor)

@@ -23,6 +23,38 @@ def digest(value):
     return hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':'),allow_nan=False).encode()).hexdigest()
 
 
+def game_usage(attempt):
+    """Attribute batch-ledger deltas without rewriting historical observations."""
+    unavailable = {'state':'Unavailable','scope':'game','reason':'No usable usage snapshot was saved for this game'}
+    end = attempt.get('budget')
+    if not isinstance(end, dict): return unavailable
+    start = attempt.get('budget_start')
+    if start is None:
+        if attempt.get('ordinal') != 1:
+            return {**unavailable,'reason':'This older game has no saved starting balance; batch totals cannot establish its usage'}
+        start = {}
+        attribution = 'First game in batch; ledger started at zero'
+    elif not isinstance(start, dict) or start.get('state') == 'Unavailable':
+        return unavailable
+    else:
+        attribution = 'Difference from saved pre-game balances'
+    keys = ('estimated_usd','requests','reported_tokens','reserved_or_used_tokens',
+            'unsettled_requests','unsettled_token_requests','input_tokens','output_tokens')
+    result = {'state':'Available','scope':'game','attribution':attribution,
+              'observed_unix':end.get('observed_unix')}
+    for key in keys:
+        value, baseline = end.get(key), start.get(key, 0) if not start else start.get(key)
+        valid = (lambda x: type(x) in (int,float) and math.isfinite(x) and x >= 0) if key == 'estimated_usd' else (lambda x: type(x) is int and x >= 0)
+        if not valid(value) or not valid(baseline):
+            result[key] = None
+            continue
+        delta = value - baseline
+        result[key] = max(0,delta) if delta >= (-1e-9 if key == 'estimated_usd' else 0) else None
+    if any(result[k] is None for k in keys[:6]):
+        result.update(state='Partial',reason='Some saved counters are missing or cannot be attributed safely')
+    return result
+
+
 class BatchStore:
     def __init__(self, directory, catalog, pins):
         self.root = Path(directory)
@@ -164,6 +196,7 @@ class BatchStore:
             batch['attempts']=[json.loads(r['value']) for r in db.execute('SELECT value FROM attempts WHERE batch_id=? ORDER BY rowid',(batch_id,))]
             batch['events']=[json.loads(r['value']) for r in db.execute('SELECT value FROM events WHERE batch_id=? ORDER BY id DESC LIMIT 50',(batch_id,))]
         attempts=batch['attempts']
+        for attempt in attempts: attempt['game_usage'] = game_usage(attempt)
         batch['counts']={state:sum(a['state']==state for a in attempts) for state in ('Starting','Running','Completed','Failed','Interrupted','Needs reconciliation')}
         batch['counts']['unstarted']=max(0,batch['plan']['game_count']-len(attempts))
         return batch
@@ -250,4 +283,5 @@ class BatchStore:
             attempt=json.loads(row['value'])
             batch=self._get(db,attempt['batch_id'])
         return {'batch_id':batch['id'],'attempt_id':attempt['id'],'state':attempt['state'],
-                'supervisor_termination':attempt.get('supervisor_termination'),'execution_mode':batch['plan']['execution_mode']}
+                'supervisor_termination':attempt.get('supervisor_termination'),'execution_mode':batch['plan']['execution_mode'],
+                'game_usage':game_usage(attempt)}

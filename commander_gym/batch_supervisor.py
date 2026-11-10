@@ -187,13 +187,17 @@ class Supervisor:
         try:
             money=json.loads((root/'openai.json').read_text());tokens=json.loads((root/'tokens.json').read_text())
             return {'estimated_usd':money['estimatedUsd'],'requests':money['requests'],'unsettled_requests':money['unsettledRequests'],
-                    'reported_tokens':tokens['reported_tokens'],'reserved_or_used_tokens':tokens['reserved_or_used'],'unsettled_token_requests':tokens['unsettled']}
+                    'reported_tokens':tokens['reported_tokens'],'reserved_or_used_tokens':tokens['reserved_or_used'],'unsettled_token_requests':tokens['unsettled'],
+                    'input_tokens':money.get('inputTokens'),'output_tokens':money.get('outputTokens'),'observed_unix':time.time()}
         except (OSError,ValueError,KeyError):return {'state':'Unavailable'}
 
     def run_attempt(self,batch,attempt):
         outcome='Failed';message='Runtime preflight failed';native_terminal=None
         try:
             role=self.prepare(batch,attempt)
+            # Persist attribution before a provider can dispatch its first request.
+            attempt['budget_start']=self.budget_snapshot(batch)
+            self.store.record_attempt(attempt)
             self.unit('start',UNITS[3]); self.unit('start',UNITS[2])
             self.unit('start',UNITS[1] if batch['plan']['execution_mode']=='fixture' else UNITS[0])
             attempt['unit_invocations']={u:self.unit('show',u) for u in UNITS};self.store.record_attempt(attempt)
