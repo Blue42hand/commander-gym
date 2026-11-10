@@ -78,6 +78,20 @@ class ControlPanelTests(unittest.TestCase):
         self.assertEqual(malformed['lifecycle'],'Unknown')
         self.assertEqual(self.panel.coverage['state'],'complete')
 
+    def test_readable_action_routes_are_authorized_bounded_and_plaintext(self):
+        self.fixture();record=self.indexed()[0];ref=record['ref']
+        for suffix in ('actions','record'):
+            self.assertEqual(self.request('/gym/api/games/'+ref+'/'+suffix)[0],403)
+        headers={'Tailscale-User-Login':'owner@example.test'}
+        code,page=self.request('/gym/api/games/'+ref+'/actions?routine=1',headers=headers)
+        self.assertEqual(code,200);self.assertLessEqual(len(page['actions']),50)
+        self.assertTrue(page['caught_up']);self.assertEqual(page['actions'][0]['anchor'],'event:1')
+        code,body=self.request('/gym/api/games/'+ref+'/record',headers=headers)
+        self.assertEqual(code,200);self.assertIn(b'Commander Gym',body);self.assertIn(b'event:1',body)
+        self.assertNotIn(b'<img',body)
+        self.assertEqual(self.request('/gym/actions.js',headers=headers)[0],200)
+        self.assertEqual(self.request('/gym/api/games/'+ref+'/actions?before=bad',headers=headers)[0],400)
+
     def test_completed_failed_interrupted_and_unknown_result_separate(self):
         self.fixture('a','native_terminal');self.fixture('b','failed');self.fixture('c','session_closed')
         records=self.indexed()

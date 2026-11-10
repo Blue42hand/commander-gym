@@ -31,6 +31,7 @@ from .record_codec import decode_record, physical_lines
 from .game_journal import _safe
 from .panel_worker import metadata
 from . import batch_rpc
+from .panel_actions import ActionIndex
 
 STATES = ('Unreviewed', 'Needs follow-up', 'Investigating', 'Reviewed')
 TAGS = ('Engine or rules issue', 'Pilot decision', 'Timeout or stall', 'Recorder or infrastructure',
@@ -92,6 +93,7 @@ class Panel:
         self.state.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.indexdir = self.state / 'index'
         self.indexdir.mkdir(mode=0o700, exist_ok=True)
+        self.actions = ActionIndex(self.indexdir)
         self.database = self.state / 'reviews.sqlite3'
         self.lock = threading.RLock()
         self.records = {}
@@ -575,6 +577,56 @@ class Panel:
                 'scope': 'At most 200 source rows, 20 results and 128 KiB per page; search applies to displayed excerpts',
                 'verification': record['verification'], 'source_revision': record['source_revision']}
 
+    def action_page(self, ref, query):
+        record=self.get(ref)
+        directory=self.locations.get(ref)
+        if directory is None or directory.is_symlink(): raise ValueError('capture unavailable')
+        state=self.actions.advance(ref,directory,record.get('participants',[]),sanitized)
+        def number(name):
+            raw=query.get(name,[''])[0]
+            if raw=='':return None
+            value=int(raw)
+            if not 0<=value<=2**53-1:raise ValueError('invalid action position')
+            return value
+        generation=query.get('generation',[''])[0]
+        reset=bool(generation and generation!=state['generation'])
+        rows,count=self.actions.page(ref,before=None if reset else number('before'),after=None if reset else number('after'),
+            first=query.get('first',[''])[0]=='1',routine=query.get('routine',[''])[0]=='1',turn=number('turn'))
+        return {'actions':rows,'generation':state['generation'],'reset':reset,'indexed_actions':count,
+            'caught_up':state['caught_up'],'diagnostic':state['diagnostic'],'observed_unix':state['observed_unix'],
+            'source_rows':state['source_rows'],'scope':'Recorded native actions and selected events; pilot proposals are not executed moves. At most 50 entries per page.',
+            'coverage':'Journal prefix processed; capture completeness and native outcome are separate.'}
+
+    def readable_record(self, ref, record=None):
+        record=record if record is not None else self.get(ref)
+        state=self.actions.advance(ref,self.locations[ref],record.get('participants',[]),sanitized)
+        rows,count=self.actions.page(ref,first=True,routine=True,limit=2000)
+        lines=['Commander Gym — readable game record', 'Game: '+str(record.get('game_id') or 'Unknown'),
+            'Run: '+str(record.get('run_id') or 'Unknown'),'Capture: '+ref,
+            'Recorded outcome: '+str(record.get('result') or 'Unknown'),
+            'Lifecycle: '+str(record.get('lifecycle') or 'Unknown'),
+            'Supervisor termination: '+str(record.get('supervisor_termination') or 'Not recorded'),
+            'Recording verification: '+str(record.get('verification') or 'Unavailable'),
+            'Source revision: '+str(record.get('source_revision') or 'Unavailable'),
+            'Recorded engine: '+str((record.get('pins') or {}).get('engine') or 'Unknown'),
+            'Recorded Gym: '+str((record.get('pins') or {}).get('gym') or 'Unknown'),
+            'Journal prefix: '+str(state['source_rows'])+' source rows; '+str(count)+' readable entries.',
+            'Coverage: '+('Caught up to the observed journal prefix; this does not prove capture completeness.' if state['caught_up'] else 'PARTIAL — action indexing is catching up or stopped. Reopen the game to continue.'),
+            'Diagnostic: '+str(state['diagnostic'] or 'None'),
+            'This is a deterministic reading of recorded evidence, not a reconstructed replay or a rules verdict.',
+            'Private administrative evidence; do not include in pilot inputs.','', 'Participants:']
+        for p in record.get('participants',[]):
+            lines.append('Seat '+str(p.get('seat'))+': '+str(p.get('name') or p.get('id') or 'Unknown')+' — '+str(p.get('deck') or 'Unknown deck'))
+        lines+=['','Recorded actions:']
+        for row in rows:
+            lines.append(str(row.get('recorded_at') or 'Time unknown')+' | Turn '+str(row.get('turn') if row.get('turn') is not None else '?')+
+                ' | '+row['text']+' [event:'+str(row['sequence'])+'; SHA256 '+row['source_sha256']+']')
+        if len(rows)<count:lines.append('\nTRUNCATED: export includes the first 2,000 indexed entries. Continue reading in the paginated game timeline.')
+        if not rows:lines.append('No readable native actions in the currently indexed prefix.')
+        result='\n'.join(str(sanitized(line)) for line in lines)
+        if len(result.encode())>1024*1024:result=result.encode()[:1024*1024].decode('utf-8',errors='ignore')+'\nTRUNCATED: 1 MiB export limit.'
+        return result
+
     def artifact(self, ref, name):
         record = self.get(ref)
         # Never allow arbitrary host paths, even from unverified manifests.
@@ -631,6 +683,19 @@ class Handler(BaseHTTPRequestHandler):
             raise KeyError('unknown route')
         return path[len(prefix):], parse_qs(urlsplit(self.path).query)
 
+    def game_record(self,ref):
+        panel=self.server.panel
+        record=panel.get(ref)
+        if panel.config.get('batch_socket') and record.get('game_id'):
+            try:
+                context=batch_rpc.call(panel.config,self.headers['Tailscale-User-Login'],'game_context',data={'game_id':record['game_id']})
+                if context and panel.locations[ref].parent.name==context['attempt_id']:
+                    record['managed_batch']=context
+                    record['supervisor_termination']=context['supervisor_termination']
+            except batch_rpc.BatchRPCError:
+                record['batch_context_availability']='Unavailable'
+        return record
+
     def do_GET(self):
         if not self.authorized():
             return
@@ -657,16 +722,12 @@ class Handler(BaseHTTPRequestHandler):
                 parts = path.strip('/').split('/')
                 ref = parts[2]
                 if len(parts) == 3:
-                    record=panel.get(ref)
-                    if panel.config.get('batch_socket') and record.get('game_id'):
-                        try:
-                            context=batch_rpc.call(panel.config,self.headers['Tailscale-User-Login'],'game_context',data={'game_id':record['game_id']})
-                            if context and panel.locations[ref].parent.name==context['attempt_id']:
-                                record['managed_batch']=context
-                                record['supervisor_termination']=context['supervisor_termination']
-                        except batch_rpc.BatchRPCError:
-                            record['batch_context_availability']='Unavailable'
+                    record=self.game_record(ref)
                     self.response(200, {**record, 'review_history':panel.changes(ref)})
+                elif parts[3] == 'actions' and len(parts) == 4:
+                    self.response(200,panel.action_page(ref,query))
+                elif parts[3] == 'record' and len(parts) == 4:
+                    self.response(200,panel.readable_record(ref,self.game_record(ref)),'text/plain; charset=utf-8')
                 elif parts[3] == 'evidence' and len(parts) == 4:
                     self.response(200, panel.evidence(ref, query.get('cursor',[''])[0], query.get('q',[''])[0][:200], query.get('anchor',[None])[0]))
                 elif parts[3] == 'artifact' and len(parts) == 4:
@@ -675,7 +736,7 @@ class Handler(BaseHTTPRequestHandler):
                     raise KeyError('unknown route')
             elif path in ('/', '/history', '/triage', '/batches', '/batches/new') or re.fullmatch(r'/(?:games/capture-[a-f0-9]{24}|batches/batch-[a-f0-9]{32})', path):
                 self.response(200, (STATIC/'index.html').read_bytes(), 'text/html; charset=utf-8')
-            elif path in ('/app.js','/batches.js','/style.css') or re.fullmatch(r'/fonts/[a-z0-9-]+\.(?:woff2|ttf)',path):
+            elif path in ('/app.js','/actions.js','/batches.js','/style.css') or re.fullmatch(r'/fonts/[a-z0-9-]+\.(?:woff2|ttf)',path):
                 file = STATIC / path.lstrip('/')
                 mime = 'text/javascript; charset=utf-8' if path.endswith('.js') else 'text/css; charset=utf-8' if path.endswith('.css') else 'font/ttf' if path.endswith('.ttf') else 'font/woff2'
                 self.response(200, file.read_bytes(), mime)

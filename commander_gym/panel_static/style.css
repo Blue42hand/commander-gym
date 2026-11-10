@@ -57,3 +57,13 @@
 .batch-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.batch-fields label{display:flex;flex-direction:column;gap:8px}.batch-actions{display:flex;flex-wrap:wrap;gap:10px;padding:20px}.batch-plan li{padding:8px;overflow-wrap:anywhere}#batch-feedback{padding:0 20px 20px;color:#965125}.batch-plan .mono{overflow-wrap:anywhere}table td{max-width:420px}@media(max-width:700px){.batch-fields{grid-template-columns:1fr}.batch-actions .btn{width:100%}}
 @media(max-width:700px){nav{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px}nav a{justify-content:center;gap:5px;padding:12px 4px;min-width:0;white-space:nowrap}nav a b{margin-left:0}}
 .live-runtime{padding:20px 24px;border-bottom:1px solid var(--line);min-width:0}.live-runtime:last-child{border-bottom:0}.live-runtime .game-top{gap:12px;flex-wrap:wrap}.live-runtime p{line-height:1.7;overflow-wrap:anywhere}.live-runtime .deck-grid{margin:18px 0}.runtime-metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:16px 0}.runtime-metrics>div{display:flex;flex-direction:column;gap:7px;min-width:0}.runtime-metrics strong{font-size:14px;overflow-wrap:anywhere}.runtime-metrics .muted{font-size:10px}.live-runtime .game-bottom{gap:10px;flex-wrap:wrap}.live-runtime .game-bottom>span{max-width:100%;overflow-wrap:anywhere}#overview-services summary{cursor:pointer}#live-coverage{line-height:1.8}@media(max-width:700px){.live-runtime{padding:18px}.live-runtime .deck-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.runtime-metrics{gap:8px}.runtime-metrics strong{font-size:12px}}
+/* Recorded action timeline: compact on desktop, stacked on phones. */
+.action-controls{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:12px 18px;border-bottom:1px solid var(--border,#e4e7e1)}
+.action-controls label{display:flex;align-items:center;gap:6px;font-size:12px;color:#657064}
+.action-controls input[type=number]{width:75px;padding:6px;border:1px solid #dce0d8;border-radius:6px}
+.action-entry{display:grid;grid-template-columns:165px 1fr;gap:12px;padding:13px 18px;border-bottom:1px solid #eef0eb;overflow-wrap:anywhere}
+.action-entry p{margin:0 0 5px;line-height:1.5;font-size:13px}
+.action-entry a{font-size:11px;color:#527343}
+.action-stamp{font-size:11px;color:#71806d;line-height:1.65}
+.action-error{background:#fff7ee}
+@media(max-width:700px){.action-entry{grid-template-columns:1fr;gap:5px}.action-controls{padding:12px}.action-entry{padding:12px}}
