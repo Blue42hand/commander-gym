@@ -45,7 +45,7 @@ document.addEventListener('click',async event=>{
   return;
  }
  const evidence=event.target.closest('[data-action-evidence]');
- if(evidence){event.preventDefault();const sequence=evidence.dataset.actionEvidence;await loadEvidence('',sequence);$('#review-anchor').value='event:'+sequence;dirty=true;history.replaceState({},'',location.pathname+location.search+'#event-'+sequence);$('#evidence').scrollIntoView({block:'start'});return;}
+ if(evidence){event.preventDefault();const sequence=evidence.dataset.actionEvidence,ref=actionFeed.ref;$('#review-anchor').value='event:'+sequence;dirty=true;history.replaceState({},'',location.pathname+location.search+'#event-'+sequence);await loadEvidence('',sequence);if(current?.ref===ref)$('#evidence')?.scrollIntoView({block:'start'});return;}
  const button=event.target.closest('[data-feed]');if(!button)return;
  const op=button.dataset.feed;
  if(op==='pause'){actionFeed.paused=!actionFeed.paused;button.textContent=actionFeed.paused?'Resume updates':'Pause updates';$('#action-state').textContent=actionFeed.paused?'Updates paused':'Following latest recorded actions';if(!actionFeed.paused)await loadActions('live');return;}
