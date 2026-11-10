@@ -1,6 +1,7 @@
 """Resource-limited, read-only journal inspection for the administrative panel."""
 from __future__ import annotations
 import json
+import re
 import resource
 import sys
 import time
@@ -97,7 +98,11 @@ def metadata(first: dict) -> dict:
         participants.append({'seat': seats.get(p.get('playerId'), i), 'id': p.get('playerId'),
                              'name': p.get('name'), 'deck': p.get('commanderCardName') or deck.get('name') or deck.get('commander') or 'Deck name not recorded'})
     participants.sort(key=lambda p: p['seat'] if isinstance(p['seat'], int) else 999)
-    return {'run_id': first.get('run_id'), 'game_id': first.get('payload', {}).get('game_id'),
+    gym_config=config.get('gym',config) if isinstance(config,dict) else {}
+    batch_ref=None
+    if isinstance(gym_config,dict) and re.fullmatch(r'batch-[a-f0-9]{32}',str(gym_config.get('batchId',''))) and re.fullmatch(r'attempt-[a-f0-9]{32}',str(gym_config.get('attemptId',''))):
+        batch_ref={'batch_id':gym_config['batchId'],'attempt_id':gym_config['attemptId']}
+    return {'run_id': first.get('run_id'), 'game_id': first.get('payload', {}).get('game_id'),'batch_ref':batch_ref,
             'started_at': first.get('recorded_at'), 'participants': participants,
             'pins': {k: pins.get(k) for k in ('engine', 'gym', 'models', 'bindings', 'rng')},
             'config_digest': first.get('payload', {}).get('pin_digest')}

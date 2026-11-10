@@ -107,6 +107,7 @@ class Panel:
                 id INTEGER PRIMARY KEY, ref TEXT NOT NULL, version INTEGER NOT NULL, value TEXT NOT NULL);
                 CREATE INDEX IF NOT EXISTS change_ref ON changes(ref, id);''')
         self.key = secrets.token_bytes(32)
+        self.batch_timing_cache = {}
 
     @contextmanager
     def db(self):
@@ -274,6 +275,7 @@ class Panel:
                 try:
                     saved = read_json(self.indexdir / (ref + '.json'))
                     if saved['source_revision'] == revision and saved.get('index_version') == 2 and saved.get('verification') not in ('pending', 'unavailable'):
+                        saved['batch_ref']=record.get('batch_ref')
                         record = saved
                 except (OSError, ValueError, KeyError, TypeError):
                     pass
@@ -306,6 +308,7 @@ class Panel:
                 try:
                     saved = read_json(cache)
                     if saved['source_revision'] == revision and saved.get('index_version') == 2 and saved.get('verification') not in ('pending', 'unavailable'):
+                        saved['batch_ref']=record.get('batch_ref')
                         with self.lock:
                             self.records[ref] = saved
                         continue
@@ -440,7 +443,47 @@ class Panel:
         records.sort(key=lambda r:r.get('started_at') or '',reverse=True)
         return records
 
-    def history(self, query):
+    def attach_wall_time(self, record, actor, deadline=None):
+        record.update(wall_time=record.get('duration'),wall_time_label='Recorded capture span' if record.get('duration') is not None else 'Timestamps unavailable')
+        batch_ref=record.get('batch_ref')
+        if not actor or not self.config.get('batch_socket') or not isinstance(batch_ref,dict):return record
+        batch_id,attempt_id=batch_ref.get('batch_id'),batch_ref.get('attempt_id')
+        if not re.fullmatch(r'batch-[a-f0-9]{32}',str(batch_id)) or not re.fullmatch(r'attempt-[a-f0-9]{32}',str(attempt_id)):return record
+        location=self.locations.get(record['ref'])
+        if location is None or location.parent.name!=attempt_id:return record
+        key=(actor,batch_id)
+        with self.lock:cached=self.batch_timing_cache.get(key)
+        if cached is None or time.monotonic()-cached[0]>5:
+            if deadline is not None and time.monotonic()>deadline:
+                record['wall_time_label']='Batch timing read pending';return record
+            try:
+                batch=batch_rpc.call(self.config,actor,'get',batch_id=batch_id,timeout=.5)
+                timings={a['id']:{k:a.get(k) for k in ('game_id','started_unix','ended_unix','state')} for a in batch['attempts'][:50]}
+            except (batch_rpc.BatchRPCError,KeyError,TypeError):timings={}
+            cached=(time.monotonic(),timings)
+            with self.lock:
+                if len(self.batch_timing_cache)>=128:self.batch_timing_cache.clear()
+                self.batch_timing_cache[key]=cached
+        attempt=cached[1].get(attempt_id)
+        if not attempt or attempt.get('game_id')!=record.get('game_id'):
+            record['wall_time_label']='Batch game timestamps unavailable';return record
+        start,end=attempt.get('started_unix'),attempt.get('ended_unix')
+        valid=lambda x:type(x) in (int,float) and math.isfinite(x) and x>0
+        if not valid(start):record['wall_time_label']='No recorded game start';return record
+        if valid(end) and end>=start:
+            record.update(wall_time=end-start,wall_time_label='Game start to recorded end',wall_time_state='final')
+        elif end is None and attempt.get('state')=='Running':
+            # A persisted Running row is not sufficient evidence of fresh work.
+            record.update(wall_time=None,wall_time_label='End not yet recorded')
+            live=self.live_snapshot()
+            current=next((a for a in live.get('batch',{}).get('active',[]) if a.get('id')==attempt_id and a.get('game_id')==record.get('game_id')),None)
+            observed=current.get('native_observed_unix') if current else None
+            if live.get('fresh') and valid(observed) and 0<=time.time()-observed<=20 and start<=time.time():
+                record.update(wall_time=time.time()-start,wall_time_label='Elapsed · fresh live observation',wall_time_state='live')
+        else:record.update(wall_time=None,wall_time_label='Missing or inconsistent game timestamps')
+        return record
+
+    def history(self, query, actor=None):
         records = self.history_records()
         text = query.get('q', [''])[0].lower()[:200]
         for key, field in [('lifecycle', 'lifecycle'), ('recording', 'verification')]:
@@ -461,7 +504,9 @@ class Panel:
             records.sort(key=lambda r: 0 if r.get('verification') in ('damaged', 'unavailable') else 1 if r.get('verification') == 'unsealed' or r.get('lifecycle') in ('Failed', 'Interrupted') else 2)
         limit = min(100, max(1, int(query.get('limit', ['20'])[0])))
         offset = min(100000, max(0, int(query.get('offset', ['0'])[0])))
-        return {'records': records[offset:offset + limit], 'total': len(records), 'offset': offset, 'limit': limit, 'coverage': self.coverage}
+        selected=records[offset:offset+limit];deadline=time.monotonic()+1
+        for record in selected:self.attach_wall_time(record,actor,deadline)
+        return {'records': selected, 'total': len(records), 'offset': offset, 'limit': limit, 'coverage': self.coverage}
 
     @staticmethod
     def needs_inspection(r):
@@ -694,7 +739,7 @@ class Handler(BaseHTTPRequestHandler):
                     record['supervisor_termination']=context['supervisor_termination']
             except batch_rpc.BatchRPCError:
                 record['batch_context_availability']='Unavailable'
-        return record
+        return panel.attach_wall_time(record,self.headers['Tailscale-User-Login'])
 
     def do_GET(self):
         if not self.authorized():
@@ -710,7 +755,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.response(200, batch_rpc.call(panel.config, self.headers['Tailscale-User-Login'], op,
                     batch_id=tail if op == 'get' else None, data={'offset':int(query.get('offset',['0'])[0])}))
             elif path == '/api/history':
-                self.response(200, panel.history(query))
+                self.response(200, panel.history(query,self.headers['Tailscale-User-Login']))
             elif path == '/api/session':
                 # Per-actor CSRF token; no cookies or long-lived client credential.
                 actor = self.headers['Tailscale-User-Login']

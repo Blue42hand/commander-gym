@@ -92,6 +92,48 @@ class ControlPanelTests(unittest.TestCase):
         self.assertEqual(self.request('/gym/actions.js',headers=headers)[0],200)
         self.assertEqual(self.request('/gym/api/games/'+ref+'/actions?before=bad',headers=headers)[0],400)
 
+    def test_interrupted_game_wall_time_uses_batch_timestamps_without_seal(self):
+        self.fixture(closed=False);r=self.indexed()[0]
+        batch='batch-'+'a'*32;attempt='attempt-'+'b'*32
+        r['batch_ref']={'batch_id':batch,'attempt_id':attempt}
+        self.panel.records[r['ref']]=r
+        self.panel.locations[r['ref']]=self.root/attempt/r['game_id']
+        self.panel.config['batch_socket']='/test-only'
+        value={'attempts':[{'id':attempt,'game_id':r['game_id'],'started_unix':1000,'ended_unix':1461.2,'state':'Interrupted'}]}
+        with patch('commander_gym.batch_rpc.call',return_value=value) as rpc:
+            result=self.panel.history({},'owner@example.test')['records'][0]
+            self.assertAlmostEqual(result['wall_time'],461.2)
+            self.assertIsNone(result['duration']);self.assertEqual(result['wall_time_state'],'final')
+            self.assertEqual(result['lifecycle'],'Unknown')
+            self.panel.history({},'owner@example.test');self.assertEqual(rpc.call_count,1)
+        with patch('commander_gym.batch_rpc.call',return_value=value) as rpc:
+            self.panel.locations[r['ref']]=self.root/'different-attempt'/r['game_id']
+            self.assertIsNone(self.panel.history({},'owner@example.test')['records'][0]['wall_time'])
+            rpc.assert_not_called()
+
+    def test_bad_game_timestamps_never_become_zero_wall_time(self):
+        r={'ref':'r','game_id':'g','duration':None,'batch_ref':{'batch_id':'batch-'+'a'*32,'attempt_id':'attempt-'+'b'*32}}
+        self.panel.locations['r']=self.root/r['batch_ref']['attempt_id']/'g';self.panel.config['batch_socket']='/test'
+        for start,end in ((None,1200),(2000,1000),(1000,float('nan')),(True,1200)):
+            self.panel.batch_timing_cache.clear()
+            with patch('commander_gym.batch_rpc.call',return_value={'attempts':[{'id':r['batch_ref']['attempt_id'],
+                'game_id':'g','started_unix':start,'ended_unix':end,'state':'Interrupted'}]}):
+                self.assertIsNone(self.panel.attach_wall_time(dict(r),'owner@example.test')['wall_time'])
+
+    def test_batch_reference_survives_old_cache_and_fresh_live_elapsed_is_qualified(self):
+        from commander_gym.panel_worker import metadata
+        batch='batch-'+'a'*32;attempt='attempt-'+'b'*32
+        result=metadata({'payload':{'pins':{'config':{'gym':{'batchId':batch,'attemptId':attempt}}}}})
+        self.assertEqual(result['batch_ref'],{'batch_id':batch,'attempt_id':attempt})
+        r={'ref':'r','game_id':'g','duration':None,'batch_ref':result['batch_ref']}
+        self.panel.locations['r']=self.root/attempt/'g';self.panel.config['batch_socket']='/test'
+        with patch('commander_gym.batch_rpc.call',return_value={'attempts':[{'id':attempt,'game_id':'g','started_unix':time.time()-30,'state':'Running'}]}):
+            with patch.object(self.panel,'live_snapshot',return_value={'fresh':True,'batch':{'active':[{'id':attempt,'game_id':'g','native_observed_unix':time.time()}]}}):
+                value=self.panel.attach_wall_time(dict(r),'owner@example.test')
+                self.assertAlmostEqual(value['wall_time'],30,delta=1);self.assertEqual(value['wall_time_state'],'live')
+            with patch.object(self.panel,'live_snapshot',return_value={'fresh':False}):
+                self.assertIsNone(self.panel.attach_wall_time(dict(r),'owner@example.test')['wall_time'])
+
     def test_completed_failed_interrupted_and_unknown_result_separate(self):
         self.fixture('a','native_terminal');self.fixture('b','failed');self.fixture('c','session_closed')
         records=self.indexed()
