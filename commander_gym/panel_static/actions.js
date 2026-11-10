@@ -38,6 +38,12 @@ async function pollActions(){
  const position=window.scrollY;await loadActions('live');window.scrollTo(0,position);
 }
 document.addEventListener('click',async event=>{
+ const download=event.target.closest('#download-record');
+ if(download){
+  event.preventDefault();if(download.dataset.busy)return;download.dataset.busy='1';
+  try{const response=await fetch(download.href);if(!response.ok)throw Error('Readable record unavailable; retry after indexing catches up.');const blob=await response.blob();if(blob.size>2*1024*1024)throw Error('Readable record exceeds the download limit.');const link=document.createElement('a');link.href=URL.createObjectURL(blob);link.download=download.download;link.click();setTimeout(()=>URL.revokeObjectURL(link.href),1000);toast('Readable game record downloaded');}catch(error){toast(error.message);}finally{delete download.dataset.busy;}
+  return;
+ }
  const evidence=event.target.closest('[data-action-evidence]');
  if(evidence){event.preventDefault();const sequence=evidence.dataset.actionEvidence;await loadEvidence('',sequence);$('#review-anchor').value='event:'+sequence;dirty=true;history.replaceState({},'',location.pathname+location.search+'#event-'+sequence);$('#evidence').scrollIntoView({block:'start'});return;}
  const button=event.target.closest('[data-feed]');if(!button)return;
