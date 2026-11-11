@@ -65,12 +65,15 @@ class LMStudioPilotTests(unittest.TestCase):
     def test_mulligan_prompt_explains_card_cost_without_changing_native_choices(self):
         obs=action_observation()
         obs['callbackKind']='decideMulligan'
+        obs['legalActions'][0]['kind']='KeepHand'
         obs['state']={'mulligan':{'hand':['a','b'],'mulliganCount':3,'cardsToPutOnBottom':2}}
         transport=FakeTransport()
         LMStudioPilot(config(),transport=transport).choose(obs)
         request=transport.calls[1][1]
         self.assertIn('London mulligan',request['messages'][0]['content'])
         self.assertIn('After two mulligans',request['messages'][0]['content'])
+        self.assertIn('You have already mulliganed 3 times',request['messages'][0]['content'])
+        self.assertIn('argentum-action-v1:pass',request['messages'][0]['content'])
         sent=json.loads(request['messages'][1]['content'])
         self.assertEqual(sent['legalActions'],[{k:v for k,v in action.items() if k!='actionId'} for action in obs['legalActions']])
         self.assertEqual(sent['state'],obs['state'])

@@ -200,6 +200,18 @@ class LMStudioPilot:
                 "mulligan cannot improve retained hand size. Return the exact offered KeepHand "
                 "or TakeMulligan semanticId using the required nested choice format."
             )
+            mulligan = observation.get('state', {}).get('mulligan', {})
+            count = mulligan.get('mulliganCount')
+            keep = next((a for a in observation.get('legalActions', [])
+                         if a.get('kind') == 'KeepHand'), None)
+            if type(count) is int and count >= 2 and keep is not None:
+                instructions += (
+                    f"\nYou have already mulliganed {count} times. Preserve the remaining cards: "
+                    "choose the offered KeepHand action now. Its exact response is "
+                    + json.dumps({'channel': 'action', 'choice': {
+                        'semanticId': keep['semanticId'], 'params': {}}})
+                    + ". Do not confuse this identifier with TakeMulligan."
+                )
         if schema_format["name"] in {"commander_gym_native_action", "commander_gym_native_mixed_payment"}:
             instructions += "\nUse the schema's nested choice object containing semanticId and params."
         if schema_format["name"] == "commander_gym_native_mixed_payment":
