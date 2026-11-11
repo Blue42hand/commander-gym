@@ -18,6 +18,7 @@ from typing import Any, Mapping
 from .lmstudio_provider import LMStudioConfig, LMStudioError, LMStudioTransport, require_loaded_model
 from .local_callback_context import current_cancel
 from .observation_projection import compact_inference_observation
+from .inference_tables import FORMAT as SHARED_VIEW_FORMAT, INSTRUCTIONS as SHARED_VIEW_INSTRUCTIONS
 from .openai_responses_pilot import (
     OpenAIResponsesPilot, OpenAIResponsesPilotError, _DEFAULT_INSTRUCTIONS,
     _native_action_format, _native_decision_format, _without_live_routing,
@@ -96,6 +97,9 @@ def _cache_ordered_observation(value):
     def first(mapping, keys):
         return {**{key: mapping[key] for key in keys if key in mapping},
                 **{key: item for key, item in mapping.items() if key not in keys}}
+    if value.get('format') == SHARED_VIEW_FORMAT and isinstance(value.get('view'), dict):
+        value['view'] = _cache_ordered_observation(value['view'])
+        return first(value, ['format', 'view'])
     wrapped = isinstance(value.get('observation'), dict)
     observation = value['observation'] if wrapped else value
     state = observation.get('state')
@@ -279,6 +283,8 @@ class LMStudioPilot:
         model_observation = _without_live_routing(observation)
         if self.config.compact_observation:
             model_observation = compact_inference_observation(model_observation)
+            if model_observation.get('format') == SHARED_VIEW_FORMAT:
+                instructions += SHARED_VIEW_INSTRUCTIONS
             instructions += (
                 "\nThis request uses the format named in format. The observation is inside "
                 "observation; cardDefaults lists exact values for omitted fields on every "
