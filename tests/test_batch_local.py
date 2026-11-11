@@ -44,6 +44,15 @@ class LocalBatchTests(unittest.TestCase):
                 store.validate({**self.plan, **changes})
         self.assertEqual(provider_unit('local'), 'commander-gym-batch-local.service')
 
+    def test_extended_local_wall_limit_preserves_paid_and_usage_fences(self):
+        store = BatchStore(self.root/'store', [{'id':'cloud'}, {'id':'local','execution_modes':['local']}], {})
+        extended = store.validate({**self.plan, 'wall_seconds': 28800})
+        self.assertEqual(extended['max_requests'], self.plan['max_requests'])
+        self.assertEqual(extended['max_tokens'], self.plan['max_tokens'])
+        for changes in ({'wall_seconds': 28801}, {'wall_seconds': 28800, 'execution_mode': 'paid',
+                        'bindings': ['cloud']*4, 'budget_usd': 1}):
+            with self.assertRaises(ValueError): store.validate({**self.plan, **changes})
+
     def test_usage_and_requests_are_shared_across_seats_and_restarts(self):
         response = completion(usage={'prompt_tokens':10,'completion_tokens':2,'total_tokens':12})
         self.transport(response).request('/v1/chat/completions', {}, timeout=2)

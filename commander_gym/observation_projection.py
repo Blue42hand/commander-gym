@@ -133,3 +133,66 @@ def expand_model_observation(view: Mapping[str, Any]) -> dict[str, Any]:
     ]
     restored['format'] = SPARSE_CARD_VIEW_VERSION
     return expand_seat_observation(restored)
+
+
+def compact_inference_observation(observation: Mapping[str, Any]) -> dict[str, Any]:
+    """Losslessly encode repeated action defaults and chronological log field names."""
+    view = compact_model_observation(observation)
+    native = view['observation']
+    actions = native.get('legalActions')
+    defaults = {}
+    if isinstance(actions, list) and actions and all(isinstance(a, dict) for a in actions):
+        fields = set.intersection(*(set(a) for a in actions))
+        for field in sorted(fields):
+            empty = [a[field] for a in actions if _empty_default(a[field])]
+            if empty and all(_same_json(v, empty[0]) for v in empty):
+                defaults[field] = empty[0]
+        native['legalActions'] = [
+            {k: v for k, v in a.items() if k not in defaults or not _same_json(v, defaults[k])}
+            for a in actions]
+    columns = []
+    state = native.get('state')
+    log = state.get('gameLog') if isinstance(state, dict) else None
+    if isinstance(log, list) and log and all(isinstance(event, dict) for event in log):
+        rows = []
+        for event in log:
+            keys = (['type'] if 'type' in event else []) + sorted(k for k in event if k != 'type')
+            if keys not in columns:
+                columns.append(keys)
+            rows.append([columns.index(keys), *[event[k] for k in keys]])
+        state['gameLog'] = rows
+    if not defaults and not columns:
+        return view
+    view['baseFormat'] = view['format']
+    view['format'] = 'argentum-seat-tables-v3'
+    view['actionDefaults'] = defaults
+    view['gameLogColumns'] = columns
+    if not _same_json(expand_inference_observation(view), observation):
+        raise ValueError('inference table did not round-trip exactly')
+    return view
+
+
+def expand_inference_observation(view: Mapping[str, Any]) -> dict[str, Any]:
+    if view.get('format') != 'argentum-seat-tables-v3':
+        return expand_model_observation(view)
+    restored = deepcopy(dict(view))
+    restored['format'] = restored.pop('baseFormat')
+    defaults = restored.pop('actionDefaults')
+    columns = restored.pop('gameLogColumns')
+    if not isinstance(defaults, dict) or any(not _empty_default(v) for v in defaults.values()):
+        raise ValueError('invalid action defaults')
+    native = restored['observation']
+    if defaults:
+        native['legalActions'] = [{**deepcopy(defaults), **a} for a in native['legalActions']]
+    if columns:
+        log = []
+        for row in native['state']['gameLog']:
+            if (not isinstance(row, list) or not row or type(row[0]) is not int
+                    or not 0 <= row[0] < len(columns) or len(row) != len(columns[row[0]]) + 1):
+                raise ValueError('invalid game log row')
+            keys = columns[row[0]]
+            if len(set(keys)) != len(keys):
+                raise ValueError('duplicate game log field')
+            log.append(dict(zip(keys, row[1:])))
+        native['state']['gameLog'] = log
+    return expand_model_observation(restored)

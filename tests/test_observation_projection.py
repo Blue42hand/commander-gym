@@ -48,6 +48,24 @@ class ObservationProjectionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             expand_model_observation(view)
 
+    def test_action_defaults_and_heterogeneous_logs_round_trip_in_order(self):
+        from commander_gym.observation_projection import compact_inference_observation, expand_inference_observation
+        observation = {'state': {'cards': {}, 'deck': [{'name': 'Forest', 'copies': 1}],
+            'gameLog': [{'type': 'draw', 'card': None, 'isYours': False},
+                        {'type': 'damage', 'amount': 0, 'source': 'visible'},
+                        {'type': 'draw', 'card': 'known', 'isYours': True}]},
+            'legalActions': [{'semanticId': 'pass', 'requiresTargets': False, 'validTargets': None, 'isAffordable': True},
+                             {'semanticId': 'tap', 'requiresTargets': False, 'validTargets': None, 'isAffordable': False}]}
+        before = json.dumps(observation, sort_keys=True)
+        view = compact_inference_observation(observation)
+        self.assertEqual(view['format'], 'argentum-seat-tables-v3')
+        self.assertEqual(expand_inference_observation(view), observation)
+        self.assertEqual(json.dumps(observation, sort_keys=True), before)
+        self.assertEqual([a['semanticId'] for a in view['observation']['legalActions']], ['pass', 'tap'])
+        self.assertEqual(view['observation']['state']['gameLog'][0][0], view['observation']['state']['gameLog'][2][0])
+        view['observation']['state']['gameLog'][0][0] = 999
+        with self.assertRaises(ValueError): expand_inference_observation(view)
+
     def test_irregular_card_shapes_fall_back_to_full_view(self):
         observation = {"state": {"cards": {
             "a": {"id": "a", "isTapped": False},

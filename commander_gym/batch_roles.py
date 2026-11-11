@@ -48,7 +48,8 @@ def main():
         registry = recording_registry(catalog_root/config['roster'], catalog_root)
         bridge = RecorderBridge(capture, registry, native_socket=Path('/ipc/native/native.sock'),
                                 sidecar_socket=Path('/ipc/provider/sidecar.sock'), native_uid=config['engine_uid'],
-                                sidecar_uid=config['provider_uid'], sidecar_gid=config['provider_gid'], managed_batch=True)
+                                sidecar_uid=config['provider_uid'], sidecar_gid=config['provider_gid'], managed_batch=True,
+                                callback_ttl=native_callback_timeout_ms(config)/1000 + 10)
         reporter = RecordingHealthReporter(capture, Path('/ipc/native/lifecycle.sock'))
         try:
             bridge.start(); reporter.start()

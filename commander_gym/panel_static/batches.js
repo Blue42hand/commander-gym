@@ -46,6 +46,11 @@ document.addEventListener('change', event=>{
   const select=form.elements['binding'+i];
   select.innerHTML=profiles.map((p,n)=>`<option value="${esc(p.id)}" ${n===i?'selected':''}>${esc(p.deck.label)} · ${esc(p.displayName)}</option>`).join('');
  }
+ const wall=form.elements.wall_seconds;
+ wall.max=mode==='local'?28800:7200;
+ wall.value=mode==='local'?28800:Math.min(Number(wall.value),Number(wall.max));
+ form.elements.max_requests.value=mode==='local'?10000:100;
+ form.elements.max_tokens.value=mode==='local'?100000000:1000000;
  const budget=form.elements.budget_usd;
  budget.value=mode==='local'?0:1;budget.readOnly=mode==='local';
 });

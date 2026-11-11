@@ -95,7 +95,7 @@ class BatchStore:
         if not isinstance(bindings,list) or len(bindings)!=4 or any(not isinstance(x,str) or x not in available for x in bindings):
             raise ValueError('Select exactly four approved Binding snapshots in seat order')
         result={'name':name.strip(),'purpose':purpose,'bindings':bindings,'seats':[available[x] for x in bindings]}
-        for key,low,high in [('game_count',1,50),('wall_seconds',30,7200),('max_decisions',1,100000),('max_requests',1,10000),('max_tokens',10000,100000000)]:
+        for key,low,high in [('game_count',1,50),('wall_seconds',30,28800 if mode=='local' else 7200),('max_decisions',1,100000),('max_requests',1,10000),('max_tokens',10000,100000000)]:
             value=raw.get(key)
             if type(value) is not int or not low<=value<=high:raise ValueError(f'{key} must be between {low} and {high}')
             result[key]=value

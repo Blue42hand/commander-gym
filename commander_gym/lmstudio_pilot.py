@@ -17,7 +17,7 @@ from typing import Any, Mapping
 
 from .lmstudio_provider import LMStudioConfig, LMStudioError, LMStudioTransport, require_loaded_model
 from .local_callback_context import current_cancel
-from .observation_projection import compact_model_observation
+from .observation_projection import compact_inference_observation
 from .openai_responses_pilot import (
     OpenAIResponsesPilot, OpenAIResponsesPilotError, _DEFAULT_INSTRUCTIONS,
     _native_action_format, _native_decision_format, _without_live_routing,
@@ -278,14 +278,17 @@ class LMStudioPilot:
             )
         model_observation = _without_live_routing(observation)
         if self.config.compact_observation:
-            model_observation = compact_model_observation(model_observation)
+            model_observation = compact_inference_observation(model_observation)
             instructions += (
                 "\nThis request uses the format named in format. The observation is inside "
                 "observation; cardDefaults lists exact values for omitted fields on every "
                 "state.cards entry. Restore these fields before choosing. No other state "
-                "fields or legal choices are omitted. In argentum-seat-deck-table-v2, state.deck "
+                "fields or legal choices are omitted. When deckTable is present, state.deck "
                 "contains value arrays ordered by deckTable.columns; prepend the exact "
                 "deckTable.stringPrefixes value to each indicated string column. "
+                "In argentum-seat-tables-v3, actionDefaults gives exact omitted fields on each "
+                "legalActions entry. Each state.gameLog row starts with its gameLogColumns index, "
+                "followed by values in those columns; chronological order is unchanged. "
                 "Use semanticId from observation.legalActions."
             )
         instructions += "\nThe current native parameterSpec and response schema define all allowed fields, including additional cost payments."
