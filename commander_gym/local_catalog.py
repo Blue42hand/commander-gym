@@ -22,17 +22,21 @@ def validate_local_catalog(catalog, root, inference):
     """Validate exact local components without opening listeners or making calls."""
     from .game_server_binding_lmstudio_sidecar import LocalBindingComponentResolver
     from .pilot_composition import compose_pilot_runtime
+    from .heuristic_facts import CardFacts, heuristic_component_ref
+    facts_path = Path(root) / 'local' / 'card-facts.json'
+    facts = CardFacts.load(facts_path) if facts_path.exists() else None
     def factory(pilot, binding):
         if (pilot.generalist_base != local_component_ref(inference) or pilot.escalation_provider is not None
-            or pilot.skill_set is not None or pilot.specialists):
+            or pilot.specialists or pilot.skill_set is not None and
+            (facts is None or pilot.skill_set != heuristic_component_ref(facts))):
             raise PilotContractError('Local catalog requires the exact configured local provider')
-        compose_pilot_runtime(pilot, LocalBindingComponentResolver(inference))
+        compose_pilot_runtime(pilot, LocalBindingComponentResolver(inference, card_facts=facts))
         return _RecordingPilot(pilot)
     loaded = load_binding_catalog(catalog, instance_root=root, pilot_factory=factory)
     return GameServerBindingRegistry(loaded.resolver, loaded.binding_ids)
 
 
-def prepare_local_catalog(catalog, instance_root, output, inference):
+def prepare_local_catalog(catalog, instance_root, output, inference, *, card_facts=None):
     root = Path(instance_root).resolve()
     source = Path(catalog).resolve()
     # Validate references and artifact payload hashes before copying anything.
@@ -62,9 +66,17 @@ def prepare_local_catalog(catalog, instance_root, output, inference):
             # Use normalized relative paths in the new snapshot.
             entry[key] = str(source_path.relative_to(root))
             write(entry[key], source_path.read_bytes())
-    suffix = local_component_ref(inference).digest.split(':')[1][:16]
+    from .heuristic_facts import CardFacts, heuristic_component_ref
+    facts = CardFacts.load(card_facts) if card_facts is not None else None
+    skill = heuristic_component_ref(facts) if facts is not None else None
+    if facts is not None:
+        document('local/card-facts.json', facts.document())
+    provider_digest = local_component_ref(inference).digest
+    suffix = (hashlib.sha256((provider_digest + skill.digest).encode()).hexdigest()[:16]
+              if skill else provider_digest.split(':')[1][:16])
     pilot = Pilot(pilot_id='llmster-'+suffix, revision='1', generalist_base=local_component_ref(inference),
-                  deterministic_policy=BUILTIN_NATIVE_CERTIFIED_FORCED_PASS_COMPONENT_REF)
+                  deterministic_policy=BUILTIN_NATIVE_CERTIFIED_FORCED_PASS_COMPONENT_REF,
+                  skill_set=skill, compatibility={'engine': facts.engine_revision} if facts else {})
     document('local/pilot.json', pilot.to_dict())
     originals = [Binding.from_dict(json.loads(_inside_root(root, name, 'binding').read_text()))
                  for name in raw['bindings']]
@@ -91,9 +103,11 @@ def main():
     parser.add_argument('--instance-root', required=True, type=Path)
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--inference-config', required=True, type=Path)
+    parser.add_argument('--card-facts', type=Path,
+                        help='Opt into the pinned heuristic skill using an offline native public-facts export')
     args = parser.parse_args()
     config = LMStudioConfig(**json.loads(args.inference_config.read_text()))
-    registry = prepare_local_catalog(args.catalog, args.instance_root, args.output, config)
+    registry = prepare_local_catalog(args.catalog, args.instance_root, args.output, config, card_facts=args.card_facts)
     print(json.dumps({'bindings':registry.binding_fingerprints, 'pilotFingerprints':sorted(registry.pilot_fingerprints)}))
 
 

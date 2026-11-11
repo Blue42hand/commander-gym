@@ -1,0 +1,78 @@
+"""Immutable public card facts exported from a pinned native registry.
+
+No game state, library order, executable hooks, or provider credentials belong here.
+Unknown facts remain unknown. Printed characteristics never replace a live card view.
+"""
+from copy import deepcopy
+import hashlib
+import json
+import math
+from pathlib import Path
+from types import MappingProxyType
+
+from .deck_package import ArtifactRef
+
+
+def canonical(value):
+    return json.dumps(value, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
+
+
+class CardFacts:
+    def __init__(self, document):
+        self._document = deepcopy(document)
+        if (not isinstance(document, dict) or set(document) != {'schemaVersion', 'engineRevision', 'creatureTypes', 'cards'}
+            or type(document['schemaVersion']) is not int or document['schemaVersion'] != 1
+            or not isinstance(document['engineRevision'], str)
+            or len(document['engineRevision']) != 40
+            or any(c not in '0123456789abcdef' for c in document['engineRevision'])
+            or not isinstance(document['cards'], dict)
+            or not isinstance(document['creatureTypes'], list)
+            or any(not isinstance(t, str) or not t for t in document['creatureTypes'])):
+            raise ValueError('invalid native card facts envelope')
+        fields = {'manaCost', 'types', 'subtypes', 'keywords', 'tags', 'spellPolarity',
+                  'manaColors', 'simpleMana', 'simplePermanent', 'unconditionalUntapped', 'entersTapped',
+                  'staticValue', 'repeatable', 'affectsOpponent', 'feeds', 'rewards', 'tribesRewarded'}
+        fields |= {'freeOptionalDraws', 'drawSensitive'}
+        for name, fact in document['cards'].items():
+            if not isinstance(name, str) or not name or not isinstance(fact, dict) or set(fact) != fields:
+                raise ValueError('invalid native card fact fields')
+            for key in ('simpleMana', 'simplePermanent', 'unconditionalUntapped', 'entersTapped', 'repeatable', 'affectsOpponent', 'drawSensitive'):
+                if type(fact[key]) is not bool:
+                    raise ValueError('invalid native card fact boolean')
+            for key in ('types', 'subtypes', 'keywords', 'tags', 'spellPolarity', 'manaColors',
+                        'feeds', 'rewards', 'tribesRewarded'):
+                if not isinstance(fact[key], list) or any(not isinstance(v, str) for v in fact[key]):
+                    raise ValueError('invalid native card fact list')
+            if (not isinstance(fact['manaCost'], str) or type(fact['staticValue']) not in (int, float)
+                or not math.isfinite(fact['staticValue']) or fact['staticValue'] < 0
+                or set(fact['spellPolarity']) - {'HARMFUL', 'BENEFICIAL', 'FLEXIBLE', 'UNKNOWN'}
+                or set(fact['manaColors']) - set('WUBRGC')):
+                raise ValueError('invalid native card fact value')
+            if (not isinstance(fact['freeOptionalDraws'], dict) or any(
+                not isinstance(ability, str) or not ability or type(count) is not int or not 1 <= count <= 10
+                for ability, count in fact['freeOptionalDraws'].items())):
+                raise ValueError('invalid free optional draw contract')
+        canonical(document)
+        self.engine_revision = document['engineRevision']
+        self.creature_types = frozenset(t.lower() for t in document['creatureTypes'])
+        self.digest = hashlib.sha256(canonical(document)).hexdigest()
+
+    @classmethod
+    def load(cls, path):
+        return cls(json.loads(Path(path).read_text()))
+
+    def document(self):
+        return deepcopy(self._document)
+
+    def get(self, name):
+        # Never hand a mutable reference into the catalog to a policy or caller.
+        return MappingProxyType(deepcopy(self._document['cards'].get(name, {})))
+
+
+def heuristic_component_ref(facts):
+    """Identity covers policy code, public facts and native source revision."""
+    sources = [Path(__file__), Path(__file__).with_name('heuristic_policy.py')]
+    payload = {'version': 1, 'factsSha256': facts.digest,
+               'sources': {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sources}}
+    return ArtifactRef(kind='skill-set', artifact_id='argentum-masked-heuristics', version='1',
+                       digest='sha256:' + hashlib.sha256(canonical(payload)).hexdigest())

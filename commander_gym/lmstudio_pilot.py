@@ -19,10 +19,28 @@ from .lmstudio_provider import LMStudioConfig, LMStudioError, LMStudioTransport,
 from .local_callback_context import current_cancel
 from .observation_projection import compact_inference_observation
 from .openai_responses_pilot import (
-    OpenAIResponsesPilot, OpenAIResponsesPilotError, _DEFAULT_INSTRUCTIONS,
+    OpenAIResponsesPilot, OpenAIResponsesPilotError,
     _native_action_format, _native_decision_format, _without_live_routing,
 )
 from .pilot import PilotChoice, PilotContractError, _require_observation, validate_pilot_choice
+
+
+_LOCAL_INSTRUCTIONS = '''You are the strategic policy for a Magic-playing agent.
+Argentum owns rules, observable state, and legal offers. Use only this masked observation.
+Return exactly one JSON object matching the response schema.
+For a legal action, return:
+{"channel":"action","choice":{"semanticId":"<exact offered semanticId>","params":{}}}
+Use only the params fields and candidate IDs permitted by that action's native parameterSpec.
+For a structured decision, return:
+{"channel":"decision","response":{"type":"<native responseType>","<required field>":"<value>"}}
+Never supply actionId or decisionId; the caller binds current routing IDs.
+Play to win. Use useful land drops, ramp and development rather than passing without a tactical reason.
+Choose a concrete useful spell or ability before paying for it; native auto-payment usually taps mana.
+Preserve interaction only for a concrete threat. Consider the acting deck's plan and all opponents.
+For indexed choices, map the chosen label back to its exact offered index. Tribal payoffs should
+name the tribe benefiting the deck, not an arbitrary early option. Auras are evaluated by who
+receives their actual effect or triggers; target ownership alone does not establish benefit.
+'''
 
 
 class LMStudioPilotError(OpenAIResponsesPilotError):
@@ -236,7 +254,7 @@ class LMStudioPilot:
             _schema_check(schema_format["schema"])
         except LMStudioError as exc:
             raise LMStudioPilotError(str(exc)) from exc
-        instructions = _DEFAULT_INSTRUCTIONS + (
+        instructions = _LOCAL_INSTRUCTIONS + (
             "\nWhen requiresTargets is false and validTargets and targetRequirements are null, "
             "the action has no targets: omit targets and targetGroups or use empty arrays. "
             "Entries marked isAffordable=false or affordable=false are disabled display entries; "

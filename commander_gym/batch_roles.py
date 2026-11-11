@@ -106,7 +106,7 @@ def build_local_server(config):
     return build_binding_lmstudio_sidecar(LocalBindingConfig(
         GameServerSidecarConfig(Path('/provider-config/token').read_text(), port=config['provider_port'],
                                require_managed_batch_game=True),
-        inference, root/config['roster'], root), transport=transport,
+        inference, root/config['roster'], root, engine_revision=config['pins']['engine']), transport=transport,
         game_capture=RemoteCaptureSink(Path('/ipc/provider/sidecar.sock'), recorder_uid=config['engine_uid']))
 
 
