@@ -334,6 +334,32 @@ class LMStudioTransportTests(unittest.TestCase):
         self.addCleanup(server.shutdown)
         return server
 
+    def test_slow_worker_receives_large_input_across_poll_intervals(self):
+        received = []
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                received.append(json.loads(self.rfile.read(int(self.headers['Content-Length']))))
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(b'{"ok":true}')
+            def log_message(self, *args): pass
+        server = self._server(Handler)
+        transport = LMStudioTransport(config(endpoint=f'http://127.0.0.1:{server.server_port}'))
+        real_popen = subprocess.Popen
+        children = []
+        def delayed(args, **kwargs):
+            child = real_popen([args[0], '-I', '-c',
+                "import runpy,sys,time;time.sleep(.2);runpy.run_path(sys.argv[1],run_name='__main__')",
+                args[-1]], **kwargs)
+            children.append(child)
+            return child
+        body = {'messages': [{'content': 'large input ' * 20000}]}
+        with patch('commander_gym.lmstudio_provider.subprocess.Popen', side_effect=delayed):
+            self.assertTrue(transport.request('/v1/chat/completions', body, timeout=3)['ok'])
+        self.assertEqual(received, [body])
+        self.assertIsNotNone(children[0].poll())
+
     def test_real_worker_does_not_follow_redirects_or_inherit_credentials_proxies(self):
         received = []
         class Handler(BaseHTTPRequestHandler):

@@ -292,6 +292,8 @@ class LMStudioPilot:
             "max_tokens": self.config.max_output_tokens,
             "stream": self.config.stream, "reasoning_effort": "none", "temperature": 0,
         }
+        if self.config.stream:
+            request['stream_options'] = {'include_usage': True}
         validator = OpenAIResponsesPilot(
             client=SimpleNamespace(responses=SimpleNamespace(create=lambda **_: None)), model=self.config.model,
         )
