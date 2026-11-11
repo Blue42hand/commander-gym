@@ -1,7 +1,7 @@
 """Versioned, reversible model-facing compression of a masked Argentum view.
 
-Only card fields with explicit JSON defaults are omitted. Native observations,
-legal offers, decisions, and provenance remain in their original form.
+Repeated JSON fields and values are stored in reversible request-local tables.
+Native observations, legal offers, decisions, and provenance retain their values.
 """
 
 from __future__ import annotations
@@ -135,7 +135,7 @@ def expand_model_observation(view: Mapping[str, Any]) -> dict[str, Any]:
     return expand_seat_observation(restored)
 
 
-def compact_inference_observation(observation: Mapping[str, Any]) -> dict[str, Any]:
+def _compact_inference_v3(observation: Mapping[str, Any]) -> dict[str, Any]:
     """Losslessly encode repeated action defaults and chronological log field names."""
     view = compact_model_observation(observation)
     native = view['observation']
@@ -173,6 +173,9 @@ def compact_inference_observation(observation: Mapping[str, Any]) -> dict[str, A
 
 
 def expand_inference_observation(view: Mapping[str, Any]) -> dict[str, Any]:
+    from .inference_tables import FORMAT, expand_shared_view
+    if view.get('format') == FORMAT:
+        view = expand_shared_view(view)
     if view.get('format') != 'argentum-seat-tables-v3':
         return expand_model_observation(view)
     restored = deepcopy(dict(view))
@@ -196,3 +199,12 @@ def expand_inference_observation(view: Mapping[str, Any]) -> dict[str, Any]:
             log.append(dict(zip(keys, row[1:])))
         native['state']['gameLog'] = log
     return expand_model_observation(restored)
+
+
+def compact_inference_observation(observation: Mapping[str, Any]) -> dict[str, Any]:
+    """Choose the smaller reversible view without changing the native observation."""
+    from .inference_tables import compact_shared_view
+    view = compact_shared_view(_compact_inference_v3(observation))
+    if not _same_json(expand_inference_observation(view), observation):
+        raise ValueError('shared inference view did not round-trip exactly')
+    return view
