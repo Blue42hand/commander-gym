@@ -31,6 +31,23 @@ class ObservationProjectionTests(unittest.TestCase):
         self.assertEqual(compact["observation"]["legalActions"], observation["legalActions"])
         self.assertNotIn("hidden-card", json.dumps(compact))
 
+    def test_deck_table_round_trip_preserves_types_and_choices(self):
+        from commander_gym.observation_projection import compact_model_observation, expand_model_observation
+        observation = {'state': {'cards': {}, 'deck': [
+            {'cardName': 'One', 'copies': 1, 'colors': [], 'imageUri': 'https://cards.example/one'},
+            {'cardName': 'Two', 'copies': 2, 'colors': ['BLUE'], 'imageUri': 'https://cards.example/two'},
+        ]}, 'legalActions': [{'semanticId': 'exact-choice', 'params': {}}]}
+        before = json.dumps(observation, sort_keys=True)
+        view = compact_model_observation(observation)
+        self.assertEqual(view['format'], 'argentum-seat-deck-table-v2')
+        self.assertEqual(view['deckTable']['stringPrefixes'], {'imageUri': 'https://cards.example/'})
+        self.assertEqual(expand_model_observation(view), observation)
+        self.assertEqual(view['observation']['legalActions'], observation['legalActions'])
+        self.assertEqual(json.dumps(observation, sort_keys=True), before)
+        view['observation']['state']['deck'][0].pop()
+        with self.assertRaises(ValueError):
+            expand_model_observation(view)
+
     def test_irregular_card_shapes_fall_back_to_full_view(self):
         observation = {"state": {"cards": {
             "a": {"id": "a", "isTapped": False},

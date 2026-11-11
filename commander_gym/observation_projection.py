@@ -85,3 +85,51 @@ def expand_seat_observation(view: Mapping[str, Any]) -> dict[str, Any]:
             for card_id, card in cards.items()
         }
     return result
+
+
+def compact_model_observation(observation: Mapping[str, Any]) -> dict[str, Any]:
+    """Add a lossless column table for the public deck summary."""
+    import os
+    view = compact_seat_observation(observation)
+    deck = view['observation'].get('state', {}).get('deck')
+    if not isinstance(deck, list) or not deck or not all(isinstance(row, dict) for row in deck):
+        return view
+    columns = sorted(deck[0])
+    if not all(set(row) == set(columns) for row in deck):
+        return view
+    rows = [[row[key] for key in columns] for row in deck]
+    prefixes = {}
+    for index, key in enumerate(columns):
+        values = [row[index] for row in rows]
+        if all(isinstance(value, str) for value in values):
+            prefix = os.path.commonprefix(values)
+            if len(prefix) >= 8:
+                prefixes[key] = prefix
+                for row in rows:
+                    row[index] = row[index][len(prefix):]
+    view['format'] = 'argentum-seat-deck-table-v2'
+    view['deckTable'] = {'columns': columns, 'stringPrefixes': prefixes}
+    view['observation']['state']['deck'] = rows
+    if not _same_json(expand_model_observation(view), observation):
+        raise ValueError('deck table did not round-trip exactly')
+    return view
+
+
+def expand_model_observation(view: Mapping[str, Any]) -> dict[str, Any]:
+    if view.get('format') == SPARSE_CARD_VIEW_VERSION:
+        return expand_seat_observation(view)
+    if view.get('format') != 'argentum-seat-deck-table-v2':
+        raise ValueError('unsupported model observation')
+    restored = deepcopy(dict(view))
+    table = restored.pop('deckTable')
+    columns = table['columns']
+    rows = restored['observation']['state']['deck']
+    if len(set(columns)) != len(columns) or any(len(row) != len(columns) for row in rows):
+        raise ValueError('malformed deck table')
+    restored['observation']['state']['deck'] = [
+        {key: table['stringPrefixes'].get(key, '') + value
+         if key in table['stringPrefixes'] else value
+         for key, value in zip(columns, row)} for row in rows
+    ]
+    restored['format'] = SPARSE_CARD_VIEW_VERSION
+    return expand_seat_observation(restored)
