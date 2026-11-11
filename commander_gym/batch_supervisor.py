@@ -262,7 +262,8 @@ class Supervisor:
                     lives=observed.get('liveGames',[]);finished=observed.get('completedGames',[])
                     attempt['observation']={'observed_unix':last_good,'source':'Private native lobby status','live_games':lives,'complete':observed.get('complete')}
                     if lives:attempt['game_id']=lives[0].get('gameSessionId')
-                    actual=[g for g in finished if g.get('nativeGameOver') is True and g.get('isSimulated') is False]
+                    actual=[g for g in finished if g.get('nativeGameOver') is True
+                            and g.get('simulated',g.get('isSimulated')) is False]
                     if actual:
                         native_terminal=actual[-1];outcome='Completed';message='Native terminal outcome recorded';break
                 except (OSError,ValueError,KeyError):
@@ -280,12 +281,21 @@ class Supervisor:
             if self.stop.is_set() and native_terminal is None:outcome='Interrupted';message='Supervisor stopping'
             if native_terminal:
                 attempt.update(game_id=native_terminal.get('gameSessionId'),winner_id=native_terminal.get('winnerId'),
-                               is_draw=native_terminal.get('isDraw'),native_result=native_terminal)
+                               is_draw=native_terminal.get('draw',native_terminal.get('isDraw')),native_result=native_terminal)
                 # Give the existing recorder its normal terminal grace; no lifecycle finalization commands.
                 for _ in range(20):
                     manifests=list((self.root/'captures'/attempt['id']).glob('*/manifest.json'))
                     if manifests:break
                     self.last_tick=time.time();self.stop.wait(1)
+                # A session cleanup can appear as game-over in the lobby. The
+                # recorder distinguishes that from a native rules terminal.
+                game=attempt.get('game_id')
+                for manifest in manifests:
+                    value=json.loads(manifest.read_text())
+                    if value.get('game_id')==game and value.get('outcome',{}).get('kind') in ('session_closed','finalized_aborted'):
+                        outcome='Failed';message='Native session closed without a completed rules outcome'
+                        attempt.update(winner_id=None,is_draw=None)
+                        break
         except Exception as failure:
             import traceback
             frame=traceback.extract_tb(failure.__traceback__)[-1]

@@ -189,6 +189,17 @@ class LMStudioPilot:
         except LMStudioError as exc:
             raise LMStudioPilotError(str(exc)) from exc
         instructions = _DEFAULT_INSTRUCTIONS
+        if observation.get('callbackKind') == 'decideMulligan':
+            instructions += (
+                "\nThis is a London mulligan decision. Read state.mulligan, including hand, cards, "
+                "mulliganCount and cardsToPutOnBottom. Keeping retains only hand size minus "
+                "cardsToPutOnBottom cards. Further mulligans cost more cards; do not repeatedly "
+                "search for a perfect hand. Keep a playable hand with lands and early plays. "
+                "After two mulligans, strongly prefer keeping even an imperfect hand. "
+                "When cardsToPutOnBottom is at least hand size, choose KeepHand: another "
+                "mulligan cannot improve retained hand size. Return the exact offered KeepHand "
+                "or TakeMulligan semanticId using the required nested choice format."
+            )
         if schema_format["name"] in {"commander_gym_native_action", "commander_gym_native_mixed_payment"}:
             instructions += "\nUse the schema's nested choice object containing semanticId and params."
         if schema_format["name"] == "commander_gym_native_mixed_payment":

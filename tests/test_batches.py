@@ -153,7 +153,7 @@ class BatchTests(unittest.TestCase):
             pending['onePerColor']=True
             with self.assertRaises(ValueError):value({})
 
-    def terminal_supervisor(self, terminal, progress=None):
+    def terminal_supervisor(self, terminal, progress=None, manifest=None):
         b=self.start(self.draft());attempt=self.store.new_attempt(b['id'])
         supervisor=object.__new__(Supervisor)
         supervisor.store=self.store;supervisor.root=self.root;supervisor.runtime=self.root/'ipc'
@@ -167,6 +167,10 @@ class BatchTests(unittest.TestCase):
         supervisor.close_runtime=unittest.mock.Mock()
         supervisor.budget_snapshot=unittest.mock.Mock(return_value={'reported_tokens':0})
         attempt['runtime_id']='owned-runtime'
+        if manifest is not None:
+            capture=self.root/'captures'/attempt['id']/'native-game'
+            capture.mkdir(parents=True)
+            atomic_json(capture/'manifest.json',manifest)
         if progress:
             supervisor.stop.is_set.side_effect=None
             supervisor.stop.is_set.return_value=False
@@ -184,6 +188,20 @@ class BatchTests(unittest.TestCase):
         self.assertEqual(attempt['state'],'Completed');self.assertEqual(attempt['winner_id'],'seat-a')
         self.assertIsNone(attempt['recording_complete'])
         self.assertIn('Open or unavailable',attempt['recording_state'])
+
+    def test_native_serialized_terminal_fields_are_recognized(self):
+        attempt=self.terminal_supervisor({'gameSessionId':'native-game','nativeGameOver':True,
+            'simulated':False,'winnerId':None,'draw':True})
+        self.assertEqual(attempt['state'],'Completed')
+        self.assertIs(attempt['is_draw'],True)
+
+    def test_session_cleanup_is_failure_even_when_lobby_reports_game_over(self):
+        attempt=self.terminal_supervisor({'gameSessionId':'native-game','nativeGameOver':True,
+            'simulated':False,'winnerId':None,'draw':True},manifest={
+                'game_id':'native-game','outcome':{'kind':'session_closed'},'recording_complete':False})
+        self.assertEqual(attempt['state'],'Failed')
+        self.assertIsNone(attempt['winner_id'])
+        self.assertIsNone(attempt['is_draw'])
 
     def test_token_limit_reports_interruption_without_native_result(self):
         attempt=self.terminal_supervisor({}, {'state':'Limit reached','reason':'batch_token_fence',
