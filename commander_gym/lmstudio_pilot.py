@@ -84,6 +84,24 @@ def _constrain_untargeted_actions(schema, observation):
     visit(schema)
 
 
+def _cache_ordered_observation(value):
+    """Keep stable deck facts ahead of changing menus without changing any values."""
+    value = deepcopy(value)
+    def first(mapping, keys):
+        return {**{key: mapping[key] for key in keys if key in mapping},
+                **{key: item for key, item in mapping.items() if key not in keys}}
+    wrapped = isinstance(value.get('observation'), dict)
+    observation = value['observation'] if wrapped else value
+    state = observation.get('state')
+    if isinstance(state, dict):
+        observation['state'] = first(state, ['deck', 'cards'])
+    observation = first(observation, ['deckKnowledge', 'state'])
+    if wrapped:
+        value['observation'] = observation
+        return first(value, ['format', 'deckTable', 'observation'])
+    return observation
+
+
 def _schema_check(schema, value=None, *, validate=False):
     """Fail closed on unsupported schema keywords; validate the supported wire subset.
 
@@ -264,7 +282,7 @@ class LMStudioPilot:
                 "Use semanticId from observation.legalActions."
             )
         instructions += "\nThe current native parameterSpec and response schema define all allowed fields, including additional cost payments."
-        base_input = json.dumps(model_observation, sort_keys=True, separators=(",", ":"))
+        base_input = json.dumps(_cache_ordered_observation(model_observation), separators=(",", ":"))
         request = {
             "model": self.config.model,
             "messages": [{"role": "system", "content": instructions}, {"role": "user", "content": base_input}],

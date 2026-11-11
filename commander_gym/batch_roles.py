@@ -10,6 +10,16 @@ import time
 from .batch_budget import ChoiceGuard, TokenFence
 
 
+def native_callback_timeout_ms(config):
+    # Keep the outer native request alive through local validation/retries.
+    # The batch wall deadline still bounds actual provider work.
+    if config['plan']['execution_mode'] == 'local':
+        from .lmstudio_provider import LMStudioConfig
+        inference = LMStudioConfig(**config['local_inference'])
+        return max(120000, int((inference.timeout_seconds + 20) * 1000))
+    return 120000
+
+
 def main():
     os.umask(0o077)
     config = json.loads(Path('/config/role.json').read_text())
@@ -24,7 +34,7 @@ def main():
                'GAME_DEV_ENDPOINTS_ENABLED':'true','GAME_AI_THINKING_DELAY_MS':'0', 'GAME_AI_INSIGHT_ENABLED':'false','GAME_EASTER_EGGS_ENABLED':'false',
                'GAME_TOURNAMENT_SIMULATE_AI_MATCHES':'false','ACCOUNTS_ENABLED':'false','CACHE_REDIS_ENABLED':'false',
                'COMMANDER_GYM_ENABLED':'true','COMMANDER_GYM_MANUAL_ONLY':'false','COMMANDER_GYM_RECORDING_MANAGED_BATCH':'true',
-               'COMMANDER_GYM_SIDECAR_URL':'http://127.0.0.1:'+str(config['provider_port']), 'COMMANDER_GYM_SIDECAR_TIMEOUT_MS':'120000'}
+               'COMMANDER_GYM_SIDECAR_URL':'http://127.0.0.1:'+str(config['provider_port']), 'COMMANDER_GYM_SIDECAR_TIMEOUT_MS':str(native_callback_timeout_ms(config))}
         args = [config['java'],'-Xms256m','-Xmx2g','-Dcommander-gym.recorder.socket=/ipc/native/native.sock',
                 '-Dgame.recording.root=/captures','-Dgame.recording.engine-revision='+config['pins']['engine'],
                 '-Dlogging.level.root=WARN','-jar','/server/server.jar','--spring.config.import=configtree:/native-config/']

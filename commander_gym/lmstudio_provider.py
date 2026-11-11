@@ -72,8 +72,8 @@ class LMStudioConfig:
         if type(self.max_attempts) is not int or not 1 <= self.max_attempts <= 2:
             raise ValueError("max_attempts must be 1 or 2")
         if (type(self.timeout_seconds) not in (int, float)
-            or not math.isfinite(self.timeout_seconds) or not 0 < self.timeout_seconds <= 100):
-            raise ValueError("whole-choice timeout must be finite and at most 100 seconds")
+            or not math.isfinite(self.timeout_seconds) or not 0 < self.timeout_seconds <= 300):
+            raise ValueError("whole-choice timeout must be finite and at most 300 seconds")
 
 
 class LMStudioTransport:

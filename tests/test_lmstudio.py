@@ -62,6 +62,28 @@ class FakeTransport:
 
 
 class LMStudioPilotTests(unittest.TestCase):
+    def test_cache_order_keeps_exact_values_and_places_changing_menu_last(self):
+        from commander_gym.lmstudio_pilot import _cache_ordered_observation
+        obs = {'legalActions': ['old'], 'state': {'turnNumber': 1, 'cards': {'a': {}}, 'deck': ['card']},
+               'deckKnowledge': 'stable primer'}
+        before = deepcopy(obs)
+        ordered = _cache_ordered_observation(obs)
+        self.assertEqual(ordered, before)
+        self.assertEqual(obs, before)
+        first = json.dumps(ordered)
+        obs['legalActions'] = ['new']
+        second = json.dumps(_cache_ordered_observation(obs))
+        self.assertEqual(first.split('"legalActions"')[0], second.split('"legalActions"')[0])
+        self.assertLess(first.index('"deck"'), first.index('"cards"'))
+        self.assertLess(first.index('"deckKnowledge"'), first.index('"state"'))
+
+    def test_batch_native_deadline_exceeds_local_choice_deadline(self):
+        from commander_gym.batch_roles import native_callback_timeout_ms
+        cfg = config(timeout_seconds=300)
+        self.assertEqual(native_callback_timeout_ms({'plan': {'execution_mode': 'local'},
+                         'local_inference': vars(cfg)}), 320000)
+        self.assertEqual(native_callback_timeout_ms({'plan': {'execution_mode': 'provider'}}), 120000)
+
     def test_native_untargeted_action_rejects_invented_targets_and_preserves_offer(self):
         from commander_gym.lmstudio_pilot import _local_native_format, _constrain_untargeted_actions
         obs = action_observation()
@@ -300,7 +322,7 @@ class LMStudioTransportTests(unittest.TestCase):
                          "http://user:secret@127.0.0.1:1234", "http://127.0.0.1:1234/v1",
                          "http://127.0.0.1:1234?redirect=yes", "http://[::ffff:8.8.8.8]:1234"):
             with self.subTest(endpoint=endpoint), self.assertRaises(ValueError): config(endpoint=endpoint)
-        for kwargs in ({"timeout_seconds": float("nan")}, {"timeout_seconds": 101}, {"max_attempts": 3},
+        for kwargs in ({"timeout_seconds": float("nan")}, {"timeout_seconds": 301}, {"max_attempts": 3},
                        {"max_prompt_bytes": 8192}, {"max_output_tokens": True}):
             with self.assertRaises(ValueError): config(**kwargs)
 
