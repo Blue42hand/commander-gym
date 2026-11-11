@@ -62,6 +62,21 @@ class FakeTransport:
 
 
 class LMStudioPilotTests(unittest.TestCase):
+    def test_disabled_native_entries_remain_visible_but_cannot_be_selected(self):
+        from commander_gym.lmstudio_pilot import _local_native_format
+        obs = action_observation()
+        obs['legalActions'][1]['isAffordable'] = False
+        before = deepcopy(obs)
+        schema = _local_native_format(obs)['schema']
+        self.assertNotIn(obs['legalActions'][1]['semanticId'], json.dumps(schema))
+        self.assertIn(obs['legalActions'][0]['semanticId'], json.dumps(schema))
+        transport = FakeTransport()
+        LMStudioPilot(config(), transport=transport).choose(obs)
+        sent = json.loads(transport.calls[1][1]['messages'][1]['content'])
+        self.assertEqual(len(sent['legalActions']), 2)
+        self.assertIs(sent['legalActions'][1]['isAffordable'], False)
+        self.assertEqual(obs, before)
+
     def test_cache_order_keeps_exact_values_and_places_changing_menu_last(self):
         from commander_gym.lmstudio_pilot import _cache_ordered_observation
         obs = {'legalActions': ['old'], 'state': {'turnNumber': 1, 'cards': {'a': {}}, 'deck': ['card']},

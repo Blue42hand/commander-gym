@@ -41,6 +41,12 @@ def _local_native_format(observation: Mapping[str, Any]) -> dict[str, Any] | Non
     llmster needs a constrained union instead. Builder-only views isolate the two
     branches; the model and final validator still receive the unchanged live offer.
     """
+    # Native menus include disabled display entries. Keep them in the model's
+    # observation, but do not advertise them as executable schema branches.
+    legal = observation.get('legalActions')
+    if isinstance(legal, list):
+        observation = {**observation, 'legalActions': [a for a in legal
+            if not isinstance(a, Mapping) or (a.get('isAffordable') is not False and a.get('affordable') is not False)]}
     pending = observation.get("pendingDecision")
     spec = pending.get("responseSpec") if isinstance(pending, Mapping) else None
     if (isinstance(pending, Mapping) and pending.get("requiresStructuredResponse") is True
@@ -233,7 +239,8 @@ class LMStudioPilot:
         instructions = _DEFAULT_INSTRUCTIONS + (
             "\nWhen requiresTargets is false and validTargets and targetRequirements are null, "
             "the action has no targets: omit targets and targetGroups or use empty arrays. "
-            "A mana ability does not target its own source. Do not tap mana merely to pass "
+            "Entries marked isAffordable=false or affordable=false are disabled display entries; "
+            "do not select them. A mana ability does not target its own source. Do not tap mana merely to pass "
             "through a phase; mana empties between steps and phases."
         )
         if observation.get('callbackKind') == 'decideMulligan':
