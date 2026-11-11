@@ -61,6 +61,29 @@ def _local_native_format(observation: Mapping[str, Any]) -> dict[str, Any] | Non
     return _native_decision_format(observation) or _native_action_format(observation)
 
 
+def _constrain_untargeted_actions(schema, observation):
+    """Apply explicit native no-target facts to generic ActionParams schemas."""
+    untargeted = {a.get('semanticId') for a in observation.get('legalActions', [])
+                  if a.get('requiresTargets') is False and a.get('validTargets') is None
+                  and a.get('targetRequirements') is None}
+    def visit(node):
+        if not isinstance(node, dict):
+            return
+        props = node.get('properties', {})
+        if props.get('semanticId', {}).get('const') in untargeted:
+            fields = props.get('params', {}).get('properties', {})
+            for name in ('targets', 'targetGroups'):
+                if name in fields:
+                    fields[name] = {'type': 'array', 'items': fields[name]['items'], 'maxItems': 0}
+        for value in node.values():
+            if isinstance(value, dict):
+                visit(value)
+            elif isinstance(value, list):
+                for child in value:
+                    visit(child)
+    visit(schema)
+
+
 def _schema_check(schema, value=None, *, validate=False):
     """Fail closed on unsupported schema keywords; validate the supported wire subset.
 
@@ -185,10 +208,16 @@ class LMStudioPilot:
         if schema_format is None:
             raise LMStudioPilotError("llmster requires a supported native JSON schema; no JSON-mode downgrade")
         try:
+            _constrain_untargeted_actions(schema_format["schema"], observation)
             _schema_check(schema_format["schema"])
         except LMStudioError as exc:
             raise LMStudioPilotError(str(exc)) from exc
-        instructions = _DEFAULT_INSTRUCTIONS
+        instructions = _DEFAULT_INSTRUCTIONS + (
+            "\nWhen requiresTargets is false and validTargets and targetRequirements are null, "
+            "the action has no targets: omit targets and targetGroups or use empty arrays. "
+            "A mana ability does not target its own source. Do not tap mana merely to pass "
+            "through a phase; mana empties between steps and phases."
+        )
         if observation.get('callbackKind') == 'decideMulligan':
             instructions += (
                 "\nThis is a London mulligan decision. Read state.mulligan, including hand, cards, "

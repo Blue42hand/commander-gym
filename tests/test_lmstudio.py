@@ -62,6 +62,27 @@ class FakeTransport:
 
 
 class LMStudioPilotTests(unittest.TestCase):
+    def test_native_untargeted_action_rejects_invented_targets_and_preserves_offer(self):
+        from commander_gym.lmstudio_pilot import _local_native_format, _constrain_untargeted_actions
+        obs = action_observation()
+        action = obs['legalActions'][0]
+        action.update(requiresTargets=False, validTargets=None, targetRequirements=None)
+        action['parameterSpec'] = {'allowedFields': {'targets': 'ENTITY_ID_ARRAY', 'targetGroups': 'ENTITY_ID_ARRAY_ARRAY'}}
+        before = deepcopy(obs)
+        schema = _local_native_format(obs)['schema']
+        _constrain_untargeted_actions(schema, obs)
+        response = {'channel': 'action', 'choice': {'semanticId': action['semanticId'], 'params': {'targets': ['source']}}}
+        with self.assertRaises(LMStudioError):
+            _schema_check(schema, response, validate=True)
+        response['choice']['params'] = {}
+        _schema_check(schema, response, validate=True)
+        self.assertEqual(obs, before)
+        action['validTargets'] = ['source']
+        schema = _local_native_format(obs)['schema']
+        _constrain_untargeted_actions(schema, obs)
+        response['choice']['params'] = {'targets': ['source']}
+        _schema_check(schema, response, validate=True)
+
     def test_mulligan_prompt_explains_card_cost_without_changing_native_choices(self):
         obs=action_observation()
         obs['callbackKind']='decideMulligan'
