@@ -230,3 +230,6 @@ Deck -> DeckKnowledge -> Pilot -> Binding -> Run -> Decision -> Annotation -> Da
 ```
 
 A pilot is the whole seat-level decision system, not merely an LLM. The intended steady state progressively routes solved work into deterministic skills/specialists and uses a fine-tuned local Magic generalist for most remaining reasoning, with frontier models reserved for teaching/evaluation/escalation.
+
+Local llmster setup for human play and managed batches is described in
+[llmster play](docs/llmster-play.md).

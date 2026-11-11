@@ -104,6 +104,17 @@ class LocalQATests(unittest.TestCase):
         self.assertEqual([c.args[0].name for c in literal.call_args_list],['commander-gym.sidecar.token','commander-gym.local.token'])
         self.assertEqual([c.args[1] for c in literal.call_args_list],[roles.TOKEN.encode(),LOCAL_TOKEN.encode()]);self.assertNotEqual(roles.TOKEN,LOCAL_TOKEN)
 
+    def test_native_readiness_checks_sealed_ids_without_reading_private_catalog(self):
+        from commander_gym.qa_local_provider import require_local_ready
+        entries=[{'id':key} for key in self.profile['localInference']['catalog']['bindings']]
+        with patch('commander_gym.manual_runtime_local.local_recording_registry',side_effect=PermissionError('native has no local group')):
+            with patch('commander_gym.qa_local_probes._catalog',return_value=(200,{'profiles':entries})):
+                require_local_ready(self.profile)
+            for status,payload in [(401,{'profiles':entries}),(200,{'profiles':[]}),(200,{'profiles':entries*2}),
+                                   (200,{'profiles':[{'id':'foreign'}]}),(200,{'profiles':[None]}),(200,[])]:
+                with self.subTest(payload=payload),patch('commander_gym.qa_local_probes._catalog',return_value=(status,payload)):
+                    with self.assertRaisesRegex(ManualRuntimeError,'qa_local_not_ready'):require_local_ready(self.profile)
+
     def test_native_refuses_unready_local_before_token_files_or_exec(self):
         uid=self.profile['identities']['nativeUid']
         with patch.object(roles.os,'getuid',return_value=uid),patch.object(roles.os,'geteuid',return_value=uid),patch.dict(os.environ,{},clear=True),patch.object(roles.signal,'signal'),patch('commander_gym.qa_local_provider.require_local_ready',side_effect=ManualRuntimeError('qa_local_not_ready')),patch.object(roles,'_literal_file') as literal,patch.object(roles.os,'execve') as execute:

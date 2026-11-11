@@ -60,6 +60,15 @@ class LocalRuntimeTests(unittest.TestCase):
         self.profile=local_profile(Path(self.tmp.name))
         self.runtime=ValidatedRuntime(canonical(self.profile),digest(self.profile),2)
 
+    def test_qualification_local_ipc_is_outside_cloud_private_parent(self):
+        from commander_gym.manual_runtime_local import local_ipc
+        cloud=Path(self.profile['paths']['recorderSocket']).parent
+        local=local_ipc(self.profile)
+        self.assertEqual(local,cloud.parent/'local-ipc')
+        self.assertFalse(local.is_relative_to(cloud))
+        production={**self.profile,'purpose':'native-manual-play'}
+        self.assertEqual(local_ipc(production),Path('/run/argentum-local-ipc'))
+
     def test_canonical_catalog_and_exact_configuration_seals(self):
         validate_profile(self.profile);verify_artifacts(self.profile)
         registry=local_recording_registry(self.profile)

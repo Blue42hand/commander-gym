@@ -62,6 +62,80 @@ class FakeTransport:
 
 
 class LMStudioPilotTests(unittest.TestCase):
+    def test_disabled_native_entries_remain_visible_but_cannot_be_selected(self):
+        from commander_gym.lmstudio_pilot import _local_native_format
+        obs = action_observation()
+        obs['legalActions'][1]['isAffordable'] = False
+        before = deepcopy(obs)
+        schema = _local_native_format(obs)['schema']
+        self.assertNotIn(obs['legalActions'][1]['semanticId'], json.dumps(schema))
+        self.assertIn(obs['legalActions'][0]['semanticId'], json.dumps(schema))
+        transport = FakeTransport()
+        LMStudioPilot(config(), transport=transport).choose(obs)
+        sent = json.loads(transport.calls[1][1]['messages'][1]['content'])
+        self.assertEqual(len(sent['legalActions']), 2)
+        self.assertIs(sent['legalActions'][1]['isAffordable'], False)
+        self.assertEqual(obs, before)
+
+    def test_cache_order_keeps_exact_values_and_places_changing_menu_last(self):
+        from commander_gym.lmstudio_pilot import _cache_ordered_observation
+        obs = {'legalActions': ['old'], 'state': {'turnNumber': 1, 'cards': {'a': {}}, 'deck': ['card']},
+               'deckKnowledge': 'stable primer'}
+        before = deepcopy(obs)
+        ordered = _cache_ordered_observation(obs)
+        self.assertEqual(ordered, before)
+        self.assertEqual(obs, before)
+        first = json.dumps(ordered)
+        obs['legalActions'] = ['new']
+        second = json.dumps(_cache_ordered_observation(obs))
+        self.assertEqual(first.split('"legalActions"')[0], second.split('"legalActions"')[0])
+        self.assertLess(first.index('"deck"'), first.index('"cards"'))
+        self.assertLess(first.index('"deckKnowledge"'), first.index('"state"'))
+
+    def test_batch_native_deadline_exceeds_local_choice_deadline(self):
+        from commander_gym.batch_roles import native_callback_timeout_ms
+        cfg = config(timeout_seconds=300)
+        self.assertEqual(native_callback_timeout_ms({'plan': {'execution_mode': 'local'},
+                         'local_inference': vars(cfg)}), 320000)
+        self.assertEqual(native_callback_timeout_ms({'plan': {'execution_mode': 'provider'}}), 120000)
+
+    def test_native_untargeted_action_rejects_invented_targets_and_preserves_offer(self):
+        from commander_gym.lmstudio_pilot import _local_native_format, _constrain_untargeted_actions
+        obs = action_observation()
+        action = obs['legalActions'][0]
+        action.update(requiresTargets=False, validTargets=None, targetRequirements=None)
+        action['parameterSpec'] = {'allowedFields': {'targets': 'ENTITY_ID_ARRAY', 'targetGroups': 'ENTITY_ID_ARRAY_ARRAY'}}
+        before = deepcopy(obs)
+        schema = _local_native_format(obs)['schema']
+        _constrain_untargeted_actions(schema, obs)
+        response = {'channel': 'action', 'choice': {'semanticId': action['semanticId'], 'params': {'targets': ['source']}}}
+        with self.assertRaises(LMStudioError):
+            _schema_check(schema, response, validate=True)
+        response['choice']['params'] = {}
+        _schema_check(schema, response, validate=True)
+        self.assertEqual(obs, before)
+        action['validTargets'] = ['source']
+        schema = _local_native_format(obs)['schema']
+        _constrain_untargeted_actions(schema, obs)
+        response['choice']['params'] = {'targets': ['source']}
+        _schema_check(schema, response, validate=True)
+
+    def test_mulligan_prompt_explains_card_cost_without_changing_native_choices(self):
+        obs=action_observation()
+        obs['callbackKind']='decideMulligan'
+        obs['legalActions'][0]['kind']='KeepHand'
+        obs['state']={'mulligan':{'hand':['a','b'],'mulliganCount':3,'cardsToPutOnBottom':2}}
+        transport=FakeTransport()
+        LMStudioPilot(config(),transport=transport).choose(obs)
+        request=transport.calls[1][1]
+        self.assertIn('London mulligan',request['messages'][0]['content'])
+        self.assertIn('After two mulligans',request['messages'][0]['content'])
+        self.assertIn('You have already mulliganed 3 times',request['messages'][0]['content'])
+        self.assertIn('argentum-action-v1:pass',request['messages'][0]['content'])
+        sent=json.loads(request['messages'][1]['content'])
+        self.assertEqual(sent['legalActions'],[{k:v for k,v in action.items() if k!='actionId'} for action in obs['legalActions']])
+        self.assertEqual(sent['state'],obs['state'])
+
     def test_optional_compact_view_round_trips_masked_input_and_keeps_native_schema(self):
         from commander_gym.observation_projection import expand_seat_observation
         from commander_gym.openai_responses_pilot import _without_live_routing
@@ -263,7 +337,7 @@ class LMStudioTransportTests(unittest.TestCase):
                          "http://user:secret@127.0.0.1:1234", "http://127.0.0.1:1234/v1",
                          "http://127.0.0.1:1234?redirect=yes", "http://[::ffff:8.8.8.8]:1234"):
             with self.subTest(endpoint=endpoint), self.assertRaises(ValueError): config(endpoint=endpoint)
-        for kwargs in ({"timeout_seconds": float("nan")}, {"timeout_seconds": 101}, {"max_attempts": 3},
+        for kwargs in ({"timeout_seconds": float("nan")}, {"timeout_seconds": 301}, {"max_attempts": 3},
                        {"max_prompt_bytes": 8192}, {"max_output_tokens": True}):
             with self.assertRaises(ValueError): config(**kwargs)
 
@@ -274,6 +348,32 @@ class LMStudioTransportTests(unittest.TestCase):
         self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
         return server
+
+    def test_slow_worker_receives_large_input_across_poll_intervals(self):
+        received = []
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                received.append(json.loads(self.rfile.read(int(self.headers['Content-Length']))))
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(b'{"ok":true}')
+            def log_message(self, *args): pass
+        server = self._server(Handler)
+        transport = LMStudioTransport(config(endpoint=f'http://127.0.0.1:{server.server_port}'))
+        real_popen = subprocess.Popen
+        children = []
+        def delayed(args, **kwargs):
+            child = real_popen([args[0], '-I', '-c',
+                "import runpy,sys,time;time.sleep(.2);runpy.run_path(sys.argv[1],run_name='__main__')",
+                args[-1]], **kwargs)
+            children.append(child)
+            return child
+        body = {'messages': [{'content': 'large input ' * 20000}]}
+        with patch('commander_gym.lmstudio_provider.subprocess.Popen', side_effect=delayed):
+            self.assertTrue(transport.request('/v1/chat/completions', body, timeout=3)['ok'])
+        self.assertEqual(received, [body])
+        self.assertIsNotNone(children[0].poll())
 
     def test_real_worker_does_not_follow_redirects_or_inherit_credentials_proxies(self):
         received = []

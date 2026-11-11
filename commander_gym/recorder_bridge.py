@@ -9,6 +9,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import asdict
 import hashlib
+import math
 import ctypes
 import errno
 import sys
@@ -34,7 +35,7 @@ PROTOCOL = 1
 MAX_BYTES = 4 * 1024 * 1024
 TIMEOUT = 2.0
 RECEIPT_TIMEOUT = 10.0
-CALLBACK_TTL = 130.0  # native 120s / sidecar 110s; bounded late cancellation receipts
+CALLBACK_TTL = 130.0  # Manual default; managed batches pass a matched bounded lifetime.
 _ID = re.compile(r'[A-Za-z0-9_-]{1,128}')
 
 
@@ -172,14 +173,14 @@ class _Observed(Exception):
         self.event = event
 
 
-def _expected_event(registry, request, callback):
+def _expected_event(registry, request, callback, managed_batch=False):
     def observed(event):
         raise _Observed(event)
     adapter = registry.create_seat(request['playerId'], request['profileId'], decision_start_sink=observed)
     # Reuse the exact transport validation and seat conversion; the start hook stops
     # before choose_for_observation, so this never executes even a synthetic pilot.
     handler = object.__new__(GameServerSidecarHandler)
-    handler.server = SimpleNamespace(sidecar_config=SimpleNamespace(require_manual_human_game=True))
+    handler.server = SimpleNamespace(sidecar_config=SimpleNamespace(require_manual_human_game=not managed_batch, require_managed_batch_game=managed_batch))
     try:
         handler._invoke(callback, adapter, request)
     except _Observed as result:
@@ -197,13 +198,20 @@ class RecorderBridge:
     def __init__(self, capture, registry, *, native_socket: Path, sidecar_socket: Path,
                  native_uid: int, sidecar_uid: int, sidecar_gid: int | None = None,
                  allow_same_uid_fixture: bool = False, local_socket: Path | None = None,
-                 local_uid: int | None = None, local_gid: int | None = None, local_binding_ids=()):
+                 local_uid: int | None = None, local_gid: int | None = None, local_binding_ids=(), managed_batch: bool = False, callback_ttl: float = CALLBACK_TTL):
         if native_uid != os.getuid() or type(sidecar_uid) is not int or sidecar_uid < 0:
             raise RecorderBridgeError('invalid recorder identities')
         if native_uid == sidecar_uid and not allow_same_uid_fixture:
             raise RecorderBridgeError('sidecar and recorder must have distinct identities')
         if native_socket == sidecar_socket:
             raise RecorderBridgeError('recorder roles require separate sockets')
+        if type(managed_batch) is not bool:raise RecorderBridgeError("invalid batch admission mode")
+        if (type(callback_ttl) not in (int, float) or not math.isfinite(callback_ttl)
+                or not 0 < callback_ttl <= 330
+                or (not managed_batch and callback_ttl != CALLBACK_TTL)):
+            raise RecorderBridgeError('invalid callback registration lifetime')
+        self.callback_ttl = callback_ttl
+        self.managed_batch = managed_batch
         self.local_binding_ids = frozenset(local_binding_ids)
         self.local_socket, self.local_uid, self.local_gid = local_socket, local_uid, local_gid
         if any(value is not None for value in (local_socket, local_uid, local_gid)) or self.local_binding_ids:
@@ -302,9 +310,9 @@ class RecorderBridge:
                 request = message['request']
                 if (not isinstance(request, dict) or request.get('playerId') != seat or
                         request.get('gameSessionId') != game_id or request.get('profileId') != message['bindingId'] or
-                        request.get('manualHumanGame') is not True):
+                        ((request.get('managedBatchGame') is not True or request.get('manualHumanGame') is not None) if self.managed_batch else request.get('manualHumanGame') is not True)):
                     raise RecorderBridgeError('native callback identity mismatch')
-                expected = _expected_event(self.registry, request, message['callback'])
+                expected = _expected_event(self.registry, request, message['callback'], self.managed_batch)
                 metadata.update(expected=expected, registeredUnix=time.time())
                 payload, kind, seat_id = {'recorder_bridge': metadata}, 'runtime_context', None
             else:
@@ -317,7 +325,7 @@ class RecorderBridge:
                     payload, kind, seat_id = {'recorder_bridge': metadata}, 'runtime_context', None
                 else:
                     age = time.time() - registered['registeredUnix']
-                    if not 0 <= age <= CALLBACK_TTL:
+                    if not 0 <= age <= self.callback_ttl:
                         raise RecorderBridgeError('native callback registration expired')
                     expected, event = registered['expectedHashes'], message['event']
                     if not isinstance(event, dict) or set(event) != set(expected):

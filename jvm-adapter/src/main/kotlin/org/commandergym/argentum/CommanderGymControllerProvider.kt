@@ -53,6 +53,7 @@ class CommanderGymControllerProvider(
     override val mode: String = "commander-gym",
     private val profileLabel: String? = if (requireHumanParticipant) "Luna" else null,
     private val requireExplicitProfile: Boolean = requireHumanParticipant,
+    private val allowRecordedManagedBatch: Boolean = false,
 ) : AiControllerProvider {
     override val supportsDefaultController: Boolean get() = !requireExplicitProfile
     private val base: String
@@ -148,6 +149,7 @@ class CommanderGymControllerProvider(
                 }
             },
             manualHumanGame = requireHumanParticipant,
+            managedBatchGame = allowRecordedManagedBatch && !requireHumanParticipant,
             recorder = recorder,
         )
         // Only the native edge can obtain the trusted snapshot. It never crosses HTTP.
@@ -207,6 +209,7 @@ class CommanderGymPlayerController(
     private val gameSessionId: String? = null,
     private val beforeCallback: () -> Unit = {},
     private val manualHumanGame: Boolean = false,
+    private val managedBatchGame: Boolean = false,
     private val recorder: RecorderCallbackClient? = null,
 ) : com.wingedsheep.ai.RecordedAiPlayerController, com.wingedsheep.ai.RecordedAiCallbackController {
     override fun chooseRecordedAction(state: ClientGameState, legalActions: List<LegalActionInfo>,
@@ -356,13 +359,14 @@ class CommanderGymPlayerController(
         profileId?.let { put("profileId", it) }
         gameSessionId?.let { put("gameSessionId", it) }
         if (manualHumanGame) put("manualHumanGame", true)
+        if (managedBatchGame) put("managedBatchGame", true)
     }
 
     private fun post(path: String, body: JsonObject): JsonObject {
         beforeCallback()
         val callbackId = if (recorder == null) null else UUID.randomUUID().toString()
         val envelope = callbackId?.let { id ->
-            require(manualHumanGame && gameSessionId != null && profileId != null) { "Recorder requires native manual Binding game" }
+            require((manualHumanGame || managedBatchGame) && gameSessionId != null && profileId != null) { "Recorder requires explicitly admitted native Binding game" }
             buildJsonObject {
                 put("protocol", 1)
                 put("callbackId", id)

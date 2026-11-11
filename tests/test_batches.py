@@ -1,0 +1,286 @@
+import concurrent.futures
+import json
+from pathlib import Path
+import tempfile
+import time
+from types import SimpleNamespace
+import unittest
+from unittest.mock import patch
+
+from commander_gym.batch_store import BatchStore, BatchConflict, game_usage
+from commander_gym.batch_budget import TokenFence, ChoiceGuard, atomic_json, BatchLimitError
+from commander_gym.batch_supervisor import Supervisor, UNITS
+
+
+class BatchTests(unittest.TestCase):
+    def setUp(self):
+        self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
+        self.root=Path(self.temp.name)
+        self.catalog=[{'id':'approved','deck':{'label':'Test deck','cards':{'Forest':99}},'displayName':'Test'}]
+        self.store=BatchStore(self.root,self.catalog,{'engine':'exact-engine','gym':'exact-gym'})
+        self.plan={'name':'Investigation','bindings':['approved']*4,'game_count':2,'wall_seconds':30,'max_decisions':100,
+                   'budget_usd':1,'max_requests':20,'max_tokens':100000,'failure_policy':'pause','execution_mode':'fixture'}
+        self.actor='owner';self.key=0
+    def command(self,op,batch=None,**data):
+        self.key+=1
+        return self.store.command(batch['id'] if batch else None,op,data,self.actor,'test-command-key-'+str(self.key))['batch']
+    def draft(self):return self.command('create',plan=self.plan)
+    def start(self,b):return self.command('start',b,version=b['version'],fingerprint=b['fingerprint'])
+    def test_no_work_before_explicit_start_and_fingerprint(self):
+        b=self.draft();self.assertEqual(b['state'],'Draft')
+        with self.assertRaises(BatchConflict):self.store.new_attempt(b['id'])
+        with self.assertRaises(BatchConflict):self.command('start',b,version=1,fingerprint='wrong')
+        b=self.start(b);self.assertEqual(b['state'],'Queued')
+    def test_concurrent_start_and_stale_tab(self):
+        b=self.draft()
+        def start(n):
+            try:return self.store.command(b['id'],'start',{'version':1,'fingerprint':b['fingerprint']},self.actor,'concurrent-start-'+str(n))
+            except BatchConflict:return None
+        with concurrent.futures.ThreadPoolExecutor(2) as pool:results=list(pool.map(start,range(2)))
+        self.assertEqual(sum(r is not None for r in results),1)
+    def test_idempotent_create_and_changed_key_payload(self):
+        raw={'plan':self.plan};key='stable-browser-key'
+        a=self.store.command(None,'create',raw,self.actor,key)
+        b=self.store.command(None,'create',raw,self.actor,key)
+        self.assertEqual(a,b);self.assertEqual(self.store.list()['total'],1)
+        with self.assertRaises(BatchConflict):self.store.command(None,'create',{'plan':{**self.plan,'name':'Other'}},self.actor,key)
+    def test_pause_before_and_during_attempt(self):
+        b=self.start(self.draft());b=self.command('pause',b,version=b['version'])
+        self.assertEqual(b['state'],'Paused')
+        with self.assertRaises(BatchConflict):self.store.new_attempt(b['id'])
+        b=self.command('resume',b,version=b['version']);a=self.store.new_attempt(b['id']);b=self.store.get(b['id'])
+        b=self.command('pause',b,version=b['version']);self.assertEqual(b['state'],'Draining');self.assertEqual(a['state'],'Starting')
+    def test_restart_preserves_uncertain_create_and_requires_reconciliation(self):
+        b=self.start(self.draft());a=self.store.new_attempt(b['id']);a['create_intent_unix']=time.time();self.store.record_attempt(a)
+        reopened=BatchStore(self.root,self.catalog,self.store.pins);reopened.recover();b=reopened.get(b['id'])
+        self.assertEqual(b['state'],'Needs reconciliation');self.assertEqual(b['attempts'][0]['state'],'Needs reconciliation')
+        with self.assertRaises(BatchConflict):reopened.new_attempt(b['id'])
+    def test_retry_is_linked_new_draft(self):
+        b=self.start(self.draft());a=self.store.new_attempt(b['id']);a['state']='Interrupted';self.store.record_attempt(a)
+        b=self.store.get(b['id']);retry=self.command('retry',b,version=b['version'],attempt_id=a['id'])
+        self.assertEqual(retry['state'],'Draft');self.assertEqual(retry['parent_attempt_id'],a['id']);self.assertNotEqual(retry['id'],b['id'])
+        self.assertEqual(self.store.get(b['id'])['attempts'][0]['state'],'Interrupted')
+    def test_unknown_bindings_unbounded_values_and_injected_paths_rejected(self):
+        for changes in [{'bindings':['/etc/passwd']*4},{'game_count':9999},{'budget_usd':float('nan')},{'command':'shutdown'},{'wall_seconds':True}]:
+            with self.subTest(changes=changes),self.assertRaises(ValueError):self.store.validate({**self.plan,**changes})
+    def test_unknown_usage_retains_token_reservation_across_restart(self):
+        path=self.root/'tokens.json';atomic_json(path,{'limit':10000,'reserved_or_used':0,'reported_tokens':0,'unsettled':0})
+        class Client:
+            @property
+            def responses(self):return self
+            def create(self,**request):raise TimeoutError()
+        with self.assertRaises(TimeoutError):TokenFence(Client(),path,10000).create(input='masked')
+        data=json.loads(path.read_text());self.assertGreater(data['reserved_or_used'],6000);self.assertEqual(data['unsettled'],1)
+        with self.assertRaises(ValueError):TokenFence(Client(),path,10000).create(input='masked')
+        self.assertEqual(json.loads(path.read_text()),data)
+    def test_settled_tokens_and_missing_ledger_fail_closed(self):
+        path=self.root/'tokens.json';atomic_json(path,{'limit':10000,'reserved_or_used':0,'reported_tokens':0,'unsettled':0})
+        client=SimpleNamespace(responses=SimpleNamespace(create=lambda **_:SimpleNamespace(usage=SimpleNamespace(total_tokens=17))))
+        TokenFence(client,path,10000).create(input='masked');self.assertEqual(json.loads(path.read_text())['reserved_or_used'],17)
+        path.unlink()
+        with self.assertRaises(FileNotFoundError):TokenFence(client,path,10000).create(input='masked')
+    def test_decision_limit_is_shared_across_seats(self):
+        pilot=SimpleNamespace(name='fixture',version='1',choose=lambda _: 'legal-choice')
+        guard=ChoiceGuard(1,time.time()+60,self.root/'progress.json')
+        a,b=guard.wrap(pilot),guard.wrap(pilot)
+        self.assertEqual(a.choose(None),'legal-choice')
+        with self.assertRaises(ValueError):b.choose(None)
+        self.assertEqual(json.loads((self.root/'progress.json').read_text())['state'],'Limit reached')
+
+    def test_bounded_worker_mapping_usage_settles_across_requests(self):
+        from commander_gym.bounded_provider_process import _ResponseDict
+        path=self.root/'tokens.json'
+        atomic_json(path,{'limit':10000,'reserved_or_used':0,'reported_tokens':0,'unsettled':0})
+        response=_ResponseDict(usage={'total_tokens':17})
+        client=SimpleNamespace(responses=SimpleNamespace(create=lambda **_:response))
+        for _ in range(20):
+            self.assertIs(TokenFence(client,path,10000).create(input='masked'),response)
+        self.assertEqual(json.loads(path.read_text()),
+                         {'limit':10000,'reserved_or_used':340,'reported_tokens':340,'unsettled':0})
+
+    def test_invalid_mapping_usage_keeps_reservation_and_enforces_limit(self):
+        for value in (None,-1,True,'17',17.0):
+            with self.subTest(value=value):
+                path=self.root/'tokens.json'
+                atomic_json(path,{'limit':10000,'reserved_or_used':0,'reported_tokens':0,'unsettled':0})
+                client=SimpleNamespace(responses=SimpleNamespace(create=lambda **_:{'usage':{'total_tokens':value}}))
+                fence=TokenFence(client,path,10000)
+                fence.create(input='masked')
+                before=json.loads(path.read_text())
+                self.assertEqual(before['unsettled'],1)
+                with self.assertRaisesRegex(ValueError,'batch_token_fence'):fence.create(input='masked')
+                self.assertEqual(json.loads(path.read_text()),before)
+    def test_zero_usage_concurrent_settlement_never_invalidates_ledger(self):
+        from commander_gym.openai_run_budget import OpenAIRunBudget
+        budget=OpenAIRunBudget(self.root/'openai.json',1,max_requests=100,initialize_new_ledger=True)
+        budget.snapshot()
+        import threading
+        barrier=threading.Barrier(4)
+        def provider(**request):
+            barrier.wait(timeout=5)
+            return SimpleNamespace(usage=SimpleNamespace(input_tokens=0,output_tokens=0))
+        def call(n):
+            return budget.create(provider,{'model':'gpt-6-luna','max_output_tokens':2048,'input':'masked'*(n+1)})
+        with concurrent.futures.ThreadPoolExecutor(4) as pool:list(pool.map(call,range(4)))
+        self.assertGreaterEqual(budget.snapshot()['estimatedUsd'],0)
+        self.assertEqual(budget.snapshot()['unsettledRequests'],0)
+
+    def test_finish_uses_latest_pause_and_no_empty_resume(self):
+        b=self.start(self.draft());attempt=self.store.new_attempt(b['id'])
+        b=self.store.get(b['id']);self.command('pause',b,version=b['version'])
+        attempt.update(state='Completed',message='Native terminal observed')
+        self.store.finish_attempt(attempt)
+        self.assertEqual(self.store.get(b['id'])['state'],'Paused')
+        b=self.store.get(b['id']);b=self.command('resume',b,version=b['version']);a=self.store.new_attempt(b['id'])
+        a.update(state='Failed',message='Explicit worker failure');self.store.finish_attempt(a)
+        b=self.store.get(b['id']);self.assertEqual(b['state'],'Failed')
+        with self.assertRaises(BatchConflict):self.command('resume',b,version=b['version'])
+
+    def test_clone_reviews_current_pins_and_preserves_original_plan(self):
+        b=self.draft()
+        new=BatchStore(self.root,self.catalog,{'engine':'new-engine','gym':'new-gym'})
+        clone=new.command(b['id'],'clone',{'version':b['version']},self.actor,'clone-current-pins')['batch']
+        self.assertEqual(clone['plan']['pins']['engine'],'new-engine')
+        self.assertEqual(self.store.get(b['id'])['plan']['pins']['engine'],'exact-engine')
+        self.assertEqual(clone['state'],'Draft')
+
+    def test_fixture_selects_only_current_unconstrained_masked_options(self):
+        from commander_gym.batch_fixture import value
+        pending={'kind':'SelectCardsDecision','minSelections':1,'maxSelections':1,'options':['a','b'],
+                 'responseSpec':{'responseType':'CardsSelectedResponse','requiredFields':{'selectedCards':'ENTITY_ID_ARRAY'}}}
+        with patch('commander_gym.batch_fixture._observation',return_value={'pendingDecision':pending}):
+            self.assertEqual(value({})['response']['selectedCards'],['a'])
+            pending['onePerColor']=True
+            with self.assertRaises(ValueError):value({})
+
+    def terminal_supervisor(self, terminal, progress=None, manifest=None):
+        b=self.start(self.draft());attempt=self.store.new_attempt(b['id'])
+        supervisor=object.__new__(Supervisor)
+        supervisor.store=self.store;supervisor.root=self.root;supervisor.runtime=self.root/'ipc'
+        (supervisor.runtime/'native').mkdir(parents=True);(supervisor.runtime/'provider').mkdir()
+        supervisor.config={'native_port':8879,'pins':self.store.pins,'catalog':self.catalog}
+        supervisor.error=None;supervisor.stop=unittest.mock.MagicMock()
+        import itertools
+        supervisor.stop.is_set.side_effect=itertools.chain([False,False],itertools.repeat(True))
+        supervisor.prepare=unittest.mock.Mock(return_value={})
+        supervisor.unit=unittest.mock.Mock(side_effect=lambda op,_:'active' if op=='is-active' else 'fixed-invocation')
+        supervisor.close_runtime=unittest.mock.Mock()
+        supervisor.budget_snapshot=unittest.mock.Mock(return_value={'reported_tokens':0})
+        attempt['runtime_id']='owned-runtime'
+        if manifest is not None:
+            capture=self.root/'captures'/attempt['id']/'native-game'
+            capture.mkdir(parents=True)
+            atomic_json(capture/'manifest.json',manifest)
+        if progress:
+            supervisor.stop.is_set.side_effect=None
+            supervisor.stop.is_set.return_value=False
+            folder=self.root/'progress'/attempt['id'];folder.mkdir(parents=True)
+            atomic_json(folder/'provider.json',progress)
+        health={'ok':True,'releaseId':'owned-runtime','engineSha':'exact-engine','gymSha':'exact-gym','activeGames':0,
+                'recordingHealthy':True,'recoveryComplete':True,'bootId':'boot'}
+        with patch('commander_gym.batch_supervisor.exchange',return_value=health),patch('commander_gym.batch_supervisor.native_http',side_effect=[
+            {'lobbyId':'native-lobby'}, {'complete':True,'liveGames':[],'completedGames':[terminal]}]):
+            supervisor.run_attempt(b,attempt)
+        return self.store.get(b['id'])['attempts'][0]
+
+    def test_only_confirmed_unsimulated_native_terminal_counts_completed(self):
+        attempt=self.terminal_supervisor({'gameSessionId':'native-game','nativeGameOver':True,'isSimulated':False,'winnerId':'seat-a','isDraw':False})
+        self.assertEqual(attempt['state'],'Completed');self.assertEqual(attempt['winner_id'],'seat-a')
+        self.assertIsNone(attempt['recording_complete'])
+        self.assertIn('Open or unavailable',attempt['recording_state'])
+
+    def test_native_serialized_terminal_fields_are_recognized(self):
+        attempt=self.terminal_supervisor({'gameSessionId':'native-game','nativeGameOver':True,
+            'simulated':False,'winnerId':None,'draw':True})
+        self.assertEqual(attempt['state'],'Completed')
+        self.assertIs(attempt['is_draw'],True)
+
+    def test_session_cleanup_is_failure_even_when_lobby_reports_game_over(self):
+        attempt=self.terminal_supervisor({'gameSessionId':'native-game','nativeGameOver':True,
+            'simulated':False,'winnerId':None,'draw':True},manifest={
+                'game_id':'native-game','outcome':{'kind':'session_closed'},'recording_complete':False})
+        self.assertEqual(attempt['state'],'Failed')
+        self.assertIsNone(attempt['winner_id'])
+        self.assertIsNone(attempt['is_draw'])
+
+    def test_token_limit_reports_interruption_without_native_result(self):
+        attempt=self.terminal_supervisor({}, {'state':'Limit reached','reason':'batch_token_fence',
+            'used':929383,'reservation':96930,'limit':1000000,'decisions':78})
+        self.assertEqual(attempt['state'],'Interrupted')
+        self.assertIn('929,383 used or reserved + 96,930 next reservation > 1,000,000 limit',attempt['message'])
+        self.assertIsNone(attempt['winner_id'])
+
+    def test_wrapped_limit_is_structured_but_arbitrary_exception_text_is_private(self):
+        def fail(_):
+            try:raise BatchLimitError('batch_token_fence',used=929383,reservation=96930,limit=1000000)
+            except BatchLimitError as error:raise RuntimeError('private transport details') from error
+        guard=ChoiceGuard(100,time.time()+60,self.root/'progress.json')
+        pilot=SimpleNamespace(name='fixture',version='1',choose=fail)
+        with self.assertRaises(RuntimeError):guard.wrap(pilot).choose(None)
+        data=json.loads(guard.progress.read_text())
+        self.assertEqual(data['state'],'Limit reached');self.assertEqual(data['reason'],'batch_token_fence')
+        self.assertEqual(data['used'],929383);self.assertNotIn('private',json.dumps(data))
+        def unknown(_):raise ValueError('private headers and provider content')
+        pilot.choose=unknown
+        with self.assertRaises(ValueError):guard.wrap(pilot).choose(None)
+        data=json.loads(guard.progress.read_text())
+        self.assertEqual(data['state'],'Callback failed');self.assertNotIn('private',json.dumps(data))
+
+    def test_simulated_terminal_and_discovery_completion_do_not_invent_result(self):
+        attempt=self.terminal_supervisor({'gameSessionId':'native-game','nativeGameOver':True,'isSimulated':True,'winnerId':'seat-a','isDraw':False})
+        self.assertEqual(attempt['state'],'Interrupted');self.assertIsNone(attempt['winner_id'])
+
+    def test_game_context_preserves_supervisor_reason_separately(self):
+        b=self.start(self.draft());a=self.store.new_attempt(b['id'])
+        a.update(game_id='native-id',state='Interrupted',supervisor_termination='Owner requested interruption')
+        self.store.record_attempt(a)
+        context=self.store.game_context('native-id')
+        self.assertEqual(context['attempt_id'],a['id'])
+        self.assertEqual(context['supervisor_termination'],'Owner requested interruption')
+        self.assertIsNone(self.store.game_context('missing-game'))
+
+    def test_usage_is_per_game_across_multiple_games_and_restart(self):
+        zero={'estimated_usd':0.0,'requests':0,'reported_tokens':0,'reserved_or_used_tokens':0,
+              'unsettled_requests':0,'unsettled_token_requests':0,'input_tokens':0,'output_tokens':0}
+        first={**zero,'estimated_usd':.1,'requests':2,'reported_tokens':100,'reserved_or_used_tokens':100,
+               'input_tokens':80,'output_tokens':20}
+        second={**first,'estimated_usd':.25,'requests':5,'reported_tokens':175,'reserved_or_used_tokens':175,
+                'input_tokens':140,'output_tokens':35}
+        b=self.start(self.draft());a=self.store.new_attempt(b['id'])
+        a.update(game_id='first',state='Completed',budget_start=zero,budget=first)
+        self.store.finish_attempt(a)
+        a=self.store.new_attempt(b['id'])
+        a.update(game_id='second',state='Completed',budget_start=first,budget=second)
+        self.store.finish_attempt(a)
+        reopened=BatchStore(self.root,self.catalog,self.store.pins)
+        u=reopened.game_context('second')['game_usage']
+        self.assertEqual(u['reported_tokens'],75);self.assertEqual(u['requests'],3)
+        self.assertEqual(u['input_tokens'],60);self.assertEqual(u['output_tokens'],15)
+        self.assertAlmostEqual(u['estimated_usd'],.15)
+        self.assertEqual(reopened.get(b['id'])['attempts'][1]['budget']['reported_tokens'],175)
+        self.assertEqual(reopened.game_context('first')['game_usage']['reported_tokens'],100)
+
+    def test_legacy_first_game_attribution_but_later_game_not_invented(self):
+        end={'estimated_usd':.23,'requests':52,'reported_tokens':904483,'reserved_or_used_tokens':904483,
+             'unsettled_requests':1,'unsettled_token_requests':0}
+        u=game_usage({'ordinal':1,'budget':end})
+        self.assertEqual(u['state'],'Available');self.assertEqual(u['reported_tokens'],904483)
+        self.assertEqual(u['unsettled_requests'],1);self.assertIsNone(u['input_tokens'])
+        self.assertEqual(game_usage({'ordinal':2,'budget':end})['state'],'Unavailable')
+        self.assertEqual(game_usage({'ordinal':1})['state'],'Unavailable')
+
+    def test_missing_or_regressing_usage_remains_unknown(self):
+        a={'ordinal':2,'budget_start':{'reported_tokens':100,'estimated_usd':.5},
+           'budget':{'reported_tokens':90,'estimated_usd':.2}}
+        u=game_usage(a)
+        self.assertEqual(u['state'],'Partial')
+        self.assertIsNone(u['reported_tokens']);self.assertIsNone(u['estimated_usd'])
+        a['budget_start']={'state':'Unavailable'}
+        self.assertEqual(game_usage(a)['state'],'Unavailable')
+
+    def test_supervisor_cannot_address_human_units(self):
+        supervisor=object.__new__(Supervisor)
+        with self.assertRaises(ValueError):supervisor.unit('stop','argentum-play.service')
+        self.assertTrue(all(u.startswith('commander-gym-batch-') for u in UNITS))
+
+if __name__=='__main__':unittest.main()

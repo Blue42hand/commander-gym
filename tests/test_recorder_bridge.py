@@ -245,6 +245,22 @@ class RecorderBridgeTests(unittest.TestCase):
         self.capture.scan()
         self.assertTrue((completed / 'manifest.json').exists())
 
+    def test_managed_batch_admission_is_explicit_and_separate_from_human(self):
+        batch={k:v for k,v in self.request.items() if k!='manualHumanGame'}
+        batch['managedBatchGame']=True
+        with self.assertRaises(RecorderBridgeError):
+            self.bridge.ingest(dict(self.identity,op='register',request=batch),native=True)
+        self.bridge.managed_batch=True
+        with self.assertRaises(RecorderBridgeError):self.register()
+        missing={k:v for k,v in batch.items() if k!='managedBatchGame'}
+        with self.assertRaises(RecorderBridgeError):self.bridge.ingest(dict(self.identity,op='register',request=missing),native=True)
+        wrong={**batch,'playerId':'other-seat'}
+        with self.assertRaises(RecorderBridgeError):self.bridge.ingest(dict(self.identity,op='register',request=wrong),native=True)
+        self.assertTrue(self.bridge.ingest(dict(self.identity,op='register',request=batch),native=True)['ok'])
+        with self.assertRaises(RecorderBridgeError):self.bridge.ingest(dict(self.identity,op='register',request=batch),native=False)
+        event=_expected_event(self.registry,batch,self.identity['callback'],True)
+        self.assertNotIn('DO-NOT-SEND-ADMIN-SECRET',json.dumps(event))
+
     def test_fsync_ack_idempotent_conflicting_duplicates_and_restart(self):
         self.register()
         event = self.event()
@@ -373,6 +389,34 @@ class RecorderBridgeTests(unittest.TestCase):
         before = inspect_journal(self.game)['root_sha256']
         self.assertEqual(self.bridge.ingest(closed, native=True), receipt)
         self.assertEqual(inspect_journal(self.game)['root_sha256'], before)
+
+    def test_batch_callback_lifetime_matches_extended_local_deadline(self):
+        self.bridge = RecorderBridge(self.capture, self.registry,
+            native_socket=self.ipc/'native.sock', sidecar_socket=self.ipc/'sidecar.sock',
+            native_uid=os.getuid(), sidecar_uid=os.getuid(), allow_same_uid_fixture=True,
+            managed_batch=True, callback_ttl=330)
+        self.request.pop('manualHumanGame')
+        self.request['managedBatchGame'] = True
+        expected = _expected_event(self.registry, self.request, self.identity['callback'], True)
+        with patch('commander_gym.recorder_bridge.time.time', return_value=100): self.register()
+        with patch('commander_gym.recorder_bridge.time.time', return_value=101):
+            self.bridge.ingest(dict(self.identity, op='started', event=expected), native=False)
+        finished = copy.deepcopy(expected)
+        finished['choice'] = {'channel': 'action', 'actionId': 0, 'params': {}, 'metadata': {}}
+        with patch('commander_gym.recorder_bridge.time.time', return_value=431):
+            with self.assertRaisesRegex(RecorderBridgeError, 'expired'):
+                self.bridge.ingest(dict(self.identity, op='finished', event=finished), native=False)
+        with patch('commander_gym.recorder_bridge.time.time', return_value=401):
+            self.assertTrue(self.bridge.ingest(dict(self.identity, op='finished', event=finished), native=False)['ok'])
+
+    def test_callback_lifetime_is_bounded_and_human_default_is_unchanged(self):
+        self.assertEqual(self.bridge.callback_ttl, 130)
+        for managed, lifetime in ((True, 331), (True, float('inf')), (True, True), (False, 330)):
+            with self.assertRaisesRegex(RecorderBridgeError, 'lifetime'):
+                RecorderBridge(self.capture, self.registry,
+                    native_socket=self.ipc/'native.sock', sidecar_socket=self.ipc/'sidecar.sock',
+                    native_uid=os.getuid(), sidecar_uid=os.getuid(), allow_same_uid_fixture=True,
+                    managed_batch=managed, callback_ttl=lifetime)
 
     def test_expiration_completion_without_start_and_closed_start(self):
         with patch('commander_gym.recorder_bridge.time.time', return_value=100): self.register()

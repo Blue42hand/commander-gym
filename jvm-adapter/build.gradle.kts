@@ -74,3 +74,15 @@ tasks.register<JavaExec>("runLocalInferenceAcceptance") {
     classpath = sourceSets["test"].runtimeClasspath
     mainClass.set("org.commandergym.argentum.LocalInferenceAcceptanceKt")
 }
+
+// Public definitions from the exact composite-build engine, with no GameState or provider.
+tasks.register<JavaExec>("exportPublicCardFacts") {
+    group = "verification"
+    dependsOn(tasks.named("testClasses"))
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("org.commandergym.argentum.ExportPublicCardFactsKt")
+    systemProperty("commander.gym.facts.engineRevision", nativeRevision.get())
+    if (providers.gradleProperty("factsInput").isPresent && providers.gradleProperty("factsOutput").isPresent) {
+        args(providers.gradleProperty("factsInput").get(), providers.gradleProperty("factsOutput").get())
+    }
+}

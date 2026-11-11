@@ -102,10 +102,16 @@ def capture_pins(pins, profile):
 def require_local_ready(profile):
     """Fixed loopback authenticated catalog check before native QA admission."""
     from .qa_local_probes import _catalog
-    from .manual_runtime_local import local_recording_registry
-    registry = local_recording_registry(profile)
+    # Root has already validated the exact catalog and component seals. The
+    # native child deliberately has no local-provider group or catalog access.
+    # Check authenticated discovery against the identities in its sealed profile.
     status, payload = _catalog(profile['localInference']['port'], LOCAL_TOKEN)
-    require(status == 200 and payload == {'profiles': list(registry.profile_payloads())}, 'qa_local_not_ready')
+    profiles = payload.get('profiles') if isinstance(payload, dict) else None
+    expected = set(profile['localInference']['catalog']['bindings'])
+    require(status == 200 and isinstance(profiles, list)
+            and all(isinstance(entry, dict) and isinstance(entry.get('id'), str) for entry in profiles)
+            and len(profiles) == len(expected) and {entry['id'] for entry in profiles} == expected,
+            'qa_local_not_ready')
 
 
 def validate_probe_result(name, result, profile, nonce):

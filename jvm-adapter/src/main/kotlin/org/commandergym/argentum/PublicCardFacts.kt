@@ -1,0 +1,120 @@
+package org.commandergym.argentum
+
+import com.wingedsheep.ai.engine.knowledge.CardIntentAnalyzer
+import com.wingedsheep.ai.engine.knowledge.SynergyAxes
+import com.wingedsheep.ai.engine.knowledge.TargetPolarityAnalyzer
+import com.wingedsheep.engine.registry.CardRegistry
+import com.wingedsheep.sdk.core.Subtype
+import com.wingedsheep.sdk.model.CardDefinition
+import com.wingedsheep.sdk.scripting.AbilityCost
+import com.wingedsheep.sdk.scripting.values.DynamicAmount
+import com.wingedsheep.sdk.scripting.effects.AddManaEffect
+import com.wingedsheep.sdk.scripting.effects.AddColorlessManaEffect
+import com.wingedsheep.sdk.scripting.effects.GatedEffect
+import com.wingedsheep.sdk.scripting.effects.Gate
+import com.wingedsheep.sdk.scripting.effects.DrawCardsEffect
+import com.wingedsheep.sdk.scripting.effects.ManaExpiry
+import com.wingedsheep.sdk.scripting.targets.EffectTarget
+import com.wingedsheep.sdk.scripting.EventPattern
+import kotlinx.serialization.json.*
+
+/** Public definitions only: this API cannot accept GameState or a seat snapshot. */
+object PublicCardFacts {
+    private val json = Json { encodeDefaults = true }
+    private val basicColors = mapOf("Plains" to "W", "Island" to "U", "Swamp" to "B", "Mountain" to "R", "Forest" to "G")
+
+    private fun drawSensitive(value: JsonElement): Boolean = when (value) {
+        is JsonObject -> (value["type"] as? JsonPrimitive)?.content?.contains("Draw") == true || value.values.any(::drawSensitive)
+        is JsonArray -> value.any(::drawSensitive)
+        else -> false
+    }
+
+    fun export(registry: CardRegistry, names: Collection<String>, engineRevision: String): JsonObject {
+        require(engineRevision.matches(Regex("[0-9a-f]{40}")))
+        return buildJsonObject {
+            put("schemaVersion", 1)
+            put("engineRevision", engineRevision)
+            putJsonArray("creatureTypes") { Subtype.ALL_CREATURE_TYPES.sorted().forEach { add(it) } }
+            putJsonObject("cards") {
+                names.distinct().sorted().forEach { name ->
+                    val card = requireNotNull(registry.getCard(name)) { "Unknown native card: $name" }
+                    put(name, fact(card, registry))
+                }
+            }
+        }
+    }
+
+    private fun fact(card: CardDefinition, registry: CardRegistry): JsonObject {
+        val intent = CardIntentAnalyzer.analyze(card)
+        val synergy = SynergyAxes.of(card)
+        val raw = json.encodeToJsonElement(CardDefinition.serializer(), card).jsonObject
+        val script = raw["script"]!!.jsonObject
+        val basics = card.typeLine.subtypes.mapNotNull { basicColors[it.value] }
+        val activated = card.script.activatedAbilities
+        // A small structural whitelist, deliberately excluding variable, restricted,
+        // conditional, sacrifice, life-cost and choice-producing mana abilities.
+        val simpleAbilities = activated.isNotEmpty() && activated.all {
+            it.isManaAbility && it.cost == AbilityCost.Tap && when (val effect = it.effect) {
+                is AddManaEffect -> effect.amount is DynamicAmount.Fixed && effect.restriction == null && effect.riders.isEmpty() && effect.expiry == ManaExpiry.END_OF_TURN
+                is AddColorlessManaEffect -> effect.amount is DynamicAmount.Fixed && effect.restriction == null && effect.riders.isEmpty() && effect.expiry == ManaExpiry.END_OF_TURN
+                else -> false
+            }
+        }
+        val noStatic = card.staticAbilities.isEmpty()
+        val noTriggers = card.script.triggeredAbilities.isEmpty()
+        val noReplacement = card.script.replacementEffects.isEmpty()
+        val simpleMana = noStatic && noTriggers && noReplacement &&
+            (simpleAbilities || card.typeLine.isLand && basics.isNotEmpty() && activated.isEmpty())
+        val manaColors = basics.toMutableSet()
+        if (simpleAbilities) {
+            // Read the SDK's serialized fixed mana effect. Unknown shapes supply
+            // no color estimate rather than guessing from Oracle text.
+            for (ability in script["activatedAbilities"]!!.jsonArray) {
+                val effect = ability.jsonObject["effect"]!!.jsonObject
+                when (effect["type"]?.jsonPrimitive?.content) {
+                    "AddColorlessMana" -> manaColors.add("C")
+                    "AddMana" -> effect["color"]?.jsonPrimitive?.content?.let {
+                        mapOf("WHITE" to "W", "BLUE" to "U", "BLACK" to "B", "RED" to "R", "GREEN" to "G") [it]
+                    }?.let(manaColors::add)
+                }
+            }
+        }
+        return buildJsonObject {
+            put("manaCost", card.manaCost.toString())
+            putJsonArray("types") { card.typeLine.cardTypes.map { it.name }.sorted().forEach { add(it) } }
+            putJsonArray("subtypes") { card.typeLine.subtypes.map { it.value }.sorted().forEach { add(it) } }
+            putJsonArray("keywords") { card.keywords.map { it.name }.sorted().forEach { add(it) } }
+            putJsonArray("tags") { intent.tags.map { it.name }.sorted().forEach { add(it) } }
+            putJsonArray("spellPolarity") { TargetPolarityAnalyzer.forSpell(card, registry::getCard).forEach { add(it.name) } }
+            putJsonArray("manaColors") { manaColors.sorted().forEach { add(it) } }
+            put("simpleMana", simpleMana)
+            put("simplePermanent", noStatic && noTriggers && noReplacement && (activated.isEmpty() || simpleMana))
+            put("unconditionalUntapped", noReplacement)
+            put("entersTapped", intent.entersTapped)
+            // Only a whole trigger consisting of a free May(Draw N) qualifies.
+            // Costs, alternative branches, choices and mixed effects remain strategic.
+            putJsonObject("freeOptionalDraws") {
+                for (ability in card.script.triggeredAbilities) {
+                    val gate = ability.effect as? GatedEffect ?: continue
+                    val draw = gate.then as? DrawCardsEffect ?: continue
+                    val count = draw.count as? DynamicAmount.Fixed ?: continue
+                    if (gate.gate is Gate.MayDecide && gate.otherwise == null &&
+                        (gate.decisionMaker == null || gate.decisionMaker == EffectTarget.Controller) &&
+                        draw.target == EffectTarget.Controller && count.amount in 1..10) {
+                        put(ability.id.value, count.amount)
+                    }
+                }
+            }
+            put("drawSensitive", card.script.triggeredAbilities.any {
+                drawSensitive(json.encodeToJsonElement(EventPattern.serializer(), it.trigger))
+            } || drawSensitive(script["staticAbilities"] ?: JsonNull) ||
+                drawSensitive(script["replacementEffects"] ?: JsonNull))
+            put("staticValue", intent.staticPriorValue)
+            put("repeatable", intent.repeatable)
+            put("affectsOpponent", intent.affectsOpponent)
+            putJsonArray("feeds") { synergy.feeds.map { it.name }.sorted().forEach { add(it) } }
+            putJsonArray("rewards") { synergy.rewards.map { it.name }.sorted().forEach { add(it) } }
+            putJsonArray("tribesRewarded") { synergy.tribesRewarded.map { it.value }.sorted().forEach { add(it) } }
+        }
+    }
+}

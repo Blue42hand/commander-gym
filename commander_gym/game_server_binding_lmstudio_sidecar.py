@@ -41,13 +41,19 @@ class LocalBindingConfig:
     catalog_path: Path
     instance_root: Path
     live_catalog_root: Path | None = None
+    engine_revision: str | None = None
 
 
 class LocalBindingComponentResolver:
-    def __init__(self, config, transport=None):
-        self.config, self.transport = config, transport
+    def __init__(self, config, transport=None, *, card_facts=None):
+        self.config, self.transport, self.card_facts = config, transport, card_facts
 
     def resolve(self, spec):
+        if spec.role == 'skill' and self.card_facts is not None:
+            from .heuristic_facts import heuristic_component_ref
+            from .heuristic_policy import MaskedHeuristicSubsystem
+            if spec.ref == heuristic_component_ref(self.card_facts):
+                return MaskedHeuristicSubsystem(self.card_facts)
         if spec.role == "local_generalist" and spec.ref == local_component_ref(self.config):
             return ArtificialPlayerSubsystem(LMStudioPilot(self.config, transport=self.transport))
         if spec.role == "deterministic" and spec.ref == BUILTIN_FORCED_PARAMETERLESS_COMPONENT_REF:
@@ -60,11 +66,17 @@ class LocalBindingComponentResolver:
 
 def build_binding_lmstudio_sidecar(config: LocalBindingConfig, *, game_capture=None,
                                    provenance_sink=None, transport=None):
-    resolver = LocalBindingComponentResolver(config.inference, transport)
+    facts_path = config.instance_root / 'local' / 'card-facts.json'
+    from .heuristic_facts import CardFacts, heuristic_component_ref
+    facts = CardFacts.load(facts_path) if facts_path.exists() else None
+    if facts is not None and facts.engine_revision != config.engine_revision:
+        raise PilotContractError('heuristic facts must match the explicitly pinned native engine revision')
+    resolver = LocalBindingComponentResolver(config.inference, transport, card_facts=facts)
 
     def pilot_factory(pilot, binding):
         if (pilot.generalist_base != local_component_ref(config.inference)
-            or pilot.escalation_provider is not None or pilot.skill_set is not None or pilot.specialists):
+            or pilot.escalation_provider is not None or pilot.specialists
+            or pilot.skill_set is not None and (facts is None or pilot.skill_set != heuristic_component_ref(facts))):
             raise PilotContractError("local Binding must pin the configured local model and exclude other providers")
         return _CanonicalBindingPilot(compose_pilot_runtime(pilot, resolver), pilot, binding)
 
@@ -146,6 +158,7 @@ def main(*, ready=None):
     parser.add_argument("--instance-root", type=Path, required=True)
     parser.add_argument("--live-catalog-root", type=Path)
     parser.add_argument("--port", type=int, required=True)
+    parser.add_argument("--engine-revision", help="Required native source pin for a heuristic catalog")
     args = parser.parse_args()
     # Explicit input only; no provider credential, SDK endpoint or proxy environment is consumed.
     raw = json.loads(args.inference_config.read_text())
@@ -154,7 +167,7 @@ def main(*, ready=None):
     config = LocalBindingConfig(
         GameServerSidecarConfig(os.environ["COMMANDER_GYM_LOCAL_SIDECAR_TOKEN"], port=args.port,
                                require_manual_human_game=True),
-        LMStudioConfig(**raw), args.catalog, args.instance_root, args.live_catalog_root,
+        LMStudioConfig(**raw), args.catalog, args.instance_root, args.live_catalog_root, args.engine_revision,
     )
     from .recorder_bridge import RemoteCaptureSink
     capture = RemoteCaptureSink(Path(os.environ["COMMANDER_GYM_RECORDER_SOCKET"]),

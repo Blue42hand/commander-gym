@@ -45,13 +45,20 @@ def main():
     root = Path(settings["fixtureRoot"])
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
     inference = load_lmstudio_pilot(settings["inferenceConfig"]).config
+    from commander_gym.heuristic_facts import CardFacts, heuristic_component_ref
+    facts = CardFacts.load(settings['cardFacts']) if settings.get('cardFacts') else None
+    if facts is not None:
+        (root/'local').mkdir(mode=0o700, exist_ok=True)
+        (root/'local/card-facts.json').write_text(json.dumps(facts.document()))
+        (root/'local/card-facts.json').chmod(0o600)
     payload = {"argentum_player": {"deck": {"type": "Explicit", "cards": {"Plains": 8}}}}
     raw = json.dumps(payload, sort_keys=True)
     deck = Deck(deck_id="synthetic-eight-plains", revision="1", format_id="synthetic-native-test",
                 deck_artifact=ArtifactRef(kind="decklist", artifact_id="synthetic-eight-plains", version="1",
                                           digest="sha256:" + hashlib.sha256(raw.encode()).hexdigest()))
     pilot = Pilot(pilot_id="local-qualification", revision="1", generalist_base=local_component_ref(inference),
-                  deterministic_policy=BUILTIN_NATIVE_CERTIFIED_FORCED_PASS_COMPONENT_REF)
+                  deterministic_policy=BUILTIN_NATIVE_CERTIFIED_FORCED_PASS_COMPONENT_REF,
+                  skill_set=heuristic_component_ref(facts) if facts else None)
     binding = Binding(binding_id="local-qualification", revision="1", deck=deck.ref(), pilot=pilot.ref(),
                       metadata={"display": {"name": inference.model + " synthetic eight-Plains", "deck_name": "Synthetic eight-Plains"}})
     def write(name, value):
@@ -67,10 +74,15 @@ def main():
     recording_root = Path(settings["recordingRoot"])
     recording_root.mkdir(mode=0o700, exist_ok=True)
     capture = NativeGameCapture(recording_root, pins)
+    class NoProviderTransport:
+        def request(self, *args, **kwargs):
+            raise AssertionError('heuristic native fixture unexpectedly escalated to a provider')
+    if settings.get('forbidProviderCalls') and facts is None:
+        raise ValueError('provider-free qualification requires an explicit heuristic catalog')
     server = build_binding_lmstudio_sidecar(LocalBindingConfig(
         GameServerSidecarConfig(Path(settings["tokenPath"]).read_text().strip(), port=settings["sidecarPort"]),
-        inference, root / "catalog.json", root,
-    ), game_capture=capture)
+        inference, root / "catalog.json", root, engine_revision=settings['engineSha'] if facts else None,
+    ), game_capture=capture, transport=NoProviderTransport() if settings.get('forbidProviderCalls') else None)
     stop = threading.Event()
     for signum in (signal.SIGTERM, signal.SIGINT):
         signal.signal(signum, lambda *_: stop.set())
@@ -93,7 +105,8 @@ def main():
             raise RuntimeError("local native terminal has incomplete recording")
         receipt = {"gameId": result["gameId"], "recordingComplete": True,
                    "pendingRecordWrites": health["pendingRecordWrites"], "captureErrors": capture.errors,
-                   "terminalSnapshotRestoreVerified": True}
+                   "terminalSnapshotRestoreVerified": True,
+                   "providerCallsForbidden": bool(settings.get('forbidProviderCalls'))}
         write("recording-qualification.json", receipt)
         print(json.dumps(receipt), flush=True)
 

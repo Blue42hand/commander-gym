@@ -24,7 +24,12 @@ import kotlin.test.assertTrue
 
 class RecorderCallbackClientTest {
     @Test
-    fun `lost registration acknowledgment retries same bytes before one policy call`() {
+    fun `lost registration acknowledgment retries same bytes before one policy call`() = lostRegistration(false)
+
+    @Test
+    fun `explicit managed batch recording never claims a human game`() = lostRegistration(true)
+
+    private fun lostRegistration(managed: Boolean) {
         val directory = Files.createTempDirectory(Path.of("/tmp").toRealPath(), "rc-").toRealPath()
         val path = directory.resolve("native.sock")
         val listener = ServerSocketChannel.open(StandardProtocolFamily.UNIX)
@@ -61,6 +66,9 @@ class RecorderCallbackClientTest {
         val http = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         http.createContext("/v1/decide-mulligan") { exchange ->
             calls++
+            val request = Json.parseToJsonElement(exchange.requestBody.readBytes().toString(Charsets.UTF_8)).jsonObject
+            assertEquals(if (managed) null else JsonPrimitive(true), request["manualHumanGame"])
+            assertEquals(if (managed) JsonPrimitive(true) else null, request["managedBatchGame"])
             val body = "{\"keep\":true}".toByteArray()
             exchange.sendResponseHeaders(200, body.size.toLong())
             exchange.responseBody.use { it.write(body) }
@@ -69,7 +77,7 @@ class RecorderCallbackClientTest {
         try {
             val controller = CommanderGymPlayerController(EntityId("seat-a"),
                 URI.create("http://127.0.0.1:${http.address.port}"), "literal-fake-bearer", Duration.ofSeconds(5),
-                profileId="binding-a", gameSessionId="game-a", manualHumanGame=true,
+                profileId="binding-a", gameSessionId="game-a", manualHumanGame=!managed, managedBatchGame=managed,
                 recorder=RecorderCallbackClient(path, Duration.ofSeconds(1)))
             assertTrue(controller.decideMulligan(MulliganInfo(emptyList(), 0, 0)))
             future.get(5, TimeUnit.SECONDS)

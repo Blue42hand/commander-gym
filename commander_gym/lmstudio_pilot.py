@@ -17,12 +17,30 @@ from typing import Any, Mapping
 
 from .lmstudio_provider import LMStudioConfig, LMStudioError, LMStudioTransport, require_loaded_model
 from .local_callback_context import current_cancel
-from .observation_projection import compact_seat_observation
+from .observation_projection import compact_inference_observation
 from .openai_responses_pilot import (
-    OpenAIResponsesPilot, OpenAIResponsesPilotError, _DEFAULT_INSTRUCTIONS,
+    OpenAIResponsesPilot, OpenAIResponsesPilotError,
     _native_action_format, _native_decision_format, _without_live_routing,
 )
 from .pilot import PilotChoice, PilotContractError, _require_observation, validate_pilot_choice
+
+
+_LOCAL_INSTRUCTIONS = '''You are the strategic policy for a Magic-playing agent.
+Argentum owns rules, observable state, and legal offers. Use only this masked observation.
+Return exactly one JSON object matching the response schema.
+For a legal action, return:
+{"channel":"action","choice":{"semanticId":"<exact offered semanticId>","params":{}}}
+Use only the params fields and candidate IDs permitted by that action's native parameterSpec.
+For a structured decision, return:
+{"channel":"decision","response":{"type":"<native responseType>","<required field>":"<value>"}}
+Never supply actionId or decisionId; the caller binds current routing IDs.
+Play to win. Use useful land drops, ramp and development rather than passing without a tactical reason.
+Choose a concrete useful spell or ability before paying for it; native auto-payment usually taps mana.
+Preserve interaction only for a concrete threat. Consider the acting deck's plan and all opponents.
+For indexed choices, map the chosen label back to its exact offered index. Tribal payoffs should
+name the tribe benefiting the deck, not an arbitrary early option. Auras are evaluated by who
+receives their actual effect or triggers; target ownership alone does not establish benefit.
+'''
 
 
 class LMStudioPilotError(OpenAIResponsesPilotError):
@@ -41,6 +59,12 @@ def _local_native_format(observation: Mapping[str, Any]) -> dict[str, Any] | Non
     llmster needs a constrained union instead. Builder-only views isolate the two
     branches; the model and final validator still receive the unchanged live offer.
     """
+    # Native menus include disabled display entries. Keep them in the model's
+    # observation, but do not advertise them as executable schema branches.
+    legal = observation.get('legalActions')
+    if isinstance(legal, list):
+        observation = {**observation, 'legalActions': [a for a in legal
+            if not isinstance(a, Mapping) or (a.get('isAffordable') is not False and a.get('affordable') is not False)]}
     pending = observation.get("pendingDecision")
     spec = pending.get("responseSpec") if isinstance(pending, Mapping) else None
     if (isinstance(pending, Mapping) and pending.get("requiresStructuredResponse") is True
@@ -59,6 +83,47 @@ def _local_native_format(observation: Mapping[str, Any]) -> dict[str, Any] | Non
             return {"type": "json_schema", "name": "commander_gym_native_mixed_payment", "strict": False,
                     "schema": {"type": "object", "anyOf": [action_format["schema"], decision_format["schema"]]}}
     return _native_decision_format(observation) or _native_action_format(observation)
+
+
+def _constrain_untargeted_actions(schema, observation):
+    """Apply explicit native no-target facts to generic ActionParams schemas."""
+    untargeted = {a.get('semanticId') for a in observation.get('legalActions', [])
+                  if a.get('requiresTargets') is False and a.get('validTargets') is None
+                  and a.get('targetRequirements') is None}
+    def visit(node):
+        if not isinstance(node, dict):
+            return
+        props = node.get('properties', {})
+        if props.get('semanticId', {}).get('const') in untargeted:
+            fields = props.get('params', {}).get('properties', {})
+            for name in ('targets', 'targetGroups'):
+                if name in fields:
+                    fields[name] = {'type': 'array', 'items': fields[name]['items'], 'maxItems': 0}
+        for value in node.values():
+            if isinstance(value, dict):
+                visit(value)
+            elif isinstance(value, list):
+                for child in value:
+                    visit(child)
+    visit(schema)
+
+
+def _cache_ordered_observation(value):
+    """Keep stable deck facts ahead of changing menus without changing any values."""
+    value = deepcopy(value)
+    def first(mapping, keys):
+        return {**{key: mapping[key] for key in keys if key in mapping},
+                **{key: item for key, item in mapping.items() if key not in keys}}
+    wrapped = isinstance(value.get('observation'), dict)
+    observation = value['observation'] if wrapped else value
+    state = observation.get('state')
+    if isinstance(state, dict):
+        observation['state'] = first(state, ['deck', 'cards'])
+    observation = first(observation, ['deckKnowledge', 'state'])
+    if wrapped:
+        value['observation'] = observation
+        return first(value, ['format', 'deckTable', 'observation'])
+    return observation
 
 
 def _schema_check(schema, value=None, *, validate=False):
@@ -185,10 +250,40 @@ class LMStudioPilot:
         if schema_format is None:
             raise LMStudioPilotError("llmster requires a supported native JSON schema; no JSON-mode downgrade")
         try:
+            _constrain_untargeted_actions(schema_format["schema"], observation)
             _schema_check(schema_format["schema"])
         except LMStudioError as exc:
             raise LMStudioPilotError(str(exc)) from exc
-        instructions = _DEFAULT_INSTRUCTIONS
+        instructions = _LOCAL_INSTRUCTIONS + (
+            "\nWhen requiresTargets is false and validTargets and targetRequirements are null, "
+            "the action has no targets: omit targets and targetGroups or use empty arrays. "
+            "Entries marked isAffordable=false or affordable=false are disabled display entries; "
+            "do not select them. A mana ability does not target its own source. Do not tap mana merely to pass "
+            "through a phase; mana empties between steps and phases."
+        )
+        if observation.get('callbackKind') == 'decideMulligan':
+            instructions += (
+                "\nThis is a London mulligan decision. Read state.mulligan, including hand, cards, "
+                "mulliganCount and cardsToPutOnBottom. Keeping retains only hand size minus "
+                "cardsToPutOnBottom cards. Further mulligans cost more cards; do not repeatedly "
+                "search for a perfect hand. Keep a playable hand with lands and early plays. "
+                "After two mulligans, strongly prefer keeping even an imperfect hand. "
+                "When cardsToPutOnBottom is at least hand size, choose KeepHand: another "
+                "mulligan cannot improve retained hand size. Return the exact offered KeepHand "
+                "or TakeMulligan semanticId using the required nested choice format."
+            )
+            mulligan = observation.get('state', {}).get('mulligan', {})
+            count = mulligan.get('mulliganCount')
+            keep = next((a for a in observation.get('legalActions', [])
+                         if a.get('kind') == 'KeepHand'), None)
+            if type(count) is int and count >= 2 and keep is not None:
+                instructions += (
+                    f"\nYou have already mulliganed {count} times. Preserve the remaining cards: "
+                    "choose the offered KeepHand action now. Its exact response is "
+                    + json.dumps({'channel': 'action', 'choice': {
+                        'semanticId': keep['semanticId'], 'params': {}}})
+                    + ". Do not confuse this identifier with TakeMulligan."
+                )
         if schema_format["name"] in {"commander_gym_native_action", "commander_gym_native_mixed_payment"}:
             instructions += "\nUse the schema's nested choice object containing semanticId and params."
         if schema_format["name"] == "commander_gym_native_mixed_payment":
@@ -201,15 +296,21 @@ class LMStudioPilot:
             )
         model_observation = _without_live_routing(observation)
         if self.config.compact_observation:
-            model_observation = compact_seat_observation(model_observation)
+            model_observation = compact_inference_observation(model_observation)
             instructions += (
-                "\nThis request uses argentum-seat-sparse-cards-v1. The observation is inside "
+                "\nThis request uses the format named in format. The observation is inside "
                 "observation; cardDefaults lists exact values for omitted fields on every "
                 "state.cards entry. Restore these fields before choosing. No other state "
-                "fields or legal choices are omitted. Use semanticId from observation.legalActions."
+                "fields or legal choices are omitted. When deckTable is present, state.deck "
+                "contains value arrays ordered by deckTable.columns; prepend the exact "
+                "deckTable.stringPrefixes value to each indicated string column. "
+                "In argentum-seat-tables-v3, actionDefaults gives exact omitted fields on each "
+                "legalActions entry. Each state.gameLog row starts with its gameLogColumns index, "
+                "followed by values in those columns; chronological order is unchanged. "
+                "Use semanticId from observation.legalActions."
             )
         instructions += "\nThe current native parameterSpec and response schema define all allowed fields, including additional cost payments."
-        base_input = json.dumps(model_observation, sort_keys=True, separators=(",", ":"))
+        base_input = json.dumps(_cache_ordered_observation(model_observation), separators=(",", ":"))
         request = {
             "model": self.config.model,
             "messages": [{"role": "system", "content": instructions}, {"role": "user", "content": base_input}],
@@ -219,6 +320,8 @@ class LMStudioPilot:
             "max_tokens": self.config.max_output_tokens,
             "stream": self.config.stream, "reasoning_effort": "none", "temperature": 0,
         }
+        if self.config.stream:
+            request['stream_options'] = {'include_usage': True}
         validator = OpenAIResponsesPilot(
             client=SimpleNamespace(responses=SimpleNamespace(create=lambda **_: None)), model=self.config.model,
         )

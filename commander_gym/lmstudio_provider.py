@@ -72,8 +72,8 @@ class LMStudioConfig:
         if type(self.max_attempts) is not int or not 1 <= self.max_attempts <= 2:
             raise ValueError("max_attempts must be 1 or 2")
         if (type(self.timeout_seconds) not in (int, float)
-            or not math.isfinite(self.timeout_seconds) or not 0 < self.timeout_seconds <= 100):
-            raise ValueError("whole-choice timeout must be finite and at most 100 seconds")
+            or not math.isfinite(self.timeout_seconds) or not 0 < self.timeout_seconds <= 300):
+            raise ValueError("whole-choice timeout must be finite and at most 300 seconds")
 
 
 class LMStudioTransport:
@@ -100,19 +100,35 @@ class LMStudioTransport:
         except OSError as exc:
             raise LMStudioError("worker_start_failed") from exc
         deadline = monotonic() + timeout
+        completed = threading.Event()
+        exchanged = {}
+        def exchange():
+            try:
+                exchanged['output'], _ = child.communicate(envelope)
+            except Exception as exc:
+                exchanged['error'] = exc
+            finally:
+                completed.set()
+        # A single communicate owns all pipes. Retrying it with input=None after
+        # a timeout can strand partially written stdin on production Python 3.12.
+        io_thread = threading.Thread(target=exchange)
+        io_started = False
         try:
-            data = envelope
+            io_thread.start()
+            io_started = True
             while True:
                 if cancel is not None and cancel.is_set():
                     raise LMStudioError("cancelled")
                 remaining = deadline - monotonic()
                 if remaining <= 0:
                     raise LMStudioError("deadline_exceeded")
-                try:
-                    output, _ = child.communicate(data, timeout=min(0.05, remaining))
+                if completed.wait(min(0.05, remaining)):
                     break
-                except subprocess.TimeoutExpired:
-                    data = None
+            if monotonic() >= deadline:
+                raise LMStudioError('deadline_exceeded')
+            if 'error' in exchanged:
+                raise LMStudioError('worker_io_failed') from exchanged['error']
+            output = exchanged['output']
             if cancel is not None and cancel.is_set():
                 raise LMStudioError("cancelled")
             if child.returncode != 0:
@@ -141,7 +157,10 @@ class LMStudioTransport:
         finally:
             if child.poll() is None:
                 child.kill()
-            child.communicate()
+            if io_started:
+                io_thread.join()
+            else:
+                child.communicate()
 
 
 def require_loaded_model(discovery: Mapping[str, Any], config: LMStudioConfig) -> dict[str, Any]:
