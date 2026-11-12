@@ -42,7 +42,7 @@ fun runLathrilMirrorGame() {
     System.setProperty("game.recording.root", root.toString())
     System.setProperty("game.recording.engine-revision", text("engineSha"))
     val writer = requireNotNull(PrivateGameEvidence.fromSystemProperties(gameId)) as PrivateGameEvidence
-    val session = GameSession(sessionId=gameId, cardRegistry=registry, evidenceSink=writer)
+    val session = GameSession(sessionId=gameId, cardRegistry=registry, evidenceSink=writer, maxPlayers=4)
     session.engineFormat = com.wingedsheep.sdk.core.Format.Commander()
     session.attackMode = com.wingedsheep.sdk.core.AttackMode.MULTIPLE
     val seats = (1..4).map { EntityId.of("lathril-mirror-$it") }
