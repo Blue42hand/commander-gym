@@ -155,7 +155,9 @@ fun runLathrilMirrorGame() {
                 }
                 session.executeRecordedAiCallback(actor, action, update.interactionEpoch, evidence, choice)
             }
-            check(result != null && result !is GameSession.ActionResult.Failure) { "Native action rejected" }
+            check(result != null && result !is GameSession.ActionResult.Failure) {
+                "Native action rejected: ${(result as? GameSession.ActionResult.Failure)?.reason ?: "missing result"}"
+            }
             actions++
         }
         check(writer.healthy()) { "Native evidence unhealthy" }

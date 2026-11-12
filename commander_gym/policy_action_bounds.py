@@ -42,9 +42,33 @@ def tutor_payoff_score(name, facts, preferred_engines=()):
             100 if fact.get('repeatable') else 50 if 'RAMP' in tags else 20) + fact.get('staticValue',0) - (cost[0] if cost else 0)
 
 
+# Native definitions reviewed: these counters have no optional mana payment.
+UNCONDITIONAL_COUNTERS = frozenset({'Counterspell','Negate','Dissolve','Swan Song','Arcane Denial'})
+
+
+def pending_counter_answers(o):
+    """Targets already answered by our own unopposed unconditional counter.
+
+    A visible response targeting the counter makes its success uncertain again.
+    Unknown effects, conditional counters and ability copies keep model control.
+    """
+    state=o.get('state',{});cards=state.get('cards',{});stack=ids_in(state,'Stack')
+    threatened={t.get('spellEntityId') for i in stack for t in cards.get(i,{}).get('targets',[]) if t.get('type')=='Spell'}
+    covered=set()
+    for i in stack:
+        c=cards.get(i,{})
+        if (i in threatened or c.get('controllerId')!=o['agentToAct'] or c.get('name') not in UNCONDITIONAL_COUNTERS
+            or c.get('abilityIdentity') or c.get('activeEffects')):continue
+        targets=c.get('targets',[])
+        if len(targets)==1 and targets[0].get('type')=='Spell' and targets[0].get('spellEntityId') in stack:
+            covered.add(targets[0]['spellEntityId'])
+    return covered
+
+
 def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=()):
     view = deepcopy(o); cards = view.get('state', {}).get('cards', {}); me = view['agentToAct']
     restrictions = []; retained = []; plans = []
+    answered=pending_counter_answers(o)
     for a in view.get('legalActions', []):
         raw = a.get('action', {}); name = cards.get(raw.get('cardId', raw.get('sourceId')), {}).get('name')
         state = o.get('state',{})
@@ -65,6 +89,14 @@ def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=()
             and not (state.get('activePlayerId')==me and state.get('currentStep') in {'PRECOMBAT_MAIN','POSTCOMBAT_MAIN'}
                      or state.get('activePlayerId')!=me and state.get('currentStep')=='END_STEP')):
             restrictions.append({'action':a['semanticId'],'rule':'draw-in-main-or-opponent-end-step'});continue
+        if (casting and 'COUNTERSPELL' in facts.get(name).get('tags',[]) and answered
+            and a.get('minTargets')==a.get('targetCount')==1 and a.get('targetRequirements') is None
+            and isinstance(a.get('validTargets'),list)):
+            targets=[t for t in a['validTargets'] if t not in answered]
+            if targets!=a['validTargets']:
+                restrictions.append({'action':a['semanticId'],'rule':'avoid-redundant-pending-counter'})
+                a['validTargets']=targets
+                if not targets:continue
         harmful = (casting and facts.get(name).get('spellPolarity') == ['HARMFUL']) or name in OPPONENT_REMOVAL or name=='Otawara, Soaring City' and quiet
         if harmful and name not in allow_self_targets and a.get('requiresTargets') is True and a.get('targetRequirements') is None and isinstance(a.get('validTargets'),list):
             # Retain unknown ownership rather than inventing an enemy controller.
@@ -89,7 +121,7 @@ def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=()
                 ranked=sorted(targets,key=lambda t:(-score(t),t))
                 a['validTargets']=[t for t in ranked if score(t)>=score(ranked[0])-3][:3]
                 if a['validTargets']!=targets:restrictions.append({'action':a['semanticId'],'rule':'reviewed-removal-threat-shortlist'})
-        if name == "Green Sun's Zenith" and a.get('hasXCost') and type(a.get('maxAffordableX')) is int:
+        if name in {"Green Sun's Zenith",'Chord of Calling'} and a.get('hasXCost') and type(a.get('maxAffordableX')) is int:
             deck = o.get('knownDeck', {}).get('cards', {})
             eligible = []; green_payoffs = []
             # An exact public deck list can prove no eligible payoff. Missing
@@ -99,13 +131,13 @@ def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=()
                 f = facts.get(n); cost = mana_cost(f.get('manaCost',''))
                 if count and 'CREATURE' in f.get('types',[]) and cost and cost[0] <= a['maxAffordableX']:
                     eligible.append(cost[0])
-                    if cost[1].get('G',0) and count > sum(1 for z in o.get('state',{}).get('zones',[]) if z.get('isVisible') and z.get('zoneId',{}).get('ownerId')==me for i in z.get('cardIds',[]) if cards.get(i,{}).get('name')==n): green_payoffs.append((n,cost[0]))
+                    if (name=='Chord of Calling' or cost[1].get('G',0)) and count > sum(1 for z in o.get('state',{}).get('zones',[]) if z.get('isVisible') and z.get('zoneId',{}).get('ownerId')==me for i in z.get('cardIds',[]) if cards.get(i,{}).get('name')==n): green_payoffs.append((n,cost[0]))
             if complete and not eligible:
                 restrictions.append({'action':a['semanticId'],'rule':'search-without-eligible-payoff'}); continue
             if complete and eligible: a['minX'] = max(a.get('minX') or 0, min(eligible))
             if green_payoffs:
                 preferred, x = sorted(green_payoffs,key=lambda item:(-tutor_payoff_score(item[0],facts,preferred_engines), item[1], item[0]))[0]
-                plans.append({'action':a['semanticId'],'source':name,'goal':'Put a green development creature onto the battlefield',
+                plans.append({'action':a['semanticId'],'source':name,'goal':'Put a development creature onto the battlefield',
                               'preferredCard':preferred,'suggestedX':x,'binding':'Use only current native X bounds; rebind against native search options.'})
         if name == 'Sterling Grove' and a.get('kind') == 'ActivateAbility' and raw.get('abilityId') == 'Sterling Grove:1':
             deck = o.get('knownDeck',{}).get('cards',{})

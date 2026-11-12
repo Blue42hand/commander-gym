@@ -20,7 +20,8 @@ PROMPT_TARGET_BYTES = 32768
 _CARD_FIELDS = {'name', 'manaCost', 'typeLine', 'cardTypes', 'subtypes', 'oracleText',
                 'power', 'toughness', 'keywords', 'abilityFlags', 'isTapped', 'hasSummoningSickness',
                 'isCommander', 'controllerId', 'ownerId', 'counters', 'activeEffects', 'attachments',
-                'isFaceDown', 'isPhasedOut', 'damage', 'chosenCreatureType', 'colors', 'colorIdentity', 'manaValue', 'zone', 'isToken'}
+                'isFaceDown', 'isPhasedOut', 'damage', 'chosenCreatureType', 'colors', 'colorIdentity', 'manaValue', 'zone', 'isToken',
+                'targets', 'stackText', 'abilityIdentity', 'chosenModeDescriptions', 'perModeTargets', 'chosenX'}
 
 
 def _pending_card_map(p):
@@ -98,8 +99,14 @@ def enumerate_choices(o):
             if not affordable(a): continue
             if a['kind'] in {'DeclareAttackers', 'DeclareBlockers'}: return None
             payments=[{}];plain=a
+            if a.get('hasConvoke'):
+                from .convoke_plans import convoke_plans
+                payments=convoke_plans(o,a)
+                if payments is None:return None
+                plain={**a,'hasConvoke':False,'hasXCost':False}
             cost=a.get('additionalCostInfo') or {}
             if cost:
+                if a.get('hasConvoke'):return None
                 source=a.get('action',{}).get('sourceId');fields=a.get('parameterSpec',{}).get('allowedFields',{})
                 count=cost.get('sacrificeCount');options=cost.get('validSacrificeTargets')
                 if (cost.get('costType') not in {'SacrificeSelf','SacrificePermanent'}
@@ -123,7 +130,7 @@ def enumerate_choices(o):
                 choices.extend(_action(a,{**payment,'targets':[t]}) for payment in payments for t in targets)
             elif (a.get('parameterSpec', {}).get('allowedFields') == {}
                   or a.get('requiresTargets') is False and a.get('validTargets') in (None,[]) and a.get('targetRequirements') is None and (a['kind'] in {'CastSpell', 'PlayLand', 'PassPriority'}
-                      or set(a.get('parameterSpec', {}).get('allowedFields', {})) <= ({'targets','targetGroups','xValue','sacrificedPermanents','sacrifice'} if cost else {'targets','targetGroups','xValue'}))):
+                      or set(a.get('parameterSpec', {}).get('allowedFields', {})) <= ({'targets','targetGroups','xValue','sacrificedPermanents','sacrifice'} if cost else {'targets','targetGroups','xValue','convokedCreatures'} if a.get('hasConvoke') else {'targets','targetGroups','xValue'}))):
                 choices.extend(_action(a,payment) for payment in payments)
             else: return None
             if len(choices) > MAX_CHOICES: return None
@@ -534,9 +541,11 @@ class BoundedPolicyFallback:
                          ' actorZones identifies your cards by zone; cards in Command are not creatures on the battlefield.'
                          ' actingCommander identifies your commander; other commanders belong to opponents.'
                          ' battlefieldSummary counts live creatures, while deckSubtypeCounts counts printed cards in the registered deck. Never substitute deck counts for battlefield counts.'
+                         ' Convoke affordability can include creature taps. For native-schema casts, supply xValue and convokedCreatures when mana alone cannot cover the cost.'
                          ' Every supplied frozen choice is currently native-affordable. An empty mana pool does not prevent native AutoPay from tapping sources.'
                          ' Source and target facts identify the exact live entities. Current types, stats, keywords and ability flags take precedence over printed rules after transformations.'
                          ' summarizedInactiveCards retain identities, ownership, type and cost; their rules are omitted because no current affordable action or pending decision references them. All battlefield and current candidate rules remain available.'
+                         ' Stack cards retain chosen targets and current effect text. Check whether a pending response already answers a threat before spending another card on it.'
                          ' Verify the selected option matches the action described in your explanation.'
                          ' Apply these defaults before evaluating choices. All current offers and constraints are retained.')
         choice = self.model._choose(o, response_format=fmt, model_view=view,

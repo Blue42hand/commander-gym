@@ -24,6 +24,7 @@ _ACTION_PARAM_KINDS = {
     "targets": "ENTITY_ID_ARRAY", "xValue": "INTEGER", "declaredCostTimes": "INTEGER",
     "tappedPermanents": "ENTITY_ID_ARRAY", "sacrificedPermanents": "ENTITY_ID_ARRAY",
     "discardedCards": "ENTITY_ID_ARRAY", "exiledCards": "ENTITY_ID_ARRAY",
+    "convokedCreatures": "CONVOKE_PAYMENT_MAP",
     "delvedCards": "ENTITY_ID_ARRAY", "bouncedPermanents": "ENTITY_ID_ARRAY",
     "targetGroups": "ENTITY_ID_ARRAY_ARRAY", "variablePermanents": "ENTITY_ID_ARRAY",
     "crew": "ENTITY_ID_ARRAY", "saddle": "ENTITY_ID_ARRAY",
@@ -90,6 +91,42 @@ def validate_bounce_payment(params: Mapping[str, Any], offered: Mapping[str, Any
         )
 
 
+CONVOKE_COLORS = frozenset({'WHITE','BLUE','BLACK','RED','GREEN'})
+
+
+def is_convoke_payment_map(value: Any) -> bool:
+    return isinstance(value, dict) and all(
+        isinstance(entity, str) and bool(entity) and isinstance(payment, dict)
+        and set(payment) <= {'color'} and (payment.get('color') is None or isinstance(payment.get('color'),str) and payment['color'] in CONVOKE_COLORS)
+        for entity, payment in value.items())
+
+
+def native_convoke_offer(offered: Mapping[str, Any]) -> dict[str, list[str]] | None:
+    if offered.get('parameterSpec',{}).get('allowedFields',{}).get('convokedCreatures') != 'CONVOKE_PAYMENT_MAP':
+        return None
+    rows=offered.get('validConvokeCreatures')
+    if offered.get('hasConvoke') is not True or not isinstance(rows,list) or not rows:
+        raise RecordValidationError('native convoke offer is malformed')
+    result={}
+    for row in rows:
+        if (not isinstance(row,Mapping) or not isinstance(row.get('entityId'),str) or not row['entityId']
+            or row['entityId'] in result or not isinstance(row.get('colors'),list)
+            or any(not isinstance(c,str) or c not in CONVOKE_COLORS for c in row['colors'])):
+            raise RecordValidationError('native convoke offer is malformed')
+        result[row['entityId']]=list(dict.fromkeys(row['colors']))
+    return result
+
+
+def validate_convoke_payment(params: Mapping[str, Any], offered: Mapping[str, Any]) -> None:
+    candidates=native_convoke_offer(offered)
+    if candidates is None or 'convokedCreatures' not in params:return
+    chosen=params['convokedCreatures']
+    if (not is_convoke_payment_map(chosen) or any(entity not in candidates or
+        payment.get('color') is not None and payment['color'] not in candidates[entity]
+        for entity,payment in chosen.items())):
+        raise RecordValidationError('convoke payment contains an unoffered creature or color')
+
+
 def validate_action_params(params: Any, offered: Mapping[str, Any]) -> None:
     """Check the native wire contract, without deciding rules legality.
 
@@ -115,7 +152,8 @@ def validate_action_params(params: Any, offered: Mapping[str, Any]) -> None:
         return isinstance(value, list) and all(entity(item) for item in value)
     for name, value in params.items():
         kind = fields[name]
-        valid = (type(value) is int if kind == "INTEGER" else
+        valid = (is_convoke_payment_map(value) if kind == "CONVOKE_PAYMENT_MAP" else
+                 type(value) is int if kind == "INTEGER" else
                  entities(value) if kind == "ENTITY_ID_ARRAY" else
                  isinstance(value, list) and all(entities(group) for group in value)
                  if kind == "ENTITY_ID_ARRAY_ARRAY" else
@@ -125,6 +163,7 @@ def validate_action_params(params: Any, offered: Mapping[str, Any]) -> None:
         if not valid:
             raise RecordValidationError(f"chosen_action_params.{name} requires {kind}")
     validate_bounce_payment(params, offered)
+    validate_convoke_payment(params, offered)
 
 
 def _binding_ref_from_value(value: Any) -> Optional[IdentityRef]:

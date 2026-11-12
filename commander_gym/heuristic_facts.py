@@ -85,7 +85,7 @@ class CardFacts:
 def heuristic_component_ref(facts=None):
     """Identity of defaults and reusable card mechanics, including optional public facts."""
     names = ['heuristic_facts.py', 'heuristic_policy.py', 'default_policies.py', 'card_policies.py',
-             'resource_policies.py', 'combat_policies.py', 'bounded_policy_fallback.py', 'lmstudio_pilot.py', 'pilot_composition.py', 'action_contracts.py', 'openai_responses_pilot.py', 'policy_action_bounds.py']
+             'resource_policies.py', 'combat_policies.py', 'bounded_policy_fallback.py', 'lmstudio_pilot.py', 'pilot_composition.py', 'action_contracts.py', 'records.py', 'convoke_plans.py', 'openai_responses_pilot.py', 'policy_action_bounds.py']
     payload = {'version': 2, 'factsSha256': facts.digest if facts else 'unavailable',
                'sources': {name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest() for name in names}}
     return ArtifactRef(kind='skill-set', artifact_id='argentum-default-policies', version='2',

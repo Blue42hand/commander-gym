@@ -13,6 +13,7 @@ class SharedCardPolicies(ResourcePolicies):
     def _card_actions(self,o):
         if o.get('nativePaymentError') is not None:return None
         s=o.get('state',{});me=o['agentToAct'];offers=[a for a in o.get('legalActions',[]) if affordable(a)]
+        held_equipment=set()
         quiet=not ids_in(s,'Stack');main=s.get('activePlayerId')==me and s.get('currentStep') in {'PRECOMBAT_MAIN','POSTCOMBAT_MAIN'}
         for a in offers:
             raw=a.get('action',{});ability=raw.get('abilityId');source=self._card(o,raw.get('sourceId'))
@@ -28,6 +29,8 @@ class SharedCardPolicies(ResourcePolicies):
                 targets=[t for t in a.get('validTargets',[]) if self._card(o,t).get('controllerId')==me and self._card(o,t).get('isCommander')
                          and not {'HASTE','SHROUD'}<=set(self._card(o,t).get('keywords',[])) and raw.get('sourceId') not in self._card(o,t).get('attachments',[])]
                 if targets:return self._action(a,'shared-card-protect-commander-free-equip',{'targets':[targets[0]]})
+                if any(c.get('isCommander') and raw.get('sourceId') in c.get('attachments',[]) and {'HASTE','SHROUD'}<=set(c.get('keywords',[])) for c in self._own(o)):
+                    held_equipment.add(a['semanticId'])
             if any(b.get('kind')=='PlayLand' or b.get('kind')=='CastSpell' and self.document['roles'].get(self._card(o,b.get('action',{}).get('cardId')).get('name')) in {'commander','draw_engine','mana_elf','mana_engine','ramp','reducer'} for b in offers):continue
             if ability=='Skullclamp:2' and simple and a.get('manaCostString')=='{1}':
                 player=next((v for v in s.get('players',[]) if v['playerId']==me),{})
@@ -48,7 +51,7 @@ class SharedCardPolicies(ResourcePolicies):
         # is a covered decision; unrepresented competing mechanics still defer.
         if quiet:
             useful=[a for a in offers if a.get('kind')!='PassPriority' and not a.get('isManaAbility')]
-            if useful and all(a.get('action',{}).get('abilityId') in {'Skullclamp:2','Timberwatch Elf:1'} for a in useful):
+            if useful and all(a.get('action',{}).get('abilityId') in {'Skullclamp:2','Timberwatch Elf:1'} or a['semanticId'] in held_equipment for a in useful):
                 passed=self._pass(o)
                 if passed:return self._action(passed,'shared-card-hold-utility-for-payoff')
         return None
@@ -141,7 +144,7 @@ class SharedCardPolicies(ResourcePolicies):
                 return self._development_score(o, card, role) if role in self.document['weights'] else self._opening_value(card)
             chosen = sorted(candidates, key=lambda i: (-reveal_value(i), i))[:1]
             return self._decision(p, rt, 'shared-card-reveal-development-creature', selectedCards=chosen)
-        if p.get('kind') in {'SearchLibraryDecision', 'SelectCardsDecision'} and p.get('minSelections') in {0, 1} and p.get('maxSelections') == 1 and source in {'Demonic Tutor', 'Elvish Harbinger', 'Wood Elves', 'Sylvan Messenger', 'Collected Company', 'Sterling Grove', "Green Sun's Zenith"}:
+        if p.get('kind') in {'SearchLibraryDecision', 'SelectCardsDecision'} and p.get('minSelections') in {0, 1} and p.get('maxSelections') == 1 and source in {'Demonic Tutor', 'Elvish Harbinger', 'Wood Elves', 'Sylvan Messenger', 'Collected Company', 'Sterling Grove', "Green Sun's Zenith", "Chord of Calling"}:
             if any(p.get(k) for k in ['selectionLimits', 'conditionalMinimums', 'onePerCardType', 'onePerColor', 'onePerCardName', 'onePerBasicLandType', 'onePerPower', 'maxTotalManaValue', 'minTotalManaValue', 'maxTotalPower']):
                 raise PolicyNotApplicable('shared-card-unsupported-search-constraints')
             def search_score(entity):

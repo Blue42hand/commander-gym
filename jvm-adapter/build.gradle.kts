@@ -94,3 +94,11 @@ tasks.register<JavaExec>("runLathrilMirrorGame") {
     classpath = sourceSets["test"].runtimeClasspath
     mainClass.set("org.commandergym.argentum.LathrilMirrorGame")
 }
+
+// Explicit offline replay of a private native rejection, never an ordinary test task.
+tasks.register<JavaExec>("runConvokeSavedStateProbe") {
+    group = "verification"
+    dependsOn(tasks.named("testClasses"))
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("org.commandergym.argentum.ConvokeSavedStateProbe")
+}

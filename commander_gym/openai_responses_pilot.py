@@ -29,6 +29,7 @@ from time import perf_counter
 from typing import Any, Mapping
 
 from .action_contracts import constrain_target_params, validate_target_params
+from .records import native_convoke_offer, validate_convoke_payment, is_convoke_payment_map
 
 from .records import native_bounce_offer, validate_bounce_payment, RecordValidationError
 from .pilot import ArgentumActionChoice, ArgentumDecisionChoice, PilotChoice
@@ -407,6 +408,7 @@ _ACTION_PARAM_SCHEMAS: dict[str, dict[str, Any]] = {
     # Arbitrary entity-ID keys are checked locally; the provider schema only needs
     # to constrain the named ActionParams fields to Argentum's declared wire kinds.
     "ENTITY_ID_MAP": {"type": "object"},
+    "CONVOKE_PAYMENT_MAP": {"type": "object"},
     "ENTITY_ID_ARRAY_MAP": {"type": "object"},
     "ENTITY_ID_ARRAY_ARRAY": {
         "type": "array", "items": {"type": "array", "items": {"type": "string"}},
@@ -476,6 +478,12 @@ def _native_attack_targets(action: Mapping[str, Any]) -> tuple[list[str], list[s
 
 
 def _native_action_field_schema(action: Mapping[str, Any], name: str, kind: str) -> dict[str, Any]:
+    if name == 'convokedCreatures' and kind == 'CONVOKE_PAYMENT_MAP':
+        try: candidates=native_convoke_offer(action)
+        except ValueError as exc: raise OpenAIResponsesPilotError(str(exc)) from exc
+        return {'type':'object','properties':{entity:{'type':'object','properties':{
+            'color':{'type':['string','null'],'enum':[*colors,None]}},'required':['color'],
+            'additionalProperties':False} for entity,colors in (candidates or {}).items()},'additionalProperties':False}
     if name in {"bouncedPermanents", "bounce"} and kind == "ENTITY_ID_ARRAY":
         try:
             offer = native_bounce_offer(action)
@@ -579,6 +587,7 @@ def _native_action_format(
         if fields is None:
             return None
         semantic_id = _require_string(action.get("semanticId"), "legal semanticId")
+        required_params=(["bouncedPermanents"] if "bouncedPermanents" in fields else []) + (["xValue"] if action.get("hasXCost") is True and "xValue" in fields else [])
         variants.append({
             "type": "object",
             "properties": {
@@ -590,7 +599,7 @@ def _native_action_format(
                         for name, kind in fields.items()
                     },
                     "additionalProperties": False,
-                    **({"required": ["bouncedPermanents"]} if "bouncedPermanents" in fields else {}),
+                    **({"required": required_params} if required_params else {}),
                 }, action),
             },
             "required": ["semanticId", "params"],
@@ -844,6 +853,7 @@ def _with_native_cancel_schema(format_: dict[str, Any], spec: Mapping[str, Any])
 
 
 def _matches_action_param_kind(value: Any, kind: str) -> bool:
+    if kind == "CONVOKE_PAYMENT_MAP":return is_convoke_payment_map(value)
     if kind == "ENTITY_ID_ARRAY_ARRAY":
         return _matches_native_field_kind(value, kind)
     if kind == "INTEGER":
@@ -882,6 +892,8 @@ def _validate_native_action_params(
         kind = fields[name]
         if not _matches_action_param_kind(value, kind):
             raise OpenAIResponsesPilotError(f"ActionParams.{name} requires {kind}")
+    try: validate_convoke_payment(params, action)
+    except ValueError as exc: raise OpenAIResponsesPilotError(str(exc)) from exc
     targets = _native_block_targets(action)
     if targets is not None and "blockers" in params and any(
         blocker not in targets or any(attacker not in targets[blocker] for attacker in attackers)
