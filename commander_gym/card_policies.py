@@ -23,6 +23,16 @@ class SharedCardPolicies:
     def _card_pending(self, o, p):
         context = p.get('context', {}); source = context.get('sourceName')
         rt = p.get('responseSpec', {}).get('responseType')
+        if (source == 'Reclamation Sage' and rt == 'YesNoResponse'
+            and context.get('phase') == 'RESOLUTION'
+            and (context.get('abilityIdentity') or {}).get('abilityId') == 'Reclamation Sage:1'
+            and p.get('prompt') == 'You may destroy target artifact or enchantment'
+            and not any(p.get(k) for k in ['peerOptions','yesDetail','noDetail'])):
+            targets = context.get('targetIds')
+            if isinstance(targets,list) and len(targets)==1:
+                controller = self._card(o,targets[0]).get('controllerId')
+                if controller is not None:
+                    return self._decision(p,rt,'shared-card-decline-self-removal',choice=p.get('yesAvailable') is True and controller != o['agentToAct'])
         if (source == 'Felidar Retreat' and rt == 'OptionChosenResponse'
             and context.get('phase') == 'TRIGGER' and p.get('options') == [
                 'Create a 2/2 white Cat Beast creature token',

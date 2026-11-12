@@ -189,7 +189,7 @@ class RecordedImprovementTests(unittest.TestCase):
         o=self.state(679);b,_=bounded_observation(o,self.facts)
         auras=[a for a in b['legalActions'] if o['state']['cards'].get(a['action'].get('cardId'),{}).get('name')=='Flickering Ward']
         self.assertTrue(all(o['state']['cards'][i]['controllerId']==o['agentToAct'] for a in auras for i in a['validTargets']))
-        self.assertTrue(any(x['rule']=='beneficial-aura-own-creatures' for x in bounded_observation(o,self.facts)[1]))
+        self.assertTrue(any(x['rule']=='beneficial-effect-own-creatures' for x in bounded_observation(o,self.facts)[1]))
 
     def test_generated_tribe_with_empty_board(self):
         from commander_gym.engine_deck_policy import EngineDeckPolicy
@@ -241,3 +241,55 @@ class SelfSacrificeFallbackTests(unittest.TestCase):
         self.assertFalse(GraveyardPlan(f).try_choose(o).choice.response['choice'])
         o['pendingDecision']['context']['phase']='RESOLUTION'
         self.assertIsNone(DefaultPolicySubsystem(f).try_choose(o).choice)
+
+class SparseTablePromptTests(unittest.TestCase):
+    def test_recorded_turn26_fits_without_removing_cards_or_constraints(self):
+        from pathlib import Path
+        from test_lmstudio import discovery
+        from test_engine_deck_policy import expand
+        from commander_gym.heuristic_facts import CardFacts
+        from commander_gym.bounded_policy_fallback import compact_decision_context
+        root=Path(__file__).parent/'fixtures';o=json.load(open(root/'alela-overflow-sparse-tables.json'));f=CardFacts.load(root/'competence-public-facts.json')
+        models=discovery();models['models'][0]['loaded_instances'][0]['config']['context_length']=131072
+        summary={'goal':'Contract test','keyFacts':[],'evidenceIds':[],'uncertainty':'high','missingInformation':[]}
+        t=FakeTransport(completion(json.dumps({'decision':{'option':0},'explanation':summary})),models=models)
+        BoundedPolicyFallback(config(context_window=131072,max_prompt_bytes=32768,decision_explanations=True),t,facts=f).choose_with_policy_context(o,[{'metadata':{'policyLayers':{'status':'deferred'}}}])
+        request=t.calls[1][1]
+        self.assertLess(len(json.dumps(request,ensure_ascii=False).encode()),31000)
+        visible={i for z in o['state']['zones'] if z.get('isVisible') and z['zoneId']['zoneType']!='Library' for i in z['cardIds']}
+        self.assertEqual(set(expand(json.loads(request['messages'][1]['content']))['cards']),visible)
+        view={'cards':{'one':{'name':'One','zone':'Hand','power':2},'two':{'name':'Two','zone':'Hand'},'three':{'name':'Three','zone':'Command','isCommander':True}}}
+        self.assertEqual(expand(compact_decision_context(view)),view)
+
+class CurrentTargetRegressionTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        import gzip
+        from pathlib import Path
+        from commander_gym.heuristic_facts import CardFacts
+        root=Path(__file__).parent/'fixtures';cls.states=json.load(gzip.open(root/'policy-target-mistakes.json.gz','rt'));cls.facts=CardFacts.load(root/'competence-public-facts.json')
+
+    def test_sage_targets_opponents_and_declines_forced_self_destruction(self):
+        o=deepcopy(self.states['7763']['observation']);b,_=bounded_observation(o,self.facts)
+        self.assertNotIn('e71',b['pendingDecision']['legalTargets']['0'])
+        self.assertTrue(b['pendingDecision']['legalTargets']['0'])
+        o['pendingDecision']['legalTargets']['0']=['e71']
+        self.assertEqual(bounded_observation(o,self.facts)[0]['pendingDecision']['legalTargets']['0'],['e71'])
+        self.assertFalse(DefaultPolicySubsystem(self.facts).try_choose(self.states['7798']['observation']).choice.response['choice'])
+
+    def test_timberwatch_uses_own_targets(self):
+        o=next(r['observation'] for r in self.states.values() if any(a.get('action',{}).get('abilityId')=='Timberwatch Elf:1' for a in r['observation']['legalActions']))
+        b,_=bounded_observation(o,self.facts);a=next(a for a in b['legalActions'] if a.get('action',{}).get('abilityId')=='Timberwatch Elf:1')
+        self.assertNotIn('e264',a['validTargets']);self.assertTrue(a['validTargets'])
+        self.assertTrue(all(o['state']['cards'][t].get('controllerId')==o['agentToAct'] for t in a['validTargets']))
+
+    def test_inactive_history_is_summarized_but_candidates_keep_rules(self):
+        from commander_gym.bounded_policy_fallback import decision_context
+        a=offer('CastSpell',1,card='spell');a.update(requiresTargets=True,targetCount=1,minTargets=1,validTargets=['candidate']);o=observation(a)
+        zone(o,'Hand','me',spell={'name':'Unknown','oracleText':'Current choice rules'})
+        zone(o,'Battlefield','enemy',live={'name':'Engine','oracleText':'Live board rules'})
+        zone(o,'Graveyard','enemy',inactive={'name':'Old','oracleText':'Inactive rules'},candidate={'name':'Target','oracleText':'Candidate rules'})
+        before=deepcopy(o);v=decision_context(o,frozen=True,policy_context=None,facts=self.facts)
+        self.assertNotIn('oracleText',v['cards']['inactive']);self.assertEqual(v['summarizedInactiveCards'],['inactive'])
+        for i in ['spell','live','candidate']:self.assertIn('oracleText',v['cards'][i])
+        self.assertEqual(o,before)

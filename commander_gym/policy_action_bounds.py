@@ -38,9 +38,9 @@ def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=()
                 restrictions.append({'action':a['semanticId'],'rule':'opponent-removal-targets'})
                 a['validTargets'] = targets
             if len(targets) < a.get('minTargets',1): continue
-        if name == 'Flickering Ward' and a.get('kind') == 'CastSpell' and a.get('targetRequirements') is None and isinstance(a.get('validTargets'),list):
+        if (name == 'Flickering Ward' and a.get('kind') == 'CastSpell' or raw.get('abilityId') == 'Timberwatch Elf:1') and a.get('targetRequirements') is None and isinstance(a.get('validTargets'),list):
             a['validTargets'] = [t for t in a['validTargets'] if cards.get(t,{}).get('controllerId') == me]
-            restrictions.append({'action':a['semanticId'],'rule':'beneficial-aura-own-creatures'})
+            restrictions.append({'action':a['semanticId'],'rule':'beneficial-effect-own-creatures'})
             if len(a['validTargets']) < a.get('minTargets',1): continue
         # For reviewed ordinary hostile Auras, choose strategically meaningful
         # targets. Unknown effects and complex slot grammars remain untouched.
@@ -97,6 +97,19 @@ def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=()
         if productive:
             if len(productive)!=len(retained): restrictions.append({'rule':'native-autopay-before-manual-mana'})
             retained=productive
+    pending = view.get('pendingDecision')
+    if (isinstance(pending,dict) and pending.get('context',{}).get('sourceName') == 'Reclamation Sage' and 'Reclamation Sage' not in allow_self_targets
+        and pending.get('responseSpec',{}).get('responseType') == 'TargetsResponse'
+        and isinstance(pending.get('legalTargets'),dict)):
+        for slot,targets in pending['legalTargets'].items():
+            if isinstance(targets,list):
+                filtered = [t for t in targets if cards.get(t,{}).get('controllerId',t) != me]
+                requirement = next((r for r in pending.get('targetRequirements',[]) if str(r.get('index')) == str(slot)),{})
+                # A mandatory target is selected before this optional trigger
+                # asks whether to destroy it. Keep a forced self target legal;
+                # the resolution policy declines destruction in that case.
+                if len(filtered) >= requirement.get('minTargets',1): pending['legalTargets'][slot] = filtered
+        restrictions.append({'rule':'reviewed-etb-removal-opponent-targets'})
     view['legalActions']=retained
     view['policyUtilityPlans']=plans
     return view,restrictions

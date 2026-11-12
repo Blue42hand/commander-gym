@@ -199,6 +199,26 @@ def decision_context(o, *, frozen, policy_context, facts):
         for entity, info in _pending_card_map(p).items():
             if entity not in cards:
                 cards[entity] = clean({k:v for k,v in info.items() if k in _CARD_FIELDS})
+    # Public history can grow indefinitely. Keep identities and ownership for
+    # inactive cards; retain complete rules whenever an affordable offer or a
+    # pending decision references the card, or it has an observed active effect.
+    protected = set()
+    def referenced(value):
+        if isinstance(value,str) and value in cards: protected.add(value)
+        elif isinstance(value,dict):
+            for child in value.values(): referenced(child)
+        elif isinstance(value,list):
+            for child in value: referenced(child)
+    referenced([a for a in o.get('legalActions',[]) if affordable(a)])
+    if p is not None: referenced(p)
+    summarized = []
+    for z in zones:
+        if z.get('zoneId',{}).get('zoneType') not in {'Graveyard','Exile'}: continue
+        for entity in z.get('cardIds',[]):
+            if entity in protected or cards.get(entity,{}).get('activeEffects'): continue
+            if entity in cards:
+                cards[entity] = {k:v for k,v in cards[entity].items() if k in {'name','manaCost','manaValue','typeLine','cardTypes','ownerId','controllerId','zone','isCommander'}}
+                summarized.append(entity)
     subtype_counts = {}
     for name, count in o.get('knownDeck', {}).get('cards', {}).items():
         if type(count) is int:
@@ -211,6 +231,7 @@ def decision_context(o, *, frozen, policy_context, facts):
         view['decision'] = clean({k:v for k,v in p.items() if k != 'cardInfo' and (k != 'cards' or not isinstance(v,dict)) and (not frozen or k not in {'options','hand','semanticId','responseSpec','id'})})
     if not frozen:
         view['legalActions'] = clean([a for a in o.get('legalActions', []) if affordable(a)])
+    if summarized: view['summarizedInactiveCards'] = summarized
     if o.get('policyUtilityPlans'): view['utilityPlans'] = o['policyUtilityPlans']
     if o.get('nativePaymentError') is not None: view['nativePaymentError'] = clean(o['nativePaymentError'])
     return view
@@ -253,8 +274,14 @@ def compact_decision_context(view):
         if defaults: view['actionDefaults'] = defaults
         if raw_defaults: view['rawActionDefaults'] = raw_defaults
     def table(rows):
-        columns = sorted({k for row in rows.values() for k in row})
-        return {'columns':columns, 'rows':{key:[row.get(k) for k in columns] for key,row in rows.items()}}
+        # Frequent fields first allow sparse rows to omit trailing absent cells.
+        # Column names and zip semantics preserve every retained model-view field.
+        columns = sorted({k for row in rows.values() for k in row},key=lambda k:(-sum(k in row for row in rows.values()),k))
+        def cells(row):
+            values = [row.get(k) for k in columns]
+            while values and values[-1] is None: values.pop()
+            return values
+        return {'columns':columns, 'rows':{key:cells(row) for key,row in rows.items()}}
     # Null table cells mean an omitted model-view field. Original null/false
     # omission semantics are unchanged; no native constraint is omitted here.
     for key in ['cards','cardDefinitions']:
@@ -486,11 +513,12 @@ class BoundedPolicyFallback:
         view = compact_decision_context(view)
         instructions += (' Card instances inherit cardDefinitions[definition]; instance fields override definitions.'
                          ' Each legalActions entry inherits actionDefaults; its action inherits rawActionDefaults.'
-                         ' Tables contain columns and rows keyed by entity or row ID; zip columns with each row and omit null cells.'
+                         ' Tables contain columns and rows keyed by entity or row ID; zip columns with each row and omit null cells. Missing trailing cells are absent fields.'
                          ' Replace each {$v:N} with sharedValues[N] recursively before reading tables and defaults.'
                          ' Choices have explicit zero-based option numbers; card and target IDs refer to the card table and player IDs.'
                          ' actorZones identifies your cards by zone; cards in Command are not creatures on the battlefield.'
                          ' actingCommander identifies your commander; other commanders belong to opponents.'
+                         ' summarizedInactiveCards retain identities, ownership, type and cost; their rules are omitted because no current affordable action or pending decision references them. All battlefield and current candidate rules remain available.'
                          ' Verify the selected option matches the action described in your explanation.'
                          ' Apply these defaults before evaluating choices. All current offers and constraints are retained.')
         choice = self.model._choose(o, response_format=fmt, model_view=view,
