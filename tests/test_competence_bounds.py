@@ -12,6 +12,16 @@ from test_lmstudio import config,FakeTransport,completion
 
 
 class CompetenceBoundsTests(unittest.TestCase):
+    def test_opening_explanation_can_reference_masked_mulligan_cards(self):
+        o=observation(offer('KeepHand',0),offer('TakeMulligan',1))
+        o['state']['mulligan']={'hand':['opening-card'],'cards':{'opening-card':{'name':'Forest','typeLine':'Basic Land — Forest'}},'mulliganCount':0,'cardsToPutOnBottom':0,'isOnThePlay':False}
+        summary={'goal':'Improve opening mana','keyFacts':['Only one land is available.'],'evidenceIds':['opening-card'],'uncertainty':'low','missingInformation':[]}
+        t=FakeTransport(completion(json.dumps({'decision':{'option':1},'explanation':summary})))
+        result=BoundedPolicyFallback(config(decision_explanations=True),t,facts=facts()).choose_with_policy_context(o,[{'metadata':{'policyLayers':{'status':'deferred'}}}])
+        self.assertEqual(result.action_id,1)
+        self.assertEqual(result.metadata['boundedFallback']['decisionExplanation']['evidenceIds'],['opening-card'])
+        self.assertEqual(sum(path=='/v1/chat/completions' for path,_,_ in t.calls),1)
+
     def test_target_cost_does_not_satisfy_required_target(self):
         a={'requiresTargets':True,'minTargets':1,'targetCount':1,'validTargets':['target']}
         for params in [{'bouncedPermanents':['elf']},{'targets':[]},{'targets':['other']},{'targets':['target','target']}, {'targets':['target'],'targetGroups':[['target']]}]:

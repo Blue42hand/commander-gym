@@ -445,7 +445,7 @@ class BoundedPolicyFallback:
                 texts = [explanation['goal'], *explanation['keyFacts'], *explanation['missingInformation']]
                 if any(len(t)>180 for t in texts) or sum(map(len,texts))>720:
                     raise PilotContractError('decision-explanation-too-long')
-                known_ids = set(o.get('state',{}).get('cards',{})) | set(_pending_card_map(o.get('pendingDecision') or {})) | {p['playerId'] for p in o.get('state',{}).get('players',[])}
+                known_ids = set(o.get('state',{}).get('cards',{})) | set(o.get('state',{}).get('mulligan',{}).get('cards',{})) | set(_pending_card_map(o.get('pendingDecision') or {})) | {p['playerId'] for p in o.get('state',{}).get('players',[])}
                 if not set(explanation['evidenceIds']) <= known_ids:
                     raise PilotContractError('decision-explanation-unknown-evidence')
                 selection['explanation'] = deepcopy(explanation)
