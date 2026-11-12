@@ -261,6 +261,24 @@ class SparseTablePromptTests(unittest.TestCase):
         view={'cards':{'one':{'name':'One','zone':'Hand','power':2},'two':{'name':'Two','zone':'Hand'},'three':{'name':'Three','zone':'Command','isCommander':True}}}
         self.assertEqual(expand(compact_decision_context(view)),view)
 
+    def test_recorded_overflow_survives_when_compaction_cannot_meet_target(self):
+        from pathlib import Path
+        from unittest.mock import patch
+        from test_lmstudio import discovery
+        from commander_gym.heuristic_facts import CardFacts
+        root=Path(__file__).parent/'fixtures';o=json.load(open(root/'alela-overflow-sparse-tables.json'));before=deepcopy(o)
+        models=discovery();models['models'][0]['loaded_instances'][0]['config']['context_length']=131072
+        summary={'goal':'Contract test','keyFacts':[],'evidenceIds':[],'uncertainty':'high','missingInformation':[]}
+        t=FakeTransport(completion(json.dumps({'decision':{'option':0},'explanation':summary})),models=models)
+        # Simulate a future state whose complete representation cannot compact
+        # below the target. Preserve the real recorded cards and offered choices.
+        with patch('commander_gym.bounded_policy_fallback.compact_decision_context',side_effect=lambda view:view):
+            r=BoundedPolicyFallback(config(context_window=131072,max_prompt_bytes=122880,decision_explanations=True),t,facts=CardFacts.load(root/'competence-public-facts.json')).choose_with_policy_context(o,[{'metadata':{'policyLayers':{'status':'deferred'}}}])
+        meta=r.metadata['boundedFallback']
+        self.assertGreater(meta['promptBytes'],32768);self.assertTrue(meta['promptTargetExceeded'])
+        self.assertEqual(meta['maxPromptBytes'],122880);self.assertEqual(o,before)
+        self.assertEqual(sum(path=='/v1/chat/completions' for path,_,_ in t.calls),1)
+
 class CurrentTargetRegressionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

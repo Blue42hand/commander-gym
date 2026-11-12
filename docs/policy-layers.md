@@ -78,8 +78,9 @@ players, current options, deck subtype counts and compact policy objectives.
 Card definitions are sent once and options refer back to them; null, false and
 empty metadata is omitted from the model view. The original native observation
 and validators retain all values and constraints. It receives no accumulated game log, conversation, full primer, full deck card
-catalog, images, or administrative fields. Requests are limited to the smaller
-of the configured prompt ceiling and 32 KiB; output is capped at 768 tokens and
+catalog, images, or administrative fields. Requests aim for a 32 KiB soft target after compaction. Larger complete requests
+proceed up to the configured `max_prompt_bytes` hard ceiling, which must fit the
+model context with output and template reserves. Output is capped at 768 tokens and
 existing timeout, cancellation, retry and batch budgets apply. If a complete
 request exceeds its budget, or a native schema cannot be represented, the callback
 reports that explicit error. It does not remove constraints or invent an action.
@@ -154,7 +155,10 @@ explicit references; common action values are defaults. Expansion preserves the
 entire decision view, including every affordable offer and its constraints.
 Native action-schema branches share a semantic-ID enum only when their complete
 parameter grammars are identical. Original observations and final native
-validation remain unchanged. The 32 KiB ceiling remains in force.
+validation remain unchanged. The 32 KiB target does not reject larger requests;
+the configured hard ceiling and context checks remain in force. Receipts record
+`promptTargetBytes`, `promptBytes`, `promptTargetExceeded`, and the actual hard
+`maxPromptBytes` limit, so target overruns remain visible without ending games.
 
 The native public-facts exporter reads each independent ordinary mana mode rather
 than requiring every ability on a land to be ordinary mana. Myriad Landscape and
@@ -217,8 +221,8 @@ contains `goal`, up to three `keyFacts`, up to six visible `evidenceIds`,
 `uncertainty` (`low`, `medium`, `high`), and up to three `missingInformation` items.
 Each text is limited to 180 characters, with 720 total text characters. Evidence
 IDs must exist in the current masked context. Invalid summaries use the same
-bounded retry path as invalid actions. The 32 KiB prompt and 768 output-token
-ceilings remain in force.
+bounded retry path as invalid actions. The 32 KiB prompt target is advisory;
+the configured hard prompt ceiling and 768 output-token cap remain in force.
 
 Only the native decision is executed. The explanation is recorded separately in
 `metadata.boundedFallback.decisionExplanation`, marked as a model report, and is

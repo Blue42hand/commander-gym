@@ -16,7 +16,7 @@ from .lmstudio_pilot import LMStudioPilot, _local_native_format, LMStudioPilotEr
 from .pilot import PilotContractError
 
 MAX_CHOICES = 128
-MAX_PROMPT_BYTES = 32768
+PROMPT_TARGET_BYTES = 32768
 _CARD_FIELDS = {'name', 'manaCost', 'typeLine', 'cardTypes', 'subtypes', 'oracleText',
                 'power', 'toughness', 'keywords', 'abilityFlags', 'isTapped', 'hasSummoningSickness',
                 'isCommander', 'controllerId', 'ownerId', 'counters', 'activeEffects', 'attachments',
@@ -404,8 +404,9 @@ class BoundedPolicyFallback:
 
     def __init__(self, config, transport=None, *, facts=None):
         self.defaults = DefaultPolicySubsystem(facts)
-        self.config = replace(config, max_prompt_bytes=min(config.max_prompt_bytes, MAX_PROMPT_BYTES),
-                              max_output_tokens=min(config.max_output_tokens, 768), compact_observation=False)
+        # The compact prompt target is advisory. The configured byte ceiling is
+        # the hard admission limit and is validated against model context/reserves.
+        self.config = replace(config, max_output_tokens=min(config.max_output_tokens, 768), compact_observation=False)
         self.model = LMStudioPilot(self.config, transport=transport)
         self.validator = self.defaults.validator
 
@@ -523,8 +524,12 @@ class BoundedPolicyFallback:
                          ' Apply these defaults before evaluating choices. All current offers and constraints are retained.')
         choice = self.model._choose(o, response_format=fmt, model_view=view,
                                    instructions_override=instructions, output_decoder=decode)
+        request_sizes = [len(json.dumps(a['request'],ensure_ascii=False).encode())
+                         for a in choice.metadata.get('modelIo',{}).get('attempts',[]) if isinstance(a.get('request'),dict)]
         return replace(choice, metadata={**choice.metadata, 'boundedFallback':{
             'utilityPlans':o.get('policyUtilityPlans',[]), 'decisionExplanation':selection.get('explanation'), 'explanationIsModelReport':bool(selection.get('explanation')),
             'explanationAddedToFuturePrompts':False, 'policyRestrictions':restrictions, 'mode':'frozen-choices' if wires else 'native-schema', 'selectedOption':selection.get('option'), 'candidateCount':len(wires) if wires else None,
+            'promptTargetBytes':PROMPT_TARGET_BYTES, 'promptBytes':max(request_sizes,default=None),
+            'promptTargetExceeded':any(size > PROMPT_TARGET_BYTES for size in request_sizes),
             'maxPromptBytes':self.config.max_prompt_bytes,'historyIncluded':False,'fullPrimerIncluded':False,
             'policyAttempts':base_attempts}})

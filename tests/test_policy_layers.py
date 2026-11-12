@@ -251,6 +251,28 @@ class BoundedFallbackTests(unittest.TestCase):
         c=BoundedPolicyFallback(config(max_prompt_bytes=6144),t).choose(o)
         self.assertEqual(c.response['optionIndex'],139)
 
+    def test_prompt_target_overflow_calls_model_within_configured_context_budget(self):
+        # An indivisible current option must not terminate a game at the soft
+        # target. Its complete label and native choice domain stay available.
+        o=decision('ChooseOptionDecision','OptionChosenResponse',{'optionIndex':'INTEGER'},options=['x'*40000,'B'])
+        before=deepcopy(o);models=discovery()
+        models['models'][0]['loaded_instances'][0]['config']['context_length']=131072
+        t=rank_transport();t.models=models
+        f=BoundedPolicyFallback(config(context_window=131072,max_prompt_bytes=122880),t)
+        c=f.choose_with_policy_context(o,[{'metadata':{'policyLayers':{'status':'deferred'}}}])
+        meta=c.metadata['boundedFallback'];size=len(json.dumps(t.calls[1][1],ensure_ascii=False).encode())
+        self.assertGreater(size,32768);self.assertLess(size,122880)
+        self.assertEqual(meta['promptTargetBytes'],32768)
+        self.assertEqual(meta['maxPromptBytes'],122880)
+        self.assertEqual(meta['promptBytes'],size);self.assertTrue(meta['promptTargetExceeded'])
+        self.assertEqual(c.response['optionIndex'],0);self.assertEqual(o,before)
+        self.assertEqual(sum(path=='/v1/chat/completions' for path,_,_ in t.calls),1)
+        # The explicitly configured hard ceiling is still enforced before I/O.
+        blocked=rank_transport();blocked.models=models
+        with self.assertRaisesRegex(LMStudioPilotError,'prompt_byte_limit'):
+            BoundedPolicyFallback(config(context_window=131072,max_prompt_bytes=32768),blocked).choose_with_policy_context(o,[{'metadata':{'policyLayers':{'status':'deferred'}}}])
+        self.assertEqual(blocked.calls,[])
+
     def test_budgets_fail_before_network_without_discarding_current_choices(self):
         o=decision('ChooseOptionDecision','OptionChosenResponse',{'optionIndex':'INTEGER'},options=['x'*10000,'B'])
         t=rank_transport()

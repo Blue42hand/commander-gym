@@ -42,9 +42,10 @@ these check the contract rather than model judgment.
 
 The prompt-specific diagnostic forces fallback on the seven formerly oversized
 positions and the final failed Alela callback, independent of whether the new
-policy now handles them. All fit the unchanged 32 KiB ceiling after lossless
-factoring and equivalent action-schema grouping. Arbitrarily larger unsupported
-positions can still hit the ceiling and report a visible error.
+policy now handles them. All fit 32 KiB after lossless factoring and equivalent
+action-schema grouping. That size is now a soft target: larger requests proceed
+within the configured hard prompt ceiling and model context budget. Only those
+hard limits produce a prompt-budget error.
 
 ## Other checks and limits
 
