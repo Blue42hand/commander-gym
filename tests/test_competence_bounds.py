@@ -62,6 +62,9 @@ class CompetenceBoundsTests(unittest.TestCase):
         p=BoundedPolicyFallback(config(decision_explanations=True),t,facts=facts())
         result=p.choose_with_policy_context(o,[{'metadata':{'policyLayers':{'status':'deferred'}}}])
         self.assertEqual(result.action_id,1);self.assertEqual(result.params,{})
+        grammar=t.calls[1][1]['response_format']['json_schema']['schema']
+        evidence=grammar['properties']['explanation']['properties']['evidenceIds']['items']['enum']
+        self.assertIn('spell',evidence);self.assertNotIn('d0',evidence);self.assertNotIn('policy.objectives',evidence)
         self.assertEqual(result.metadata['boundedFallback']['decisionExplanation'],summary)
         self.assertEqual(sum(path=='/v1/chat/completions' for path,_,_ in t.calls),2)
         self.assertNotIn('Develop a resource',t.calls[-1][1]['messages'][1]['content'])

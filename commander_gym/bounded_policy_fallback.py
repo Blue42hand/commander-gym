@@ -430,10 +430,11 @@ class BoundedPolicyFallback:
             if fmt is None: raise LMStudioPilotError('bounded_fallback_unsupported_native_response_schema')
             instructions = 'Choose one current native game action or response using only the supplied schema and masked decision context. Null, false and empty metadata fields are omitted. Follow the deck objectives. Return the exact native channel/choice or channel/response object; never supply actionId or decisionId, invent entity IDs, or use fields outside the schema. Spend mana only for a useful action. Native legality remains authoritative.'
         if self.config.decision_explanations:
+            known_ids = set(o.get('state',{}).get('cards',{})) | set(o.get('state',{}).get('mulligan',{}).get('cards',{})) | set(_pending_card_map(o.get('pendingDecision') or {})) | {p['playerId'] for p in o.get('state',{}).get('players',[])}
             explanation_schema = {'type':'object','properties':{
                 'goal':{'type':'string'},
                 'keyFacts':{'type':'array','items':{'type':'string'},'maxItems':3},
-                'evidenceIds':{'type':'array','items':{'type':'string'},'maxItems':6},
+                'evidenceIds':{'type':'array','items':{'type':'string','enum':sorted(known_ids)} if known_ids else {'type':'string'},'maxItems':6 if known_ids else 0},
                 'uncertainty':{'type':'string','enum':['low','medium','high']},
                 'missingInformation':{'type':'array','items':{'type':'string'},'maxItems':3}},
                 'required':['goal','keyFacts','evidenceIds','uncertainty','missingInformation'],'additionalProperties':False}
@@ -445,7 +446,6 @@ class BoundedPolicyFallback:
                 texts = [explanation['goal'], *explanation['keyFacts'], *explanation['missingInformation']]
                 if any(len(t)>180 for t in texts) or sum(map(len,texts))>720:
                     raise PilotContractError('decision-explanation-too-long')
-                known_ids = set(o.get('state',{}).get('cards',{})) | set(o.get('state',{}).get('mulligan',{}).get('cards',{})) | set(_pending_card_map(o.get('pendingDecision') or {})) | {p['playerId'] for p in o.get('state',{}).get('players',[])}
                 if not set(explanation['evidenceIds']) <= known_ids:
                     raise PilotContractError('decision-explanation-unknown-evidence')
                 selection['explanation'] = deepcopy(explanation)
@@ -454,6 +454,8 @@ class BoundedPolicyFallback:
                 ' Supply a brief decision summary: goal, up to three keyFacts, visible evidenceIds, uncertainty, and missingInformation.'
                 ' Describe the relevant game facts and intended benefit, not a step-by-step reasoning trace.'
                 ' Each text must be at most 180 characters, all text at most 720 characters.'
+                ' evidenceIds must use only card instance or player IDs from the schema enum; never use dN definition references or context paths.'
+                ' Use an empty evidenceIds list if no entity reference is needed.'
                 ' Report uncertainty honestly; use empty missingInformation if none. Explanations are diagnostic only.')
         view = compact_decision_context(view)
         instructions += (' Card instances inherit cardDefinitions[definition]; instance fields override definitions.'
