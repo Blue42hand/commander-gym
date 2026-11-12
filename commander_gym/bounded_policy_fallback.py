@@ -22,7 +22,7 @@ _CARD_FIELDS = {'name', 'manaCost', 'typeLine', 'cardTypes', 'subtypes', 'oracle
                 'power', 'toughness', 'keywords', 'abilityFlags', 'isTapped', 'hasSummoningSickness',
                 'isCommander', 'controllerId', 'ownerId', 'counters', 'activeEffects', 'attachments',
                 'isFaceDown', 'isPhasedOut', 'damage', 'chosenCreatureType', 'colors', 'colorIdentity', 'manaValue', 'zone', 'isToken',
-                'targets', 'stackText', 'abilityIdentity', 'chosenModeDescriptions', 'perModeTargets', 'chosenX'}
+                'targets', 'stackText', 'abilityIdentity', 'chosenModeDescriptions', 'perModeTargets', 'chosenX', 'linkedExile'}
 
 
 def _pending_card_map(p):
@@ -237,6 +237,11 @@ def decision_context(o, *, frozen, policy_context, facts):
         for entity, info in _pending_card_map(p).items():
             if entity not in cards:
                 cards[entity] = clean({k:v for k,v in info.items() if k in _CARD_FIELDS})
+    for card in cards.values():
+        if 'linkedExile' in card:
+            linked=[i for i in card['linkedExile'] if i in visible and i in cards]
+            if linked:card['linkedExile']=linked
+            else:card.pop('linkedExile')
     from .policy_action_bounds import abilities_removed
     for entity,card in cards.items():
         if abilities_removed(o,s.get('cards',{}).get(entity,{}),facts):card['printedAbilitiesRemoved']=True
@@ -252,6 +257,9 @@ def decision_context(o, *, frozen, policy_context, facts):
             for child in value: referenced(child)
     referenced([a for a in o.get('legalActions',[]) if affordable(a)])
     if p is not None: referenced(p)
+    for zone in zones:
+        if zone.get('zoneId',{}).get('zoneType') not in {'Graveyard','Exile'}:
+            for entity in zone.get('cardIds',[]):referenced(cards.get(entity,{}).get('linkedExile',[]))
     summarized = []
     for z in zones:
         if z.get('zoneId',{}).get('zoneType') not in {'Graveyard','Exile'}: continue

@@ -6,6 +6,13 @@ import com.wingedsheep.ai.engine.knowledge.TargetPolarityAnalyzer
 import com.wingedsheep.engine.registry.CardRegistry
 import com.wingedsheep.sdk.core.Zone
 import com.wingedsheep.sdk.scripting.LoseAllAbilities
+import com.wingedsheep.sdk.scripting.ModifyStats
+import com.wingedsheep.sdk.scripting.EntersWithChoice
+import com.wingedsheep.sdk.scripting.ChoiceType
+import com.wingedsheep.sdk.scripting.Duration
+import com.wingedsheep.sdk.scripting.costs.manaCostOrNull
+import com.wingedsheep.sdk.scripting.effects.ModifyStatsEffect
+import com.wingedsheep.sdk.scripting.effects.TapUntapEffect
 import com.wingedsheep.sdk.scripting.filters.unified.GroupFilter
 import com.wingedsheep.sdk.scripting.EntersTapped
 import com.wingedsheep.sdk.scripting.GameObjectFilter
@@ -86,6 +93,11 @@ object PublicCardFacts {
                 // mana mode. Color knowledge does not authorize its activation.
                 if (!ability.isManaAbility || ability.cost != AbilityCost.Tap) continue
                 val nativeEffect = ability.effect
+                if (nativeEffect is AddManaOfChoiceEffect && nativeEffect.colorSet == ManaColorSet.AnyColor &&
+                    nativeEffect.amount == DynamicAmount.Fixed(1) && nativeEffect.restriction == null &&
+                    nativeEffect.riders.isEmpty() && nativeEffect.recipient == EffectTarget.Controller) {
+                    manaColors.addAll(listOf("W", "U", "B", "R", "G"))
+                }
                 if (nativeEffect !is AddManaEffect && nativeEffect !is AddColorlessManaEffect) continue
                 if (nativeEffect is AddManaEffect && (nativeEffect.restriction != null || nativeEffect.riders.isNotEmpty())) continue
                 if (nativeEffect is AddColorlessManaEffect && (nativeEffect.restriction != null || nativeEffect.riders.isNotEmpty())) continue
@@ -117,6 +129,29 @@ object PublicCardFacts {
             it.isManaAbility && it.cost == AbilityCost.Tap && effect != null &&
                 effect.colorSet == ManaColorSet.CommanderIdentity && effect.amount == DynamicAmount.Fixed(1) && effect.restriction == null && effect.riders.isEmpty() && effect.recipient == EffectTarget.Controller
         }
+        // A narrow, reusable development contract, independent of safe manual
+        // activation. Free tribal choice and a positive own-tribe anthem are
+        // understood; imprint, sacrifice, damage and conditional mana are not.
+        val developmentAmounts = activated.map { ability ->
+            if (!ability.isManaAbility || ability.cost != AbilityCost.Tap) 0
+            else when (val effect = ability.effect) {
+                is AddManaEffect -> if (effect.restriction == null && effect.riders.isEmpty()) (effect.amount as? DynamicAmount.Fixed)?.amount ?: 0 else 0
+                is AddColorlessManaEffect -> if (effect.restriction == null && effect.riders.isEmpty()) (effect.amount as? DynamicAmount.Fixed)?.amount ?: 0 else 0
+                is AddManaOfChoiceEffect -> if (effect.colorSet in listOf(ManaColorSet.AnyColor, ManaColorSet.CommanderIdentity) &&
+                    effect.amount == DynamicAmount.Fixed(1) && effect.restriction == null && effect.riders.isEmpty() &&
+                    effect.recipient == EffectTarget.Controller) 1 else 0
+                else -> 0
+            }
+        }
+        val safeEntry = card.script.replacementEffects.all {
+            it is EntersWithChoice && it.choiceType == ChoiceType.CREATURE_TYPE && it.chooser == Player.You
+        }
+        val safeStatics = card.staticAbilities.all {
+            it is ModifyStats && it.powerBonus >= 0 && it.toughnessBonus >= 0 &&
+                it.filter == GroupFilter.ChosenSubtypeCreatures().youControl()
+        }
+        val developmentMana = if (noTriggers && safeEntry && safeStatics && developmentAmounts.isNotEmpty() &&
+            developmentAmounts.all { it > 0 }) developmentAmounts.max() else 0
         // Export only an exact OR of own battlefield land-subtype tests.
         // Other ETB replacements and additional conditions remain unknown.
         val tapped = card.script.replacementEffects.singleOrNull() as? EntersTapped
@@ -128,6 +163,28 @@ object PublicCardFacts {
             basicColors.keys.firstOrNull { exists.filter == GameObjectFilter.Land.withSubtype(it) }
         }.takeIf { it.size == branches.size } ?: emptyList() else emptyList()
         return buildJsonObject {
+            put("developmentMana", developmentMana)
+            putJsonArray("manaOnlySelfUntapAbilities") {
+                activated.filter {
+                    val effect = it.effect as? TapUntapEffect
+                    it.cost.manaCostOrNull != null && effect?.tap == false && effect.target == EffectTarget.Self
+                }.forEach { add(it.id.value) }
+            }
+            // Match exact SDK descriptions at the native target-selection seam;
+            // no Oracle text parsing or guesses from a generic REMOVAL tag.
+            putJsonObject("fixedStatReductions") {
+                card.script.triggeredAbilities.forEach {
+                    val effect = it.effect as? ModifyStatsEffect ?: return@forEach
+                    val power = effect.powerModifier as? DynamicAmount.Fixed ?: return@forEach
+                    val toughness = effect.toughnessModifier as? DynamicAmount.Fixed ?: return@forEach
+                    if (power.amount <= 0 && toughness.amount < 0 && effect.duration == Duration.EndOfTurn &&
+                        it.allTargetRequirements.size == 1 && effect.target is EffectTarget.BoundVariable) {
+                        putJsonObject(effect.description) {
+                            put("power", power.amount); put("toughness", toughness.amount)
+                        }
+                    }
+                }
+            }
             putJsonArray("untappedIfLandSubtypes") { untappedSubtypes.sorted().forEach { add(it) } }
             put("variableMana", activated.any { ability ->
                 ability.isManaAbility && when (val effect = ability.effect) {

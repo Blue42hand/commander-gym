@@ -65,6 +65,49 @@ def reviewed_exile_decision(p):
         and not any(rows[0].get(k) for k in constraints) and isinstance(p.get('legalTargets'),dict))
 
 
+def fixed_stat_reduction(p,facts):
+    """Exact exported primitive; complex native target contracts stay uncertain."""
+    rows=p.get('targetRequirements');context=p.get('context',{})
+    normalize=lambda text:text.strip().removesuffix('.').casefold() if isinstance(text,str) else None
+    matches=[v for k,v in facts.get(context.get('sourceName')).get('fixedStatReductions',{}).items()
+             if normalize(k)==normalize(context.get('effectHint'))]
+    effect=matches[0] if len(matches)==1 else None
+    constraints=['sameOwner','sameNumericProperty','selectionGroups','exclusiveGroups','distinctCategories','totalCap','differentNames','differentControllers','mustDifferFromEarlier']
+    if (isinstance(effect,dict) and type(effect.get('power')) is int and effect['power']<=0
+        and type(effect.get('toughness')) is int and effect['toughness']<0
+        and p.get('responseSpec',{}).get('responseType') in {'TargetsResponse','TargetsChosenResponse'}
+        and isinstance(rows,list) and len(rows)==1 and rows[0].get('minTargets')==rows[0].get('maxTargets')==1
+        and not any(rows[0].get(k) for k in constraints) and isinstance(p.get('legalTargets'),dict)):
+        return effect
+    return None
+
+
+def copied_neutralization_targets(o,p,facts):
+    """Spread an ability-removing Aura copy across distinct live threats."""
+    ctx=p.get('context',{});name=ctx.get('sourceName');rows=p.get('targetRequirements')
+    if (not facts.get(name).get('removesAttachedAbilities') or ctx.get('effectHint')!='Copy of '+name
+        or p.get('responseSpec',{}).get('responseType') not in {'TargetsResponse','TargetsChosenResponse'}
+        or not isinstance(rows,list) or len(rows)!=1 or rows[0].get('minTargets') not in (0,1) or rows[0].get('maxTargets')!=1
+        or any(rows[0].get(k) for k in ['sameOwner','sameNumericProperty','selectionGroups','exclusiveGroups','distinctCategories','totalCap','differentNames','differentControllers','mustDifferFromEarlier'])):return None
+    state=o['state'];cards=state.get('cards',{});stack=ids_in(state,'Stack');me=o['agentToAct'];covered=set()
+    threatened={t.get('spellEntityId') for i in stack for t in cards.get(i,{}).get('targets',[]) if t.get('type')=='Spell'}
+    for i in stack:
+        c=cards.get(i,{})
+        if (i in threatened or c.get('controllerId')!=me or not facts.get(c.get('name')).get('removesAttachedAbilities')
+            or c.get('abilityIdentity') or c.get('activeEffects')):continue
+        targets=c.get('targets',[])
+        if len(targets)==1 and targets[0].get('type')=='Permanent':covered.add(targets[0].get('entityId'))
+    if not covered:return None
+    slot=str(rows[0]['index']);targets=(p.get('legalTargets') or {}).get(slot)
+    if not isinstance(targets,list):return None
+    # Public responses targeting a pending Aura restore uncertainty; its
+    # resolution is never assumed in that branch.
+    candidates=[t for t in targets if t not in covered and t in ids_in(state,'Battlefield')
+                and cards.get(t,{}).get('controllerId') not in (None,me)
+                and not abilities_removed(o,cards.get(t,{}),facts)]
+    return (slot,ranked_removal_targets(o,candidates,facts,neutralize=True)) if candidates else None
+
+
 def own_bounce_rescue(o,target,facts):
     cards=o['state'].get('cards',{});card=cards.get(target,{})
     if card.get('controllerId')!=o['agentToAct'] or target not in ids_in(o['state'],'Battlefield',o['agentToAct']):return False
@@ -108,6 +151,15 @@ def pending_counter_answers(o,facts=None):
     return covered
 
 
+# Reviewed filtering spells replace themselves without establishing a permanent
+# engine. Keep costly counters for material threats; deck exceptions can approve
+# combo-specific uses. Unknown draw spells and tutors retain model control.
+LOW_IMPACT_FILTERS=frozenset({'Brainstorm','Opt','Ponder','Preordain','Consider','Peek','Serum Visions',
+    'Sleight of Hand','Impulse','Anticipate'})
+ROUTINE_MANA_ROCKS=frozenset({'Thought Vessel','Mind Stone','Arcane Signet','Fellwar Stone',
+    "Commander's Sphere","Wayfarer's Bauble"})
+
+
 ATTACK_TAX_SOURCES=frozenset({'Propaganda','Ghostly Prison','Sphere of Safety'})
 
 
@@ -145,6 +197,18 @@ def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=()
             a['validBlockTargets']={i:ts for i,ts in pairs.items() if ts}
             if isinstance(a.get('validBlockers'),list):a['validBlockers']=[i for i in a['validBlockers'] if i in a['validBlockTargets']]
         casting=a.get('kind','').startswith('Cast')
+        if (quiet and not o.get('pendingDecision') and o.get('nativePaymentError') is None
+            and a.get('kind')=='ActivateAbility' and raw.get('abilityId') in facts.get(name).get('manaOnlySelfUntapAbilities',[])
+            and name not in allow_self_targets and cards.get(raw.get('sourceId'),{}).get('isTapped') is False):
+            restrictions.append({'action':a['semanticId'],'rule':'avoid-untapping-untapped-source'});continue
+        source=cards.get(raw.get('sourceId'),{});linked=source.get('linkedExile',[])
+        if (quiet and not o.get('pendingDecision') and o.get('nativePaymentError') is None
+            and a.get('kind')=='ActivateAbility' and raw.get('abilityId')=='Isochron Scepter:2'
+            and name not in allow_self_targets and isinstance(linked,list) and len(linked)==1
+            and linked[0] in ids_in(state,'Exile') and cards.get(linked[0],{}).get('name') in UNCONDITIONAL_COUNTERS):
+            # Reviewed copy-and-cast mechanic plus a known mandatory spell target.
+            # Unknown imprints and live stacks still need their actual decision.
+            restrictions.append({'action':a['semanticId'],'rule':'counter-imprint-needs-live-spell'});continue
         stack=ids_in(state,'Stack')
         own_stack=bool(stack) and all(cards.get(i,{}).get('controllerId')==me for i in stack)
         if (not o.get('pendingDecision') and o.get('nativePaymentError') is None and own_stack and not state.get('combat')
@@ -166,8 +230,7 @@ def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=()
         if (casting and 'COUNTERSPELL' in facts.get(name).get('tags',[]) and (exile_cost.get('costType')=='ExileFromHand' or name=="An Offer You Can't Refuse")
             and a.get('minTargets')==a.get('targetCount')==1 and a.get('targetRequirements') is None
             and isinstance(a.get('validTargets'),list) and name not in counter_target_exceptions):
-            routine={'Thought Vessel','Mind Stone','Arcane Signet','Fellwar Stone',"Commander's Sphere","Wayfarer's Bauble"}
-            targets=[t for t in a['validTargets'] if cards.get(t,{}).get('name') not in routine]
+            targets=[t for t in a['validTargets'] if cards.get(t,{}).get('name') not in ROUTINE_MANA_ROCKS | LOW_IMPACT_FILTERS]
             if targets!=a['validTargets']:
                 restrictions.append({'action':a['semanticId'],'rule':'preserve-costly-counter-for-material-threat'})
                 a['validTargets']=targets
@@ -274,6 +337,25 @@ def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=()
         if isinstance(targets,list) and targets and all(t in ids_in(state,'Battlefield') and cards.get(t,{}).get('controllerId') not in (None,me) for t in targets):
             pending['legalTargets'][slot]=ranked_removal_targets(o,targets,facts)
             restrictions.append({'rule':'reviewed-etb-exile-threat-shortlist'})
+    reduction=fixed_stat_reduction(pending,facts) if isinstance(pending,dict) else None
+    if reduction and pending['context']['sourceName'] not in allow_self_targets:
+        slot=str(pending['targetRequirements'][0]['index']);targets=pending['legalTargets'].get(slot)
+        if isinstance(targets,list) and targets and all(t in ids_in(state,'Battlefield') and cards.get(t,{}).get('controllerId') not in (None,me) and 'CREATURE' in cards[t].get('cardTypes',[]) for t in targets):
+            # Prefer actual kills, then existing removal valuation (which values
+            # printed abilities only while they are active). Unknown stats defer.
+            if all(type(cards[t].get('toughness')) is int and not cards[t].get('activeEffects') for t in targets):
+                kills=[t for t in targets if cards[t]['toughness']+reduction['toughness']<=0]
+                if kills:
+                    pending['legalTargets'][slot]=ranked_removal_targets(o,kills,facts)
+                    restrictions.append({'rule':'fixed-stat-removal-live-threat-shortlist'})
+    copy_targets=copied_neutralization_targets(o,pending,facts) if isinstance(pending,dict) and pending.get('context',{}).get('sourceName') not in allow_self_targets else None
+    if copy_targets:
+        slot,targets=copy_targets
+        pending['legalTargets'][slot]=targets
+        # An empty selection keeps the original target in this native contract.
+        # Require one explicit alternative, each still offered by native legality.
+        pending['targetRequirements'][0]['minTargets']=1
+        restrictions.append({'rule':'spread-neutralization-copies-across-live-threats'})
     view['legalActions']=retained
     view['policyUtilityPlans']=plans
     return view,restrictions

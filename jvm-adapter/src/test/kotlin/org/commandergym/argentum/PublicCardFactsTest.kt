@@ -44,6 +44,20 @@ class PublicCardFactsTest {
         }
     }
 
+    @Test fun developmentAndTargetingContractsComeFromSmallTypedPrimitives() {
+        val cards = PublicCardFacts.export(registry, listOf("Patchwork Banner", "Arcane Signet", "Sol Ring", "Staff of Domination", "Nowhere to Run", "Mox Amber", "Serra's Sanctum"), revision)["cards"]!!.jsonObject
+        fun fact(name: String) = cards[name]!!.jsonObject
+        assertEquals(1, fact("Patchwork Banner")["developmentMana"]!!.jsonPrimitive.int)
+        assertEquals(1, fact("Arcane Signet")["developmentMana"]!!.jsonPrimitive.int)
+        assertEquals(2, fact("Sol Ring")["developmentMana"]!!.jsonPrimitive.int)
+        assertEquals(setOf("W", "U", "B", "R", "G"), fact("Patchwork Banner")["manaColors"]!!.jsonArray.map { it.jsonPrimitive.content }.toSet())
+        for (name in listOf("Staff of Domination", "Mox Amber", "Serra's Sanctum")) assertEquals(0, fact(name)["developmentMana"]!!.jsonPrimitive.int)
+        assertEquals(listOf("Staff of Domination:1"), fact("Staff of Domination")["manaOnlySelfUntapAbilities"]!!.jsonArray.map { it.jsonPrimitive.content })
+        val reduction = fact("Nowhere to Run")["fixedStatReductions"]!!.jsonObject.values.single().jsonObject
+        assertEquals(-3, reduction["power"]!!.jsonPrimitive.int)
+        assertEquals(-3, reduction["toughness"]!!.jsonPrimitive.int)
+    }
+
     @Test fun publicFactsDistinguishOrdinaryManaFromChoicesAndTriggeredBoards() {
         val names = listOf("Forest", "Sol Ring", "Arcane Signet", "Sythis, Harvest's Hand", "Vanquisher's Banner", "Mesa Enchantress", "Underworld Dreams")
         val export = PublicCardFacts.export(registry, names, revision)

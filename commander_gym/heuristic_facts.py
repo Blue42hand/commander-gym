@@ -34,8 +34,16 @@ class CardFacts:
                   'staticValue', 'repeatable', 'affectsOpponent', 'feeds', 'rewards', 'tribesRewarded'}
         fields |= {'freeOptionalDraws', 'drawSensitive'}
         for name, fact in document['cards'].items():
-            if not isinstance(name, str) or not name or not isinstance(fact, dict) or not fields <= set(fact) or set(fact) - fields - {'removesAttachedAbilities', 'untappedIfLandSubtypes', 'variableMana', 'commanderColorMana', 'painManaColors', 'colorIdentity', 'untappedPayLife'}:
+            if not isinstance(name, str) or not name or not isinstance(fact, dict) or not fields <= set(fact) or set(fact) - fields - {'developmentMana', 'manaOnlySelfUntapAbilities', 'fixedStatReductions', 'removesAttachedAbilities', 'untappedIfLandSubtypes', 'variableMana', 'commanderColorMana', 'painManaColors', 'colorIdentity', 'untappedPayLife'}:
                 raise ValueError('invalid native card fact fields')
+            if 'developmentMana' in fact and (type(fact['developmentMana']) is not int or not 0<=fact['developmentMana']<=20):
+                raise ValueError('invalid native development mana')
+            untaps=fact.get('manaOnlySelfUntapAbilities',[])
+            if not isinstance(untaps,list) or any(not isinstance(v,str) or not v for v in untaps):
+                raise ValueError('invalid native untap ability contract')
+            reductions=fact.get('fixedStatReductions',{})
+            if not isinstance(reductions,dict) or any(not isinstance(k,str) or not k or not isinstance(v,dict) or set(v)!={'power','toughness'} or type(v['power']) is not int or v['power']>0 or type(v['toughness']) is not int or v['toughness']>=0 for k,v in reductions.items()):
+                raise ValueError('invalid native stat reduction contract')
             for key in ['painManaColors','colorIdentity']:
                 if key in fact and (not isinstance(fact[key],list) or any(not isinstance(c,str) or c not in 'WUBRG' for c in fact[key])):
                     raise ValueError('invalid native mana colors')

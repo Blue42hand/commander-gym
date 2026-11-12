@@ -145,3 +145,14 @@ tasks.register<JavaExec>("runCounterSavedStateProbe") {
         args(providers.gradleProperty("probeInput").get(), providers.gradleProperty("probeOutput").get())
     }
 }
+
+// Explicit paired offline competency replay; never contacts a model or starts a game.
+tasks.register<JavaExec>("runCompetencySavedStateProbe") {
+    group = "verification"
+    dependsOn(tasks.named("testClasses"))
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("org.commandergym.argentum.CompetencySavedStateProbe")
+    if (providers.gradleProperty("probeInput").isPresent && providers.gradleProperty("probeOutput").isPresent) {
+        args(providers.gradleProperty("probeInput").get(), providers.gradleProperty("probeOutput").get())
+    }
+}

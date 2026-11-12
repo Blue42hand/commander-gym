@@ -300,3 +300,42 @@ sets locally, including Thirst's one-matching-card discount, while preserving th
 next land drop. Low-priority cards retain positive opportunity value, preventing
 an unnecessary extra discard merely because its development score is negative.
 Larger or otherwise unsupported selections retain model control and validation.
+
+Public facts also expose three optional, conservative primitive contracts:
+`developmentMana`, `manaOnlySelfUntapAbilities`, and `fixedStatReductions`.
+Development accepts ordinary fixed tap mana, including unrestricted any-color and
+commander-identity choices, with no triggers or material entry costs. A free
+creature-type choice and a positive own-tribe anthem are understood. This covers
+Patchwork Banner without changing `simpleMana` or authorizing manual activation.
+In an empty own main phase, the default `_commander_mana_setup` hook prioritizes an
+affordable safe artifact that makes the absent commander's printed mana cost
+reachable after untapping. It yields to land drops, an available commander cast,
+native payment corrections and visible survival questions. It does not promise a
+future cast or estimate commander tax. Deck code can override this hook.
+
+Exact fixed negative-stat trigger effects can shortlist killable opposing threats
+using their current native toughness and shared suppression-aware valuation. The
+SDK description is matched with capitalization and terminal-period normalization;
+unknown or mixed effects retain model control. Small target domains still use
+native legality. Copies of ability-removing Auras avoid targets already covered
+by an unopposed own Aura, preferring distinct live threats. A visible counter to
+the original restores uncertainty. When one useful target remains the shared
+handler selects it; several alternatives retain bounded inference.
+
+A pure mana-cost self-untap ability is held while its source is already untapped
+in a quiet window. Tapped sources and stack interaction retain their decisions.
+Trusted `self_target_exceptions` can approve activation-dependent deck plans.
+Costly counters are also conserved against a reviewed set of ordinary filtering
+spells; tutors, engines, unknown draw spells and deck counter exceptions remain
+available.
+
+The model view preserves `linkedExile` references only to cards already visible
+to the acting seat. Linked public cards retain their rules instead of being
+summarized as inactive history, so imprint decisions have their actual card
+context. The 32 KiB prompt target remains advisory; larger current decisions
+remain valid within the configured hard runtime ceiling.
+
+The reviewed Isochron Scepter copy-and-cast handler holds activation on an empty
+stack when its public imprint is a known counter that requires a spell target.
+Unknown imprints, modal effects and live stacks retain inference. This removes
+repeated quiet-window model passes and avoids paying to copy an uncastable counter.

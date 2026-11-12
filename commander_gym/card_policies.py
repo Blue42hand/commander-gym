@@ -62,11 +62,18 @@ class SharedCardPolicies(ResourcePolicies):
         from .modal_policies import modal_pending
         modal=modal_pending(self,o,p)
         if modal is not None:return modal
-        from .policy_action_bounds import reviewed_exile_decision
-        if reviewed_exile_decision(p):
+        from .policy_action_bounds import copied_neutralization_targets
+        copy=copied_neutralization_targets(o,p,self.facts)
+        if copy and p.get('context',{}).get('sourceName') not in self.self_target_exceptions and len(copy[1])==1:
+            return self._decision(p,p['responseSpec']['responseType'],'shared-card-copy-neutralize-distinct-live-threat',selectedTargets={copy[0]:copy[1]})
+        from .policy_action_bounds import reviewed_exile_decision,fixed_stat_reduction
+        reduction=fixed_stat_reduction(p,self.facts)
+        if reviewed_exile_decision(p) or reduction:
             slot=str(p['targetRequirements'][0]['index']);targets=p['legalTargets'].get(slot)
             if isinstance(targets,list) and len(targets)==1:
-                return self._decision(p,p['responseSpec']['responseType'],'shared-card-clear-removal-target',selectedTargets={slot:targets})
+                c=self._card(o,targets[0])
+                if not reduction or (c.get('controllerId') not in (None,o['agentToAct']) and type(c.get('toughness')) is int and c['toughness']+reduction['toughness']<=0 and not c.get('activeEffects')):
+                    return self._decision(p,p['responseSpec']['responseType'],'shared-card-clear-removal-target',selectedTargets={slot:targets})
         context = p.get('context', {}); source = context.get('sourceName')
         rt = p.get('responseSpec', {}).get('responseType')
         optional_benefits={

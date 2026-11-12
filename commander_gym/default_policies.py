@@ -107,7 +107,52 @@ class DefaultPolicySubsystem(SharedCardPolicies, MaskedHeuristicSubsystem):
         passed = next((a for a in offers if a.get('kind') == 'PassPriority'), None)
         if passed and all(a.get('kind') == 'PassPriority' or a.get('isManaAbility') is True for a in offers):
             return self._action(passed, 'default-no-unplanned-mana')
+        if known:
+            setup=self._commander_mana_setup(o,offers)
+            if setup is not None:return setup
         return super()._choose(o)
+
+    def _commander_mana_setup(self,o,offers):
+        """Develop toward a commander's printed cost before discretionary plays.
+
+        This forecasts capacity after an untap, never current affordability or a
+        guaranteed future cast (taxes and changing boards remain native).
+        Deck policies may replace this hook for a different development plan.
+        """
+        s=o['state'];me=o['agentToAct'];cards=s.get('cards',{})
+        if (o.get('nativePaymentError') is not None or o.get('pendingDecision') is not None
+            or s.get('activePlayerId')!=me or s.get('currentStep') not in {'PRECOMBAT_MAIN','POSTCOMBAT_MAIN'}
+            or ids_in(s,'Stack') or any(a.get('kind')=='PlayLand' for a in offers)):return None
+        own=self._own(o)
+        if any(c.get('isCommander') for c in own):return None
+        commanders=[cards[i] for i in ids_in(s,'Command',me) if cards.get(i,{}).get('isCommander')]
+        if len(commanders)!=1:return None
+        commander=commanders[0]
+        if any(a.get('kind')=='CastSpell' and cards.get(a.get('action',{}).get('cardId'),{}).get('isCommander') for a in offers):return None
+        cost=mana_cost(commander.get('manaCost',self.facts.get(commander.get('name')).get('manaCost','')))
+        if cost is None:return None
+        # Visible immediate survival questions still go through ordinary policy
+        # and inference instead of a compulsory setup move.
+        life=next((p.get('life') for p in s.get('players',[]) if p.get('playerId')==me),None)
+        if type(life) is int and sum(max(0,cards[i].get('power') or 0) for i in ids_in(s,'Battlefield') if cards[i].get('controllerId')!=me)>=life:return None
+        sources=[]
+        for c in own:
+            f=self.facts.get(c.get('name'))
+            if c.get('activeEffects') or c.get('attachments') or c.get('isFaceDown') or c.get('isPhasedOut') or 'CREATURE' in c.get('cardTypes',[]) or f.get('variableMana'):continue
+            colors=self._land_colors(c,o)
+            amount=1 if 'LAND' in c.get('cardTypes',[]) else f.get('developmentMana',0)
+            if colors and type(amount) is int and 0<amount<=3:sources.extend([colors]*amount)
+        if self._payable(cost,sources):return None
+        candidates=[]
+        for a in offers:
+            c=cards.get(a.get('action',{}).get('cardId'),{});f=self.facts.get(c.get('name'));amount=f.get('developmentMana',0)
+            if (a.get('kind')!='CastSpell' or not self._plain_cast(a) or a.get('requiresTargets') is not False
+                or set(f.get('types',[]))!={'ARTIFACT'} or type(amount) is not int or not 0<amount<=3):continue
+            colors=self._land_colors(c,o)
+            if colors and self._payable(cost,sources+[colors]*amount):candidates.append(a)
+        if not candidates:return None
+        candidates.sort(key=lambda a:(mana_cost(a.get('manaCostString','')) or (99,))[0])
+        return self._action(candidates[0],'default-develop-commander-mana-capacity',objective='Develop mana toward the commander before discretionary interaction; reassess after native resolution.')
     def _opening(self, o):
         if any(self.facts.get(c.get('name')).get('variableMana')
                for c in o.get('state', {}).get('mulligan', {}).get('cards', {}).values()):
