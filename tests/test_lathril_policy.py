@@ -68,6 +68,18 @@ class LathrilPolicyTests(unittest.TestCase):
         with self.assertRaises(PilotContractError):
             policy().try_choose(o)
 
+    def test_recorded_hand_limit_discards_utility_and_rejects_other_effects(self):
+        o = json.loads((Path(__file__).parent / 'fixtures/lathril_mirror_regressions.json').read_text())['discard']
+        c = policy().try_choose(o).choice
+        self.assertEqual([o['state']['cards'][i]['name'] for i in c.response['selectedCards']], ['Staff of Domination'])
+        o['pendingDecision']['prompt'] = 'Choose a creature to sacrifice'
+        with self.assertRaises(PilotContractError):
+            policy().try_choose(o)
+        o['pendingDecision']['prompt'] = 'Discard down to 7 cards (choose 1 to discard)'
+        o['pendingDecision']['nonSelectableOptions'] = ['e159']
+        with self.assertRaises(PilotContractError):
+            policy().try_choose(o)
+
     def test_cemetery_untaps_after_basic_and_tutor_has_execution_path(self):
         p = policy()
         self.assertTrue(p._enters_tapped({'name':'Woodland Cemetery'}, []))

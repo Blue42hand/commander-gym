@@ -97,3 +97,9 @@ without relying on the misleading triggering source name. It bottoms surplus lan
 when four land drops are already available, and delays situational cards early.
 The recorded mirror regressions cover the missed Sol Ring start, green-source
 choice, Witness/Bidding choice, redundant Swamp, tutor opening, and failed scry.
+
+A subsequent native mirror exposed the seven-card cleanup discard. The policy now
+handles only that exact native prompt and complete own-hand selection: it keeps
+needed lands and development, discarding surplus mana or lower-value utility.
+It does not apply this rule to sacrifice, opponent discard effects, or constrained
+selections. The failed cleanup callback is retained as a regression fixture.

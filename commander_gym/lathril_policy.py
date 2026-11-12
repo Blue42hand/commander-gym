@@ -282,6 +282,35 @@ class LathrilDeckSubsystem(MaskedHeuristicSubsystem):
             if candidates:
                 target = max(candidates, key=lambda x: (x[0], x[1]))[1]
                 return self._decision(p, rt, 'lathril-search-for-engine', selectedCards=[target])
+        count = p.get('minSelections')
+        options = p.get('options', [])
+        hand = ids_in(o.get('state', {}), 'Hand', o['agentToAct'])
+        if (p.get('kind') == 'SelectCardsDecision' and rt == 'CardsSelectedResponse'
+            and type(count) is int and count > 0 and p.get('maxSelections') == count
+            and p.get('prompt') == f'Discard down to 7 cards (choose {count} to discard)'
+            and context.get('phase') == 'STATE_BASED' and o['state'].get('currentStep') == 'CLEANUP'
+            and len(hand) - 7 == count and len(options) == len(hand) and set(options) == set(hand)
+            and not p.get('librarySearch') and not any(p.get(k) for k in [
+                'nonSelectableOptions', 'selectionLimits', 'conditionalMinimums', 'onePerCardType',
+                'onePerColor', 'onePerCardName', 'onePerBasicLandType', 'onePerPower',
+                'maxTotalManaValue', 'minTotalManaValue', 'maxTotalPower'])):
+            if any(not self._card(o, i).get('name') for i in options):
+                raise PilotContractError('lathril-incomplete-discard-hand')
+            lands = sum(bool(self._land_colors(c)) for c in self._own(o))
+            hand_lands = sum(bool(self._land_colors(self._card(o, i))) for i in hand)
+            def discard_value(entity):
+                card = self._card(o, entity)
+                if 'Land' in card.get('typeLine', '') or 'LAND' in card.get('cardTypes', []):
+                    return 150 if lands < 3 else (60 if lands + hand_lands <= 5 else 0)
+                role = self.document['roles'].get(card.get('name'))
+                if role == 'finisher' and self._overrun_is_lethal(o, card.get('name')):
+                    return 200
+                value = self._opening_value(card)
+                if role in {'mana_elf', 'mana_engine'} and lands >= 5:
+                    value -= 35
+                return value
+            chosen = sorted(options, key=lambda i: (discard_value(i), i))[:count]
+            return self._decision(p, rt, 'lathril-discard-for-hand-limit', selectedCards=chosen)
         if p.get('kind') == 'BottomCards':
             cards = p.get('cards', {}); hand = p.get('hand', []); count = p.get('cardsToPutOnBottom')
             if type(count) is not int or not 0 <= count <= len(hand) or any(i not in cards for i in hand):
