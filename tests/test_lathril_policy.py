@@ -80,6 +80,16 @@ class LathrilPolicyTests(unittest.TestCase):
         with self.assertRaises(PilotContractError):
             policy().try_choose(o)
 
+    def test_recorded_shock_land_pays_life_only_for_development(self):
+        o = json.loads((Path(__file__).parent / 'fixtures/lathril_mirror_regressions.json').read_text())['tomb']
+        self.assertTrue(policy().try_choose(o).choice.response['choice'])
+        me = next(x for x in o['state']['players'] if x['playerId'] == o['agentToAct'])
+        me['life'] = 4
+        self.assertFalse(policy().try_choose(o).choice.response['choice'])
+        me['life'] = 40
+        o['state']['zones'] = []
+        self.assertFalse(policy().try_choose(o).choice.response['choice'])
+
     def test_cemetery_untaps_after_basic_and_tutor_has_execution_path(self):
         p = policy()
         self.assertTrue(p._enters_tapped({'name':'Woodland Cemetery'}, []))

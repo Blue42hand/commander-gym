@@ -251,6 +251,20 @@ class LathrilDeckSubsystem(MaskedHeuristicSubsystem):
             for color in ['GREEN', 'BLACK', 'COLORLESS']:
                 if color in choices:
                     return self._decision(p, rt, 'lathril-mana-color', color=color)
+        if (p.get('kind') == 'YesNoDecision' and rt == 'YesNoResponse' and source == 'Overgrown Tomb'
+            and p.get('prompt') == 'Pay 2 life to have Overgrown Tomb enter untapped?'):
+            board = [self._card(o, i) for i in ids_in(o['state'], 'Battlefield', o['agentToAct']) if i != context.get('sourceId')]
+            sources = [self._land_colors(c) for c in board if not c.get('isTapped') and self._land_colors(c)]
+            life = next((x.get('life', 0) for x in o['state'].get('players', []) if x.get('playerId') == o['agentToAct']), 0)
+            unlocks = False
+            for i in ids_in(o['state'], 'Hand', o['agentToAct']):
+                card = self._card(o, i)
+                if self.document['roles'].get(card.get('name')) not in self.document['weights'] and card.get('name') != 'Demonic Tutor':
+                    continue
+                cost = mana_cost(card.get('manaCost', self.facts.get(card.get('name')).get('manaCost', '')))
+                if cost and cost[0] > 0 and self._payable(cost, sources + [{'G', 'B'}]) and not self._payable(cost, sources):
+                    unlocks = True
+            return self._decision(p, rt, 'lathril-pay-life-for-development', choice=p.get('yesAvailable') is True and life > 4 and unlocks)
         if p.get('kind') == 'YesNoDecision' and source == 'Leaf-Crowned Visionary' and (context.get('abilityIdentity') or {}).get('abilityId') == 'Leaf-Crowned Visionary:1':
             me = next((x for x in o['state'].get('players', []) if x.get('playerId') == o['agentToAct']), {})
             return self._decision(p, rt, 'lathril-pay-for-cards', choice=p.get('yesAvailable') is True and me.get('librarySize', 0) > 3)

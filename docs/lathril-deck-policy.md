@@ -103,3 +103,7 @@ handles only that exact native prompt and complete own-hand selection: it keeps
 needed lands and development, discarding surplus mana or lower-value utility.
 It does not apply this rule to sacrifice, opponent discard effects, or constrained
 selections. The failed cleanup callback is retained as a regression fixture.
+
+The native Overgrown Tomb life-payment decision pays two life only above four life
+and when the extra untapped source enables a useful development spell immediately.
+The exact native prompt and the failed callback are covered by regression tests.
