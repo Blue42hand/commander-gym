@@ -86,3 +86,11 @@ tasks.register<JavaExec>("exportPublicCardFacts") {
         args(providers.gradleProperty("factsInput").get(), providers.gradleProperty("factsOutput").get())
     }
 }
+
+// Explicit private four-seat game; never invoked by CI or an ordinary test task.
+tasks.register<JavaExec>("runLathrilMirrorGame") {
+    group = "verification"
+    dependsOn(tasks.named("testClasses"))
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("org.commandergym.argentum.LathrilMirrorGame")
+}
