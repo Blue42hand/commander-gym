@@ -1,0 +1,140 @@
+{
+  "policy_id": "lathril-primer-v1",
+  "version": "1",
+  "commander": "Lathril, Blade of the Elves",
+  "deck_fingerprint": "2df76a2026e87b51c9b6f802327569136f2382bda8605767db87eb6bb12a8720",
+  "primer_fingerprint": "43b9177f9a2fb5e1064b8676ee3ddda494903411caeddb25a870241f0c44ed28",
+  "rules": {
+    "opening": "Keep colored mana plus acceleration or an early Elf; stop mulliganing at five cards.",
+    "develop": "Make land drops; develop mana, then draw engines and Lathril, then a wide Elf board.",
+    "tribe": "Choose Elf for the registered tribal payoffs.",
+    "mana": "Cast with native automatic payment. Never float mana without a selected useful action.",
+    "recovery": "Reserve recursion and sweepers; do not cast them merely because they are legal.",
+    "combat": "Prefer Lathril connections and preserve the ten-Elf drain board; use native attack pairs.",
+    "tutor": "Prefer interaction when behind and engines otherwise. Overrun requires a demonstrated lethal attack.",
+    "uncertainty": "Only escalate among complete policy-approved choices. Unsupported mechanics fail visibly."
+  },
+  "weights": {
+    "mana_elf": 100,
+    "mana_engine": 90,
+    "draw_engine": 85,
+    "commander": 80,
+    "token_engine": 70,
+    "lord": 65,
+    "elf": 50,
+    "utility": 30
+  },
+  "roles": {
+    "Llanowar Elves": "mana_elf",
+    "Elvish Mystic": "mana_elf",
+    "Fyndhorn Elves": "mana_elf",
+    "Elves of Deep Shadow": "mana_elf",
+    "Sol Ring": "mana_engine",
+    "Arcane Signet": "mana_engine",
+    "Golgari Signet": "mana_engine",
+    "Priest of Titania": "mana_engine",
+    "Elvish Archdruid": "mana_engine",
+    "Marwyn, the Nurturer": "mana_engine",
+    "Wirewood Channeler": "mana_engine",
+    "Wood Elves": "mana_engine",
+    "Elvish Harbinger": "mana_engine",
+    "Cryptolith Rite": "mana_engine",
+    "Elvish Guidance": "mana_engine",
+    "Growing Rites of Itlimoc": "mana_engine",
+    "Beast Whisperer": "draw_engine",
+    "Leaf-Crowned Visionary": "draw_engine",
+    "Elvish Visionary": "draw_engine",
+    "Sylvan Messenger": "draw_engine",
+    "Herald's Horn": "draw_engine",
+    "Vanquisher's Banner": "draw_engine",
+    "Lathril, Blade of the Elves": "commander",
+    "Elvish Warmaster": "token_engine",
+    "Dwynen's Elite": "token_engine",
+    "Lys Alana Huntmaster": "token_engine",
+    "Imperious Perfect": "token_engine",
+    "Elvish Champion": "lord",
+    "Dwynen, Gilt-Leaf Daen": "lord",
+    "Elvish Vanguard": "elf",
+    "Jagged-Scar Archers": "elf",
+    "Timberwatch Elf": "elf",
+    "Wellwisher": "elf",
+    "Poison-Tip Archer": "elf",
+    "Eladamri, Lord of Leaves": "elf",
+    "Reclamation Sage": "utility",
+    "Staff of Domination": "utility",
+    "Thousand-Year Elixir": "utility",
+    "Lightning Greaves": "utility",
+    "Skullclamp": "utility",
+    "Overwhelming Stampede": "finisher",
+    "Craterhoof Behemoth": "finisher",
+    "Beastmaster Ascension": "finisher",
+    "Elvish Promenade": "token_engine",
+    "Elven Ambush": "token_engine",
+    "Regrowth": "recovery",
+    "Eternal Witness": "recovery",
+    "Patriarch's Bidding": "recovery",
+    "Damnation": "sweeper",
+    "Golgari Charm": "interaction",
+    "Heroic Intervention": "interaction",
+    "Abrupt Decay": "removal",
+    "Assassin's Trophy": "removal",
+    "Beast Within": "removal",
+    "Putrefy": "removal",
+    "Casualties of War": "interaction",
+    "Demonic Tutor": "tutor",
+    "Diabolic Intent": "tutor",
+    "Chord of Calling": "tutor",
+    "Green Sun's Zenith": "tutor",
+    "Collected Company": "tutor",
+    "Wirewood Symbiote": "utility",
+    "Quirion Ranger": "utility",
+    "Wirewood Herald": "elf",
+    "Canopy Tactician": "mana_engine",
+    "Wirewood Hivemaster": "token_engine"
+  },
+  "lands": {
+    "Forest": [
+      "G"
+    ],
+    "Swamp": [
+      "B"
+    ],
+    "Command Tower": [
+      "G",
+      "B"
+    ],
+    "Overgrown Tomb": [
+      "G",
+      "B"
+    ],
+    "Woodland Cemetery": [
+      "G",
+      "B"
+    ],
+    "Llanowar Wastes": [
+      "G",
+      "B"
+    ],
+    "Temple of Malady": [
+      "G",
+      "B"
+    ],
+    "Bojuka Bog": [
+      "B"
+    ],
+    "Wirewood Lodge": [
+      "C"
+    ],
+    "Path of Ancestry": [
+      "G",
+      "B"
+    ]
+  },
+  "tribal_sources": [
+    "Herald's Horn",
+    "Vanquisher's Banner",
+    "Etchings of the Chosen"
+  ],
+  "advisor_max_bytes": 8192,
+  "advisor_max_candidates": 3
+}
