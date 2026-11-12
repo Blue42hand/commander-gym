@@ -240,3 +240,31 @@ the complete Gym hash chain and native observation provenance. Same-state
 comparisons use the immediately preceding `d0f95de4` implementation and its facts.
 Simulated answers test routing, prompt budgets and response contracts; they do not
 measure live wall time, strategic strength, win rate, or native game completion.
+
+Shared payment rules can complete a small ordinary casting payment from the
+native `availableSources` domain, including explicitly offered sacrifice sources.
+The policy minimizes sacrifices and source count; the native engine assigns the
+colors and executes the actual mana abilities. Restricted pools, unsupported
+production, additional source costs and large searches defer. A covered floating
+pool uses a manual empty selection when native `canAutoPayNow` is false. Colored
+coverage uses exact matching over the six mana types, avoiding permutations of
+identical mana units.
+
+`modal_policies.py` handles reviewed independent removal modes. To extend it,
+register a card and its reviewed descriptions in `REVIEWED_REMOVAL_MODALS`, and
+add recorded-state and native acceptance coverage. The native `modalEnumeration`
+preview supplies candidates and counts. Extra costs, repetition, composite target
+constraints and unknown effects defer. A plan is scoped to the acting seat,
+source, turn and step; each subsequent target must still occur in the current
+native pending domain. A missing or changed preview returns control to the model.
+Casualties of War uses each useful independent mode, avoids targeting its owner's
+permanents, and prioritizes freeing a disabled commander. This casting-local plan
+is separate from the stateless search payoff recommendations described above.
+
+Safe attack lanes are evaluated independently. First strike, double strike and
+trample elsewhere on the battlefield do not force all combat into inference;
+double-strike retaliation is counted conservatively. Unsupported evasion still
+defers when no covered lane exists. The model remains responsible for uncovered
+combat choices. Deck code can set `counter_target_exceptions` to override the
+shared rule that preserves costly or Treasure-refunding counters against routine
+mana rocks; that approval survives the second bounding pass in the model fallback.

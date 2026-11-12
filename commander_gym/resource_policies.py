@@ -37,16 +37,55 @@ class ResourcePolicies:
         if cost:score-=max(0,cost[0]-lands-1)*12
         return score
 
+    def _offered_mana_payment(self,o,p):
+        """Plan a small ordinary cost from native source offers; native assigns colors."""
+        if p.get('context',{}).get('phase')!='CASTING':return None
+        rows=p.get('availableSources');cost=mana_cost(p.get('requiredCost',''))
+        if cost is None or not isinstance(rows,list) or not 1<=len(rows)<=8:return None
+        player=next((v for v in o['state'].get('players',[]) if v['playerId']==o['agentToAct']),{})
+        pool=player.get('manaPool',{})
+        if pool.get('restrictedMana'):return None
+        units=[]
+        for color,name in [('W','white'),('U','blue'),('B','black'),('R','red'),('G','green'),('C','colorless')]:
+            n=pool.get(name,0)
+            if type(n) is not int or not 0<=n<=32:return None
+            units.extend([{color}]*n)
+        colors={'WHITE':'W','BLUE':'U','BLACK':'B','RED':'R','GREEN':'G'};sources=[]
+        for row in rows:
+            entity=row.get('entityId');amount=row.get('manaAmount');available=row.get('producesColors')
+            if (not isinstance(entity,str) or not entity or type(amount) is not int or not 1<=amount<=8
+                or not isinstance(available,list) or any(c not in colors for c in available)
+                or type(row.get('producesColorless')) is not bool or type(row.get('requiresSacrifice')) is not bool
+                or row.get('requiresTappingAnotherPermanent') is not False):return None
+            choices={colors[c] for c in available}|({'C'} if row['producesColorless'] else set())
+            # A batch choosing one color cannot be split into arbitrary colors.
+            if not choices or amount>1 and len(choices)>1:return None
+            sources.append((entity,choices,amount,row['requiresSacrifice']))
+        if len({x[0] for x in sources})!=len(sources):return None
+        plans=[]
+        for size in range(1,len(sources)+1):
+            for selected in combinations(sources,size):
+                supplied=units+[colors for _,colors,n,_ in selected for _ in range(n)]
+                if self._payable(cost,supplied):
+                    ids=sorted(x[0] for x in selected)
+                    plans.append(((sum(x[3] for x in selected),size,len(supplied)-cost[0],ids),ids))
+        if not plans:return None
+        return self._decision(p,'ManaSourcesSelectedResponse','default-complete-offered-mana-payment',
+            autoPay=False,declined=False,selectedSources=min(plans)[1],waterbendPermanents=[])
+
     def _resource_pending(self,o,p):
         rt=p.get('responseSpec',{}).get('responseType');ctx=p.get('context',{});source=ctx.get('sourceName')
         if rt=='ManaSourcesSelectedResponse' and (p.get('canAutoPayNow') is True or self._floating_payable(o,p.get('requiredCost',''))):
-            return self._decision(p,rt,'default-fund-native-mana-request',autoPay=True,declined=False,selectedSources=[],waterbendPermanents=[])
+            return self._decision(p,rt,'default-fund-native-mana-request',autoPay=p.get('canAutoPayNow') is not False,declined=False,selectedSources=[],waterbendPermanents=[])
+        if rt=='ManaSourcesSelectedResponse':
+            planned=self._offered_mana_payment(o,p)
+            if planned is not None:return planned
         if (rt=='ManaSourcesSelectedResponse' and p.get('canDecline') is True and p.get('availableSources')==[]
             and p.get('waterbendPermanents')==[] and not p.get('autoPaySuggestion')
             and not any(affordable(a) and a.get('isManaAbility') for a in o.get('legalActions',[]))):
             cost=mana_cost(p.get('requiredCost',''));player=next((v for v in o['state'].get('players',[]) if v['playerId']==o['agentToAct']),{})
             pool=player.get('manaPool',{});amounts=[pool.get(c,0) for c in ['white','blue','black','red','green','colorless']]
-            if cost is not None and not pool.get('restrictedMana') and all(type(n) is int and n>=0 for n in amounts) and sum(amounts)<cost[0]:
+            if cost is not None and not pool.get('restrictedMana') and all(type(n) is int and n>=0 for n in amounts) and not self._floating_payable(o,p.get('requiredCost','')):
                 if ctx.get('phase')=='COMBAT' and source=='Attack tax':self._unfunded_attack=(o['agentToAct'],o['state'].get('turnNumber'),o['state'].get('currentStep'))
                 return self._decision(p,rt,'default-decline-proven-unfunded-payment',autoPay=False,declined=True,selectedSources=[],waterbendPermanents=[])
         prompt=p.get('prompt','');prefix='Pay ';suffix=' to prevent your spell from being countered?'

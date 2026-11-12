@@ -112,3 +112,25 @@ tasks.register<JavaExec>("runSavedStateActionProbe") {
         args(providers.gradleProperty("probeInput").get(), providers.gradleProperty("probeOutput").get())
     }
 }
+
+// Explicit private paired payment-window replay; never part of a game or ordinary test.
+tasks.register<JavaExec>("runManaPaymentSavedStateProbe") {
+    group = "verification"
+    dependsOn(tasks.named("testClasses"))
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("org.commandergym.argentum.ManaPaymentSavedStateProbe")
+    if (providers.gradleProperty("probeInput").isPresent && providers.gradleProperty("probeOutput").isPresent) {
+        args(providers.gradleProperty("probeInput").get(), providers.gradleProperty("probeOutput").get())
+    }
+}
+
+// Explicit offline proof of a private public-preview modal plan.
+tasks.register<JavaExec>("runModalSavedStateProbe") {
+    group = "verification"
+    dependsOn(tasks.named("testClasses"))
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("org.commandergym.argentum.ModalSavedStateProbe")
+    if (providers.gradleProperty("probeInput").isPresent && providers.gradleProperty("probeOutput").isPresent) {
+        args(providers.gradleProperty("probeInput").get(), providers.gradleProperty("probeOutput").get())
+    }
+}

@@ -183,10 +183,13 @@ class MaskedHeuristicSubsystem:
     def _payable(cost, colors):
         if cost[0] > len(colors):
             return False
-        pips = list(cost[1].elements())
-        def assign(index, free):
-            return index == len(pips) or any(pips[index] in colors[i] and assign(index + 1, free - {i}) for i in free)
-        return assign(0, set(range(len(colors))))
+        # Matching identical colored pips only needs Hall's condition over the
+        # requested colors (at most six), avoiding permutations of identical mana.
+        requested=[c for c,n in cost[1].items() if n>0]
+        for mask in range(1,1<<len(requested)):
+            subset={c for i,c in enumerate(requested) if mask & (1<<i)}
+            if sum(cost[1][c] for c in subset)>sum(bool(subset & choices) for choices in colors):return False
+        return True
 
     def _pending(self, o, p):
         kind = p.get('kind')

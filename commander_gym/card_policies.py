@@ -59,6 +59,9 @@ class SharedCardPolicies(ResourcePolicies):
     def _card_pending(self, o, p):
         resources=self._resource_pending(o,p)
         if resources is not None:return resources
+        from .modal_policies import modal_pending
+        modal=modal_pending(self,o,p)
+        if modal is not None:return modal
         from .policy_action_bounds import reviewed_exile_decision
         if reviewed_exile_decision(p):
             slot=str(p['targetRequirements'][0]['index']);targets=p['legalTargets'].get(slot)

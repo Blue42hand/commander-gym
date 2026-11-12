@@ -67,6 +67,8 @@ class SharedCompetencyCycleTests(unittest.TestCase):
         p=DefaultPolicySubsystem(self.facts);self.assertEqual(p.try_choose(o).choice.params,{'attackers':{}})
         o['state']['cards']['own'].update(hasSummoningSickness=False,keywords=['TRAMPLE'])
         zone(o,'Battlefield','enemy',blocker={'name':'Guard','controllerId':'enemy','cardTypes':['CREATURE'],'power':2,'toughness':2})
+        self.assertEqual(p._simple_combat(o,a).choice.params,{'attackers':{'own':'enemy'}})
+        o['state']['cards']['own']['keywords']=['SHADOW']
         self.assertIsNone(p._simple_combat(o,a))
     def test_land_search_balances_needed_colors_without_hidden_order(self):
         o=decision('SelectCardsDecision','CardsSelectedResponse',{'selectedCards':'ENTITY_ID_ARRAY'},options=['f','p','s'],minSelections=0,maxSelections=3,context={'sourceName':'Land Tax'},cardInfo={i:{'name':n,'typeLine':'Basic Land'} for i,n in [('f','Forest'),('p','Plains'),('s','Swamp')]})

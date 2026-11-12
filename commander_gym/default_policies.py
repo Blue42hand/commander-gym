@@ -78,6 +78,8 @@ class DefaultPolicySubsystem(SharedCardPolicies, MaskedHeuristicSubsystem):
             declaration=next((a for a in o.get('legalActions',[]) if a.get('kind')=='DeclareAttackers'),None)
             if declaration and not declaration.get('mandatoryAttackers'):
                 return self._action(declaration,'default-cancel-unfunded-attack',{'attackers':{}})
+        from .modal_policies import remember_modal_plans
+        remember_modal_plans(self,o)
         if 'mulligan' in o.get('state', {}): return self._opening(o)
         if o.get('pendingDecision') is not None: return self._pending(o, o['pendingDecision'])
         shared = self._card_actions(o)

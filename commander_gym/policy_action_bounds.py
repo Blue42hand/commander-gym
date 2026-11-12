@@ -36,7 +36,8 @@ def removal_target_value(o,t,facts,*,neutralize=False):
         # Arrest suppresses activated mana; Faith's Fetters exempts mana abilities.
         if 'RAMP' in f.get('tags',[]) and f.get('variableMana') and 'Arrest' not in attached:score+=15
     if c.get('name') in NEUTRALIZING_AURAS and not neutralize:
-        if any(t in v.get('attachments',[]) and v.get('controllerId')==me for v in cards.values()):score+=80
+        freed=[v for v in cards.values() if t in v.get('attachments',[]) and v.get('controllerId')==me]
+        if freed:score+=80+max(40 if v.get('isCommander') else 0 for v in freed)
     if 'LAND' in c.get('cardTypes',[]):score-=15
     return score
 
@@ -146,16 +147,16 @@ def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=()
             and not (state.get('activePlayerId')==me and state.get('currentStep') in {'PRECOMBAT_MAIN','POSTCOMBAT_MAIN'}
                      or state.get('activePlayerId')!=me and state.get('currentStep')=='END_STEP')):
             restrictions.append({'action':a['semanticId'],'rule':'draw-in-main-or-opponent-end-step'});held_autopay |= raw.get('paymentStrategy',{}).get('type')=='AutoPay';continue
-        # A two-card counter is reserved for threats beyond routine mana fixing.
+        # Counters with a card cost or Treasure refund are saved for material threats.
         # Unknown spells and engines keep their native choices for the model.
         exile_cost=a.get('additionalCostInfo') or {}
-        if (casting and 'COUNTERSPELL' in facts.get(name).get('tags',[]) and exile_cost.get('costType')=='ExileFromHand'
+        if (casting and 'COUNTERSPELL' in facts.get(name).get('tags',[]) and (exile_cost.get('costType')=='ExileFromHand' or name=="An Offer You Can't Refuse")
             and a.get('minTargets')==a.get('targetCount')==1 and a.get('targetRequirements') is None
             and isinstance(a.get('validTargets'),list) and name not in counter_target_exceptions):
             routine={'Thought Vessel','Mind Stone','Arcane Signet','Fellwar Stone',"Commander's Sphere","Wayfarer's Bauble"}
             targets=[t for t in a['validTargets'] if cards.get(t,{}).get('name') not in routine]
             if targets!=a['validTargets']:
-                restrictions.append({'action':a['semanticId'],'rule':'preserve-two-card-counter-for-material-threat'})
+                restrictions.append({'action':a['semanticId'],'rule':'preserve-costly-counter-for-material-threat'})
                 a['validTargets']=targets
                 if not targets:continue
         if (casting and 'COUNTERSPELL' in facts.get(name).get('tags',[]) and answered

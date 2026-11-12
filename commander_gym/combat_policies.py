@@ -30,15 +30,14 @@ def combat_choice(policy,o,a):
     def survives(c,enemy):
         if 'INDESTRUCTIBLE' in kw(c):return True
         if 'DEATHTOUCH' in kw(enemy) and power(enemy)>0:return False
-        if kw(enemy)&{'FIRST_STRIKE','DOUBLE_STRIKE'}:return False
-        return tough(c)>power(enemy)
+        return tough(c)>power(enemy)*(2 if 'DOUBLE_STRIKE' in kw(enemy) else 1)
     if kind=='DeclareAttackers':
         attackers=a.get('validAttackers');targets=a.get('validAttackTargets')
         if not isinstance(attackers,list) or not isinstance(targets,list):return None
         enemies={p['playerId']:p for p in s.get('players',[]) if p['playerId']!=me and not p.get('hasLost')}
         if any(t not in enemies for t in targets):return None
         if any('CREATURE' in cards[i].get('cardTypes',[]) and not cards[i].get('controllerId') and i not in attackers for i in ids_in(s,'Battlefield') if i in cards):return None
-        plans=[]
+        plans=[];uncertain_lane=False
         for target in targets:
             blockers=[c for c in board if c.get('controllerId')==target and creature(c) and not c.get('isTapped')]
             selected={};open_damage=0
@@ -48,16 +47,18 @@ def combat_choice(policy,o,a):
                 if target not in allowed or not power(c) or c.get('isTapped') or c.get('hasSummoningSickness') and 'HASTE' not in kw(c):continue
                 legal=[] if has_landwalk_lane(o,c,target) else [b for b in blockers if 'FLYING' not in kw(c) or kw(b)&{'FLYING','REACH'}]
                 if 'MENACE' in kw(c) and len(legal)<2:legal=[]
-                if legal and any(kw(v)&{'TRAMPLE','DOUBLE_STRIKE','FIRST_STRIKE','PROTECTION','SHADOW','HORSEMANSHIP'} for v in [c,*legal]):return None
+                if legal and any(kw(v)&{'PROTECTION','SHADOW','HORSEMANSHIP'} for v in [c,*legal]):
+                    uncertain_lane=True;continue
                 # Open lanes are safe; small ground attackers never trade a
                 # commander/draw engine into an arbitrary crowd for chip damage.
-                safe=not legal or (all(survives(c,b) for b in legal) and sum(power(b) for b in legal)<tough(c))
+                safe=not legal or (all(survives(c,b) for b in legal) and sum(power(b)*(2 if 'DOUBLE_STRIKE' in kw(b) else 1) for b in legal)<tough(c))
                 if safe:
                     selected[i]=target
                     if not legal:open_damage+=power(c)
             if selected:
                 damage=sum(power(cards[i]) for i in selected)
                 plans.append((open_damage>=enemies[target].get('life',float('inf')),damage,-enemies[target].get('life',40),selected))
+        if not plans and uncertain_lane:return None
         chosen=max(plans,key=lambda p:p[:3])[3] if plans else {}
         # Known mandatory draw on attacking needs its deck-out budget checked.
         if any(c.get('name')=='Kindred Discovery' and c.get('controllerId')==me for c in board):
