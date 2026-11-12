@@ -8,7 +8,7 @@ from .heuristic_policy import affordable, ids_in, mana_cost
 
 # Ordinary bounce can rescue a disabled commander or a visible hostile target.
 # Other self-target plans require a deck override; complex slots stay native.
-BOUNCE_SOURCES = frozenset({'Into the Roil','Unsummon','Echoing Truth','Blink of an Eye','Otawara, Soaring City'})
+BOUNCE_SOURCES = frozenset({'Boomerang','Into the Roil','Unsummon','Echoing Truth','Blink of an Eye','Otawara, Soaring City'})
 ETB_EXILERS = frozenset({'Sheltered by Ghosts','Oblivion Ring','Banishing Light','Detention Sphere','Ossification','Stasis Snare'})
 OPPONENT_REMOVAL = frozenset({'Reality Shift','Seal of Primordium','Seal of Cleansing',*BOUNCE_SOURCES})
 QUIET_REACTIONS = frozenset({*OPPONENT_REMOVAL,*ETB_EXILERS,'Swords to Plowshares','Generous Gift','Pongify','Rapid Hybridization','Resculpt','Beast Within',"Nature's Claim",'Arrest','Pacifism','Darksteel Mutation','Imprisoned in the Moon','Lignify','Amphibian Downpour'})
@@ -20,22 +20,25 @@ NEUTRALIZING_AURAS=frozenset({'Arrest','Pacifism','Darksteel Mutation','Imprison
 ABILITY_REMOVING_AURAS=frozenset({'Darksteel Mutation','Imprisoned in the Moon','Lignify','Noggle the Mind','Amphibian Downpour'})
 
 
-def abilities_removed(o,card):
-    return any(o['state'].get('cards',{}).get(i,{}).get('name') in ABILITY_REMOVING_AURAS for i in card.get('attachments',[]))
+def abilities_removed(o,card,facts=None):
+    cards=o['state'].get('cards',{})
+    return any(cards.get(i,{}).get('name') in ABILITY_REMOVING_AURAS
+        or facts is not None and facts.get(cards.get(i,{}).get('name')).get('removesAttachedAbilities') is True
+        for i in card.get('attachments',[]))
 
 
 def removal_target_value(o,t,facts,*,neutralize=False):
     cards=o['state'].get('cards',{});me=o['agentToAct'];c=cards.get(t,{});f=facts.get(c.get('name'))
     attached={cards.get(i,{}).get('name') for i in c.get('attachments',[])}
     body=max(0,c.get('power') or 0)+max(0,c.get('toughness') or 0)
-    if abilities_removed(o,c):score=body
+    if abilities_removed(o,c,facts):score=body
     else:
         score=(1 if attached & NEUTRALIZING_AURAS else body)+f.get('staticValue',0)
         if c.get('isCommander'):score+=30
         if 'DRAW' in f.get('tags',[]) and f.get('repeatable'):score+=15
         # Arrest suppresses activated mana; Faith's Fetters exempts mana abilities.
         if 'RAMP' in f.get('tags',[]) and f.get('variableMana') and 'Arrest' not in attached:score+=15
-    if c.get('name') in NEUTRALIZING_AURAS and not neutralize:
+    if (c.get('name') in NEUTRALIZING_AURAS or f.get('removesAttachedAbilities')) and not neutralize:
         freed=[v for v in cards.values() if t in v.get('attachments',[]) and v.get('controllerId')==me]
         if freed:score+=80+max(40 if v.get('isCommander') else 0 for v in freed)
     if 'LAND' in c.get('cardTypes',[]):score-=15
@@ -44,7 +47,7 @@ def removal_target_value(o,t,facts,*,neutralize=False):
 
 def ranked_removal_targets(o,targets,facts,*,neutralize=False):
     score=lambda t:removal_target_value(o,t,facts,neutralize=neutralize)
-    active=[t for t in targets if not abilities_removed(o,o['state'].get('cards',{}).get(t,{}))]
+    active=[t for t in targets if not abilities_removed(o,o['state'].get('cards',{}).get(t,{}),facts)]
     if active:
         best=max(map(score,active))
         targets=[t for t in targets if t in active or score(t)>=best]
@@ -65,7 +68,7 @@ def reviewed_exile_decision(p):
 def own_bounce_rescue(o,target,facts):
     cards=o['state'].get('cards',{});card=cards.get(target,{})
     if card.get('controllerId')!=o['agentToAct'] or target not in ids_in(o['state'],'Battlefield',o['agentToAct']):return False
-    if card.get('isCommander') and abilities_removed(o,card):return True
+    if card.get('isCommander') and abilities_removed(o,card,facts):return True
     for entity in ids_in(o['state'],'Stack'):
         threat=cards.get(entity,{})
         if threat.get('controllerId') in (None,o['agentToAct']) or facts.get(threat.get('name')).get('spellPolarity')!=['HARMFUL']:continue
@@ -107,10 +110,19 @@ def pending_counter_answers(o):
 ATTACK_TAX_SOURCES=frozenset({'Propaganda','Ghostly Prison','Sphere of Safety'})
 
 
-def attack_tax_defenders(o):
+def attack_tax_defenders(o,facts=None):
     state=o.get('state',{});cards=state.get('cards',{})
     return {cards[i].get('controllerId') for i in ids_in(state,'Battlefield') if i in cards
-        and cards[i].get('name') in ATTACK_TAX_SOURCES and not abilities_removed(o,cards[i])}
+        and cards[i].get('name') in ATTACK_TAX_SOURCES and not abilities_removed(o,cards[i],facts)}
+
+
+
+def removal_reaction(name,facts,casting=True):
+    if name in QUIET_REACTIONS:return True
+    fact=facts.get(name);tags=set(fact.get('tags',[]));removal={'REMOVAL','EXILE_REMOVAL','NEUTRALIZE'}
+    # Whole-card intent cannot identify a mixed permanent's individual ability.
+    return bool((casting or tags<=removal) and set(fact.get('spellPolarity',[])) & {'HARMFUL','FLEXIBLE'}
+        and tags & removal)
 
 
 def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=(), reaction_timing_exceptions=(), counter_target_exceptions=()):
@@ -122,7 +134,7 @@ def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=()
         state = o.get('state',{})
         quiet=not ids_in(state,'Stack')
         if a.get('kind')=='DeclareAttackers' and isinstance(a.get('validAttackTargets'),list) and not a.get('mandatoryAttackers'):
-            taxed=attack_tax_defenders(o);free=[t for t in a['validAttackTargets'] if t not in taxed]
+            taxed=attack_tax_defenders(o,facts);free=[t for t in a['validAttackTargets'] if t not in taxed]
             if free and len(free)!=len(a['validAttackTargets']):
                 a['validAttackTargets']=free
                 if isinstance(a.get('attackTargetsByAttacker'),dict):a['attackTargetsByAttacker']={i:[t for t in ts if t in free] for i,ts in a['attackTargetsByAttacker'].items()}
@@ -138,14 +150,14 @@ def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=()
             and raw.get('abilityId') not in {'Lathril, Blade of the Elves:2','Sterling Grove:1'}
             and (casting or a.get('kind')=='ActivateAbility' and a.get('isManaAbility') is not True)):
             restrictions.append({'action':a['semanticId'],'rule':'let-own-stack-resolve'});continue
-        if (not o.get('pendingDecision') and quiet and state.get('activePlayerId')==me
+        if (not o.get('pendingDecision') and o.get('nativePaymentError') is None and quiet and state.get('activePlayerId')==me
             and state.get('currentStep') in {'UNTAP','UPKEEP','DRAW'}
             and (casting or a.get('kind')=='ActivateAbility' and a.get('isManaAbility') is not True and raw.get('abilityId') not in {'Lathril, Blade of the Elves:2','Sterling Grove:1'})):
             restrictions.append({'action':a['semanticId'],'rule':'development-waits-for-main'});held_autopay |= raw.get('paymentStrategy',{}).get('type')=='AutoPay';continue
-        if (not o.get('pendingDecision') and quiet and not state.get('combat') and (casting or a.get('kind')=='ActivateAbility' and a.get('isManaAbility') is not True) and 'DRAW' in facts.get(name).get('tags',[])
+        if (not o.get('pendingDecision') and o.get('nativePaymentError') is None and quiet and not state.get('combat') and (casting or a.get('kind')=='ActivateAbility' and a.get('isManaAbility') is not True) and 'DRAW' in facts.get(name).get('tags',[])
             and not facts.get(name).get('affectsOpponent') and 'COUNTERSPELL' not in facts.get(name).get('tags',[])
             and not (state.get('activePlayerId')==me and state.get('currentStep') in {'PRECOMBAT_MAIN','POSTCOMBAT_MAIN'}
-                     or state.get('activePlayerId')!=me and state.get('currentStep')=='END_STEP')):
+                     or state.get('activePlayerId')!=me and state.get('currentStep') in {'END','END_STEP'})):
             restrictions.append({'action':a['semanticId'],'rule':'draw-in-main-or-opponent-end-step'});held_autopay |= raw.get('paymentStrategy',{}).get('type')=='AutoPay';continue
         # Counters with a card cost or Treasure refund are saved for material threats.
         # Unknown spells and engines keep their native choices for the model.
@@ -167,10 +179,10 @@ def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=()
                 restrictions.append({'action':a['semanticId'],'rule':'avoid-redundant-pending-counter'})
                 a['validTargets']=targets
                 if not targets:continue
-        if (not o.get('pendingDecision') and o.get('nativePaymentError') is None and quiet and name in QUIET_REACTIONS and name not in reaction_timing_exceptions
+        if (not o.get('pendingDecision') and o.get('nativePaymentError') is None and quiet and removal_reaction(name,facts,casting) and name not in reaction_timing_exceptions
             and (casting or a.get('kind')=='ActivateAbility' and a.get('isManaAbility') is not True)
             and not (state.get('activePlayerId')==me and state.get('currentStep') in {'PRECOMBAT_MAIN','POSTCOMBAT_MAIN'}
-                or state.get('activePlayerId')!=me and state.get('currentStep')=='END_STEP'
+                or state.get('activePlayerId')!=me and state.get('currentStep') in {'END','END_STEP'}
                 or state.get('currentStep') in {'DECLARE_ATTACKERS','DECLARE_BLOCKERS'} and (state.get('combat') or {}).get('attackers'))):
             restrictions.append({'action':a['semanticId'],'rule':'hold-reviewed-reaction-for-useful-window'})
             held_autopay |= raw.get('paymentStrategy',{}).get('type')=='AutoPay'

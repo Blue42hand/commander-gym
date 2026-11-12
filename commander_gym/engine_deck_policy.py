@@ -64,7 +64,7 @@ class EngineDeckPolicy(ProfiledDeckPolicy):
 
     def _engines(self, o):
         from .policy_action_bounds import abilities_removed
-        return [c for c in self._own(o) if self._role(c) in {'draw_engine','commander'} and not abilities_removed(o,c)
+        return [c for c in self._own(o) if self._role(c) in {'draw_engine','commander'} and not abilities_removed(o,c,self.facts)
                 and (self.key == 'sythis' or self._role(c) == 'draw_engine')]
 
     def _development_score(self, o, card, role):

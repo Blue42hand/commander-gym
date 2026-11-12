@@ -268,3 +268,18 @@ defers when no covered lane exists. The model remains responsible for uncovered
 combat choices. Deck code can set `counter_target_exceptions` to override the
 shared rule that preserves costly or Treasure-refunding counters against routine
 mana rocks; that approval survives the second bounding pass in the model fallback.
+
+Reaction scheduling uses native removal/neutralization tags and harmful or
+flexible polarity, alongside reviewed card rules. This covers ordinary bounce
+without adding every card name to a timing list. The live native end step is
+`END`; `END_STEP` remains accepted for older inputs. Opponent end steps, actual
+combat, live stacks, own main phases and native payment corrections retain their
+relevant decisions. Quiet windows can pass locally.
+
+Public native facts optionally include `removesAttachedAbilities`. It is exported
+from an unconditional typed `LoseAllAbilities` static ability affecting the
+attached permanent, excluding variants that preserve mana abilities. This makes
+suppression detection work for cards such as Utter Insignificance, Eaten by
+Piranhas and Witness Protection. Prompt annotations, engine valuation, removal
+ranking and commander rescue share this fact; Arrest and Faith's Fetters remain
+distinct. Older facts retain reviewed compatibility rules.

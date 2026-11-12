@@ -19,7 +19,7 @@ def combat_choice(policy,o,a):
     if any(c.get('isFaceDown') or c.get('isPhasedOut') for c in board):return None
     if kind=='DeclareAttackers':
         from .policy_action_bounds import attack_tax_defenders
-        if attack_tax_defenders(o)&set(a.get('validAttackTargets') or []) or any(c.get('name')=='Dueling Grounds' for c in board):return None
+        if attack_tax_defenders(o,policy.facts)&set(a.get('validAttackTargets') or []) or any(c.get('name')=='Dueling Grounds' for c in board):return None
     def creature(c):return 'CREATURE' in c.get('cardTypes',[])
     def kw(c):return set(c.get('keywords',[]))
     def power(c):return max(0,c.get('power') or 0)

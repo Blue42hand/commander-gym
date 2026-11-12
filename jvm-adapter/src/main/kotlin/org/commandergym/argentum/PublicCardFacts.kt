@@ -5,6 +5,8 @@ import com.wingedsheep.ai.engine.knowledge.SynergyAxes
 import com.wingedsheep.ai.engine.knowledge.TargetPolarityAnalyzer
 import com.wingedsheep.engine.registry.CardRegistry
 import com.wingedsheep.sdk.core.Zone
+import com.wingedsheep.sdk.scripting.LoseAllAbilities
+import com.wingedsheep.sdk.scripting.filters.unified.GroupFilter
 import com.wingedsheep.sdk.scripting.EntersTapped
 import com.wingedsheep.sdk.scripting.GameObjectFilter
 import com.wingedsheep.sdk.scripting.conditions.AnyCondition
@@ -164,6 +166,9 @@ object PublicCardFacts {
                     }
                 }
             }
+            put("removesAttachedAbilities", card.script.staticAbilities.any {
+                it is LoseAllAbilities && !it.exceptManaAbilities && it.filter == GroupFilter.attachedCreature()
+            })
             put("drawSensitive", card.script.triggeredAbilities.any {
                 drawSensitive(json.encodeToJsonElement(EventPattern.serializer(), it.trigger))
             } || drawSensitive(script["staticAbilities"] ?: JsonNull) ||

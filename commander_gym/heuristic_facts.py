@@ -34,7 +34,7 @@ class CardFacts:
                   'staticValue', 'repeatable', 'affectsOpponent', 'feeds', 'rewards', 'tribesRewarded'}
         fields |= {'freeOptionalDraws', 'drawSensitive'}
         for name, fact in document['cards'].items():
-            if not isinstance(name, str) or not name or not isinstance(fact, dict) or not fields <= set(fact) or set(fact) - fields - {'untappedIfLandSubtypes', 'variableMana', 'commanderColorMana', 'painManaColors', 'colorIdentity', 'untappedPayLife'}:
+            if not isinstance(name, str) or not name or not isinstance(fact, dict) or not fields <= set(fact) or set(fact) - fields - {'removesAttachedAbilities', 'untappedIfLandSubtypes', 'variableMana', 'commanderColorMana', 'painManaColors', 'colorIdentity', 'untappedPayLife'}:
                 raise ValueError('invalid native card fact fields')
             for key in ['painManaColors','colorIdentity']:
                 if key in fact and (not isinstance(fact[key],list) or any(not isinstance(c,str) or c not in 'WUBRG' for c in fact[key])):
@@ -47,6 +47,8 @@ class CardFacts:
             if (not isinstance(entry, list) or any(not isinstance(v,str) for v in entry)
                 or set(entry) - {'Forest','Swamp','Plains','Island','Mountain'}):
                 raise ValueError('invalid native land entry condition')
+            if 'removesAttachedAbilities' in fact and type(fact['removesAttachedAbilities']) is not bool:
+                raise ValueError('invalid native attached ability suppression flag')
             if 'variableMana' in fact and type(fact['variableMana']) is not bool:
                 raise ValueError('invalid variable mana flag')
             for key in ('simpleMana', 'simplePermanent', 'unconditionalUntapped', 'entersTapped', 'repeatable', 'affectsOpponent', 'drawSensitive'):

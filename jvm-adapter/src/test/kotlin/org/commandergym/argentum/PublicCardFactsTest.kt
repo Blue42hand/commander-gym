@@ -34,6 +34,16 @@ class PublicCardFactsTest {
         assertEquals(listOf("W"), fact("Serra's Sanctum")["manaColors"]!!.jsonArray.map { it.jsonPrimitive.content })
     }
 
+    @Test fun attachedAbilitySuppressionComesFromTypedStaticAbilities() {
+        val cards = PublicCardFacts.export(registry, listOf("Utter Insignificance", "Lignify", "Darksteel Mutation", "Arrest", "Faith's Fetters", "Forest"), revision)["cards"]!!.jsonObject
+        for (name in listOf("Utter Insignificance", "Lignify", "Darksteel Mutation")) {
+            assertTrue(cards[name]!!.jsonObject["removesAttachedAbilities"]!!.jsonPrimitive.boolean)
+        }
+        for (name in listOf("Arrest", "Faith's Fetters", "Forest")) {
+            assertFalse(cards[name]!!.jsonObject["removesAttachedAbilities"]!!.jsonPrimitive.boolean)
+        }
+    }
+
     @Test fun publicFactsDistinguishOrdinaryManaFromChoicesAndTriggeredBoards() {
         val names = listOf("Forest", "Sol Ring", "Arcane Signet", "Sythis, Harvest's Hand", "Vanquisher's Banner", "Mesa Enchantress", "Underworld Dreams")
         val export = PublicCardFacts.export(registry, names, revision)
