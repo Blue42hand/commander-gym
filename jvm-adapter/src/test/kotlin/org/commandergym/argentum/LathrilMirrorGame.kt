@@ -28,7 +28,7 @@ import java.nio.file.Path
 import java.time.Duration
 import java.util.UUID
 
-/** Isolated full-deck four-seat Commander mirror using the exact external Lathril policy.
+/** Isolated full-deck four-seat Commander fixture using exact external policy Bindings.
  * Real native legality and recorded callbacks; synthetic socket sessions are transport fixtures.
  * Never run on or attach to a production game session.
  */
@@ -45,26 +45,40 @@ fun runLathrilMirrorGame() {
     val session = GameSession(sessionId=gameId, cardRegistry=registry, evidenceSink=writer, maxPlayers=4)
     session.engineFormat = com.wingedsheep.sdk.core.Format.Commander()
     session.attackMode = com.wingedsheep.sdk.core.AttackMode.MULTIPLE
-    val seats = (1..4).map { EntityId.of("lathril-mirror-$it") }
-    val spec = config.getValue("deck").jsonObject
-    val commander = spec.getValue("commander").jsonPrimitive.content
-    val deck = spec.getValue("cards").jsonObject.mapValues { it.value.jsonPrimitive.int }.toMutableMap()
-    check(deck.values.sum() == 100 && deck[commander] == 1)
-    deck.remove(commander)
-    for (seat in seats) {
+    // The legacy single-deck config still runs an identical mirror. A mixed
+    // fixture pins each seat to its own exact registered deck and Binding.
+    val players = config["players"]?.jsonArray?.map { it.jsonObject } ?: (1..4).map { index ->
+        buildJsonObject {
+            put("playerId", "lathril-mirror-$index")
+            put("bindingId", text("bindingId"))
+            put("deck", config.getValue("deck"))
+        }
+    }
+    require(players.size == 4)
+    val seats = players.map { EntityId.of(it.getValue("playerId").jsonPrimitive.content) }
+    require(seats.toSet().size == 4)
+    val decks = players.associate { player ->
+        val seat = EntityId.of(player.getValue("playerId").jsonPrimitive.content)
+        val spec = player.getValue("deck").jsonObject
+        val commander = spec.getValue("commander").jsonPrimitive.content
+        val deck = spec.getValue("cards").jsonObject.mapValues { it.value.jsonPrimitive.int }.toMutableMap()
+        check(deck.values.sum() == 100 && deck[commander] == 1)
+        deck.remove(commander)
         val ws = Mockito.mock(WebSocketSession::class.java)
         Mockito.`when`(ws.id).thenReturn("fixture-${seat.value}")
         session.addPlayer(PlayerSession(ws, seat, seat.value), deck, commanderCardNames=listOf(commander))
+        seat to deck
     }
+    val profiles = players.associate { EntityId.of(it.getValue("playerId").jsonPrimitive.content) to it.getValue("bindingId").jsonPrimitive.content }
     val provider = CommanderGymControllerProvider(URI.create(text("sidecarUrl")),
         Files.readString(Path.of(text("tokenPath"))).trim(), Duration.ofSeconds(320),
         mode="commander-gym-local", profileLabel="Local", requireExplicitProfile=true)
     check(provider.mode == "commander-gym-local" && !provider.supportsDefaultController)
-    check(provider.profiles.any { it.id == text("bindingId") })
+    check(profiles.values.all { id -> provider.profiles.any { it.id == id } })
     val controllers = seats.associateWith { seat ->
         (provider.create(AiControllerContext(playerId=seat, gameSessionId=gameId,
-            profileId=text("bindingId"), snapshot={ session.getAiRuntimeSnapshot() })) as CommanderGymPlayerController).also {
-            it.setDeckList(deck)
+            profileId=profiles.getValue(seat), snapshot={ session.getAiRuntimeSnapshot() })) as CommanderGymPlayerController).also {
+            it.setDeckList(decks.getValue(seat))
         }
     }
     val budgetSeconds = config["gameBudgetSeconds"]?.jsonPrimitive?.int ?: 300
@@ -84,10 +98,11 @@ fun runLathrilMirrorGame() {
             put("turn", state?.turnNumber ?: 0); put("nativeTerminal", state?.gameOver == true)
             put("winnerId", state?.winnerId?.value?.let(::JsonPrimitive) ?: JsonNull)
             put("terminalSnapshotRestoreVerified", restoreVerified)
-            put("inference", "four-identical-lathril-primer-policies"); put("concessionUsed", false)
+            put("inference", config["runLabel"]?.jsonPrimitive?.content ?: "four-identical-lathril-primer-policies"); put("concessionUsed", false)
             put("format", "Commander"); put("libraryCardsPerSeat", 99)
             put("seats", JsonArray(seats.map { seat -> buildJsonObject {
                 put("playerId", seat.value); put("life", state?.lifeTotal(seat) ?: 40)
+                put("bindingId", profiles.getValue(seat))
             }}))
         }
         Files.writeString(Path.of(text("resultPath")), value.toString())
