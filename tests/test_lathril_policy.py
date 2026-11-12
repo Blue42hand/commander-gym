@@ -90,6 +90,18 @@ class LathrilPolicyTests(unittest.TestCase):
         o['state']['zones'] = []
         self.assertFalse(policy().try_choose(o).choice.response['choice'])
 
+    def test_recorded_rites_selects_only_offered_creature_and_handles_miss(self):
+        o = json.loads((Path(__file__).parent / 'fixtures/lathril_mirror_regressions.json').read_text())['rites']
+        self.assertEqual(policy().try_choose(o).choice.response['selectedCards'], ['e186'])
+        o['pendingDecision']['options'] = []
+        self.assertEqual(policy().try_choose(o).choice.response['selectedCards'], [])
+
+    def test_library_search_scores_revealed_native_card_info(self):
+        o = decision('SearchLibraryDecision','CardsSelectedResponse',{'selectedCards':'ENTITY_ID_ARRAY'},
+                     context={'sourceName':'Demonic Tutor'},minSelections=1,maxSelections=1,
+                     options=['a','b'],cardInfo={'a':{'name':'Staff of Domination'},'b':{'name':'Llanowar Elves'}})
+        self.assertEqual(policy().try_choose(o).choice.response['selectedCards'], ['b'])
+
     def test_cemetery_untaps_after_basic_and_tutor_has_execution_path(self):
         p = policy()
         self.assertTrue(p._enters_tapped({'name':'Woodland Cemetery'}, []))

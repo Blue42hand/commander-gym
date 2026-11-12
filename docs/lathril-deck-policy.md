@@ -107,3 +107,8 @@ selections. The failed cleanup callback is retained as a regression fixture.
 The native Overgrown Tomb life-payment decision pays two life only above four life
 and when the extra untapped source enables a useful development spell immediately.
 The exact native prompt and the failed callback are covered by regression tests.
+
+Growing Rites of Itlimoc's reveal uses only native selectable creature options,
+ranked by board-aware development value; a miss selects nothing. Library searches
+read native revealed card information when those cards are absent from normal
+visible zones, avoiding an accidental entity-ID ranking.
