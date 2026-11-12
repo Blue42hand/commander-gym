@@ -293,8 +293,8 @@ class LathrilDeckSubsystem(MaskedHeuristicSubsystem):
                 return self._development_score(o, card, role) if role in self.document['weights'] else self._opening_value(card)
             chosen = sorted(candidates, key=lambda i: (-reveal_value(i), i))[:1]
             return self._decision(p, rt, 'lathril-reveal-development-creature', selectedCards=chosen)
-        if p.get('kind') in {'SearchLibraryDecision', 'SelectCardsDecision'} and p.get('minSelections') == p.get('maxSelections') == 1 and source in {'Demonic Tutor', 'Elvish Harbinger', 'Wood Elves', 'Sylvan Messenger', 'Collected Company'}:
-            if any(p.get(k) for k in ['nonSelectableOptions', 'selectionLimits', 'conditionalMinimums']):
+        if p.get('kind') in {'SearchLibraryDecision', 'SelectCardsDecision'} and p.get('minSelections') in {0, 1} and p.get('maxSelections') == 1 and source in {'Demonic Tutor', 'Elvish Harbinger', 'Wood Elves', 'Sylvan Messenger', 'Collected Company'}:
+            if any(p.get(k) for k in ['selectionLimits', 'conditionalMinimums', 'onePerCardType', 'onePerColor', 'onePerCardName', 'onePerBasicLandType', 'onePerPower', 'maxTotalManaValue', 'minTotalManaValue', 'maxTotalPower']):
                 raise PilotContractError('lathril-unsupported-search-constraints')
             own_power = sum(max(0, c.get('power') or 0) for c in self._own(o))
             enemy_power = max((sum(max(0, self._card(o, i).get('power') or 0) for i in ids_in(o['state'], 'Battlefield', player['playerId'])) for player in o['state'].get('players', []) if player['playerId'] != o['agentToAct']), default=0)
@@ -308,11 +308,13 @@ class LathrilDeckSubsystem(MaskedHeuristicSubsystem):
                 if 'Land' in card.get('typeLine', '') or 'LAND' in card.get('cardTypes', []):
                     return 100 if source == 'Wood Elves' else 10
                 return self.document['weights'].get(role, -1)
-            candidates = [(search_score(i), i) for i in p.get('options', [])]
+            candidates = [(search_score(i), i) for i in p.get('options', []) if i not in p.get('nonSelectableOptions', [])]
             # Library order never enters scoring; options are native permitted choices.
             if candidates:
                 target = max(candidates, key=lambda x: (x[0], x[1]))[1]
                 return self._decision(p, rt, 'lathril-search-for-engine', selectedCards=[target])
+            if p.get('minSelections') == 0:
+                return self._decision(p, rt, 'lathril-search-no-eligible-card', selectedCards=[])
         count = p.get('minSelections')
         options = p.get('options', [])
         hand = ids_in(o.get('state', {}), 'Hand', o['agentToAct'])

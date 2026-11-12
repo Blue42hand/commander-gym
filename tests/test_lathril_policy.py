@@ -102,6 +102,15 @@ class LathrilPolicyTests(unittest.TestCase):
                      options=['a','b'],cardInfo={'a':{'name':'Staff of Domination'},'b':{'name':'Llanowar Elves'}})
         self.assertEqual(policy().try_choose(o).choice.response['selectedCards'], ['b'])
 
+    def test_recorded_tutor_optional_search_takes_offered_acceleration(self):
+        o = json.loads((Path(__file__).parent / 'fixtures/lathril_mirror_regressions.json').read_text())['tutor']
+        chosen = policy().try_choose(o).choice.response['selectedCards']
+        self.assertEqual(len(chosen), 1)
+        self.assertIn(chosen[0], o['pendingDecision']['options'])
+        self.assertEqual(policy_document()['roles'][o['pendingDecision']['cardInfo'][chosen[0]]['name']], 'mana_elf')
+        o['pendingDecision']['options'] = []
+        self.assertEqual(policy().try_choose(o).choice.response['selectedCards'], [])
+
     def test_cemetery_untaps_after_basic_and_tutor_has_execution_path(self):
         p = policy()
         self.assertTrue(p._enters_tapped({'name':'Woodland Cemetery'}, []))

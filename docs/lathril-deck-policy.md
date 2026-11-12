@@ -112,3 +112,7 @@ Growing Rites of Itlimoc's reveal uses only native selectable creature options,
 ranked by board-aware development value; a miss selects nothing. Library searches
 read native revealed card information when those cards are absent from normal
 visible zones, avoiding an accidental entity-ID ranking.
+
+Library searches accept native zero-or-one selection bounds (including fail to
+find), choose an offered eligible card when available, and exclude any explicit
+nonselectable IDs. The actual Demonic Tutor callback is a regression fixture.
