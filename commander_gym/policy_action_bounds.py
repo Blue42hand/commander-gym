@@ -50,16 +50,22 @@ def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=()
         state = o.get('state',{})
         quiet=not ids_in(state,'Stack')
         casting=a.get('kind','').startswith('Cast')
+        stack=ids_in(state,'Stack')
+        own_stack=bool(stack) and all(cards.get(i,{}).get('controllerId')==me for i in stack)
+        if (not o.get('pendingDecision') and o.get('nativePaymentError') is None and own_stack and not state.get('combat')
+            and raw.get('abilityId') not in {'Lathril, Blade of the Elves:2','Sterling Grove:1'}
+            and (casting or a.get('kind')=='ActivateAbility' and a.get('isManaAbility') is not True)):
+            restrictions.append({'action':a['semanticId'],'rule':'let-own-stack-resolve'});continue
         if (not o.get('pendingDecision') and quiet and state.get('activePlayerId')==me
             and state.get('currentStep') in {'UNTAP','UPKEEP','DRAW'}
-            and (casting or raw.get('abilityId') in {'Timberwatch Elf:1','Skullclamp:2','Flickering Ward:1'})):
+            and (casting or a.get('kind')=='ActivateAbility' and a.get('isManaAbility') is not True and raw.get('abilityId') not in {'Lathril, Blade of the Elves:2','Sterling Grove:1'})):
             restrictions.append({'action':a['semanticId'],'rule':'development-waits-for-main'});continue
-        if (not o.get('pendingDecision') and quiet and casting and 'DRAW' in facts.get(name).get('tags',[])
+        if (not o.get('pendingDecision') and quiet and not state.get('combat') and (casting or a.get('kind')=='ActivateAbility' and a.get('isManaAbility') is not True) and 'DRAW' in facts.get(name).get('tags',[])
             and not facts.get(name).get('affectsOpponent') and 'COUNTERSPELL' not in facts.get(name).get('tags',[])
             and not (state.get('activePlayerId')==me and state.get('currentStep') in {'PRECOMBAT_MAIN','POSTCOMBAT_MAIN'}
                      or state.get('activePlayerId')!=me and state.get('currentStep')=='END_STEP')):
             restrictions.append({'action':a['semanticId'],'rule':'draw-in-main-or-opponent-end-step'});continue
-        harmful = (casting and facts.get(name).get('spellPolarity') == ['HARMFUL']) or name in OPPONENT_REMOVAL
+        harmful = (casting and facts.get(name).get('spellPolarity') == ['HARMFUL']) or name in OPPONENT_REMOVAL or name=='Otawara, Soaring City' and quiet
         if harmful and name not in allow_self_targets and a.get('requiresTargets') is True and a.get('targetRequirements') is None and isinstance(a.get('validTargets'),list):
             # Retain unknown ownership rather than inventing an enemy controller.
             targets = [t for t in a['validTargets'] if cards.get(t, {}).get('controllerId', t) != me]

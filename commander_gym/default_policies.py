@@ -215,13 +215,16 @@ class DefaultPolicySubsystem(SharedCardPolicies, MaskedHeuristicSubsystem):
         override = self._deck_pending(o, p)
         if override is not None: return override
         context = p.get('context',{}); source = context.get('sourceId'); card = self._card(o,source)
-        if (p.get('kind') == 'YesNoDecision' and p.get('responseSpec',{}).get('responseType') == 'YesNoResponse'
-            and p.get('yesAvailable') is True and p.get('yesText') == 'Command zone'
-            and context.get('phase') == 'STATE_BASED' and card.get('isCommander')
-            and card.get('ownerId',card.get('controllerId')) == o['agentToAct']
-            and any(source in ids_in(o['state'],zone,o['agentToAct']) for zone in ['Graveyard','Exile'])
-            and p.get('prompt') in {f"Put {card.get('name')} into the command zone instead of leaving it in the {zone}?" for zone in ['graveyard','exile']}):
-            return self._decision(p,'YesNoResponse','default-return-commander-to-command-zone',choice=True)
+        if (p.get('kind')=='YesNoDecision' and p.get('responseSpec',{}).get('responseType')=='YesNoResponse'
+            and p.get('yesAvailable') is True and p.get('yesText')=='Command zone'
+            and context.get('phase')=='STATE_BASED' and card.get('isCommander')
+            and card.get('ownerId',card.get('controllerId'))==o['agentToAct']):
+            labels={'Graveyard':['the graveyard','graveyard'],'Exile':['exile','the exile'],
+                    'Hand':['your hand','hand'],'Library':['your library','the library']}
+            for zone,names in labels.items():
+                if source in ids_in(o['state'],zone,o['agentToAct']) and p.get('prompt') in {
+                    f"Put {card.get('name')} into the command zone instead of leaving it in {name}?" for name in names}:
+                    return self._decision(p,'YesNoResponse','default-keep-commander-accessible',choice=zone!='Hand')
         shared = self._card_pending(o, p)
         if shared is not None: return shared
         rt = p.get('responseSpec', {}).get('responseType'); context = p.get('context', {})
@@ -247,6 +250,7 @@ class DefaultPolicySubsystem(SharedCardPolicies, MaskedHeuristicSubsystem):
                 card = self._card(o, entity)
                 if 'Land' in card.get('typeLine', '') or 'LAND' in card.get('cardTypes', []):
                     return 180 if lands < 5 and hand_lands <= 2 else (60 if lands + hand_lands <= 6 else 0)
+                if card.get('isCommander'):return 220
                 role = self.document['roles'].get(card.get('name'))
                 if role == 'finisher' and self._overrun_is_lethal(o, card.get('name')):
                     return 200

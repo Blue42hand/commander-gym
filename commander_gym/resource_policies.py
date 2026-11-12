@@ -9,12 +9,24 @@ CONSTRAINTS = ('selectionLimits','conditionalMinimums','onePerCardType','onePerC
 
 
 class ResourcePolicies:
+    def _floating_payable(self,o,cost_text):
+        cost=mana_cost(cost_text)
+        if cost is None:return False
+        pool=next((p.get('manaPool',{}) for p in o['state'].get('players',[]) if p['playerId']==o['agentToAct']),{})
+        units=[]
+        for name,color in [('white','W'),('blue','U'),('black','B'),('red','R'),('green','G'),('colorless','C')]:
+            amount=pool.get(name,0)
+            if type(amount) is not int or amount<0:return False
+            units.extend([{color}]*amount)
+        return self._payable(cost,units)
+
     def _resource_value(self,o,card):
         own=self._own(o);me=o['agentToAct'];hand=[self._card(o,i) for i in ids_in(o['state'],'Hand',me)]
         def land(c):return 'LAND' in c.get('cardTypes',[]) or 'Land' in c.get('typeLine','')
         lands=sum(land(c) for c in own);held=sum(land(c) for c in hand)
         if land(card) and held>=2 and lands>=2:return -20
         if land(card):return 160 if lands<4 and held<2 else 110 if lands<6 and held==0 else 35 if lands+held<6 else -20
+        if card.get('isCommander') or card.get('name')==self.document.get('commander'):return 220
         f=self.facts.get(card.get('name'));role=self.document['roles'].get(card.get('name'))
         score=self._opening_value(card)
         if role in {'commander','draw_engine'}:score+=35
@@ -27,6 +39,13 @@ class ResourcePolicies:
 
     def _resource_pending(self,o,p):
         rt=p.get('responseSpec',{}).get('responseType');ctx=p.get('context',{});source=ctx.get('sourceName')
+        if rt=='ManaSourcesSelectedResponse' and (p.get('canAutoPayNow') is True or self._floating_payable(o,p.get('requiredCost',''))):
+            return self._decision(p,rt,'default-fund-native-mana-request',autoPay=True,declined=False,selectedSources=[],waterbendPermanents=[])
+        prompt=p.get('prompt','');prefix='Pay ';suffix=' to prevent your spell from being countered?'
+        if (rt=='YesNoResponse' and p.get('yesAvailable') is True and prompt.startswith(prefix) and prompt.endswith(suffix)
+            and ctx.get('phase')=='RESOLUTION' and not any(p.get(k) for k in ['peerOptions','yesDetail','noDetail'])
+            and self._floating_payable(o,prompt[len(prefix):-len(suffix)])):
+            return self._decision(p,rt,'default-use-floating-mana-to-save-spell',choice=True)
         key=(o['agentToAct'],o['state'].get('turnNumber'),ctx.get('sourceId'))
         if (source=='Ponder' and rt=='OrderedResponse' and p.get('kind')=='ReorderLibraryDecision'
             and isinstance(p.get('cards'),list) and len(p['cards'])==3 and all(i in (p.get('cardInfo') or {}) for i in p['cards'])):
@@ -39,7 +58,8 @@ class ResourcePolicies:
             return self._decision(p,rt,'default-keep-reviewed-ponder-top',choice=p.get('yesAvailable') is True and shuffle)
         if (p.get('kind') not in {'SearchLibraryDecision','SelectCardsDecision'} or rt!='CardsSelectedResponse'
             or p.get('ordered') or any(p.get(k) for k in CONSTRAINTS) or p.get('nonSelectableOptions')):return None
-        options=p.get('options');info={**o['state'].get('cards',{}),**(p.get('cardInfo') or {})}
+        options=p.get('options');info=dict(o['state'].get('cards',{}))
+        for entity,detail in (p.get('cardInfo') or {}).items():info[entity]={**info.get(entity,{}),**detail}
         if not isinstance(options,list) or not all(i in info and info[i].get('name') for i in options):return None
         low=p.get('minSelections');high=p.get('maxSelections')
         if not isinstance(low,int) or not isinstance(high,int):return None

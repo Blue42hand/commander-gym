@@ -97,16 +97,21 @@ def enumerate_choices(o):
         for a in o.get('legalActions', []):
             if not affordable(a): continue
             if a['kind'] in {'DeclareAttackers', 'DeclareBlockers'}: return None
-            payment = {}; plain = a
-            cost = a.get('additionalCostInfo') or {}
+            payments=[{}];plain=a
+            cost=a.get('additionalCostInfo') or {}
             if cost:
-                source = a.get('action',{}).get('sourceId')
-                if (a.get('kind') != 'ActivateAbility' or cost.get('costType') != 'SacrificeSelf'
-                    or cost.get('validSacrificeTargets') != [source] or cost.get('sacrificeCount') != 1
-                    or cost.get('alsoRequired') or a.get('parameterSpec',{}).get('allowedFields',{}).get('sacrificedPermanents') != 'ENTITY_ID_ARRAY'):
-                    return None
-                payment = {'sacrificedPermanents':[source]}
-                plain = {**a,'additionalCostInfo':None}
+                source=a.get('action',{}).get('sourceId');fields=a.get('parameterSpec',{}).get('allowedFields',{})
+                count=cost.get('sacrificeCount');options=cost.get('validSacrificeTargets')
+                if (cost.get('costType') not in {'SacrificeSelf','SacrificePermanent'}
+                    or a.get('kind') not in {'ActivateAbility','CastSpell'}
+                    or cost.get('alsoRequired') or cost.get('costAfterSacrifice') or cost.get('sacrificeCountIsX') or cost.get('sacrificeMinPowerIsX')
+                    or fields.get('sacrificedPermanents')!='ENTITY_ID_ARRAY' or not isinstance(options,list)
+                    or len(set(options))!=len(options) or type(count) is not int or count<1):return None
+                if cost.get('costType')=='SacrificeSelf' and (a.get('kind')!='ActivateAbility' or options!=[source] or count!=1):return None
+                selections=_selections(options,count,count)
+                if selections is None:return None
+                payments=[{'sacrificedPermanents':selected} for selected in selections]
+                plain={**a,'additionalCostInfo':None}
             if not DefaultPolicySubsystem._plain_cast(plain) or any(a.get(k) for k in ['requiresManaColorChoice','hasTapForGeneric','hasHarmonize','tapForPower','xConstrainsTargetManaValue','xConstrainsTargetManaValueExactly','xConstrainsTargetPower','xConstrainsTargetCount','xConstrainsTargetCountExactly']): return None
             if type(a.get('maxRepeatableActivations')) is int and a['maxRepeatableActivations'] > 1: return None
             if any(type(a.get(k)) is int and a[k] > 0 for k in ['maxOptionalCostTimes','maxAdditionalManaForCounters']): return None
@@ -114,12 +119,12 @@ def enumerate_choices(o):
                 if a.get('targetCount') != 1 or a.get('minTargets') != 1 or a.get('targetRequirements') is not None:
                     return None
                 targets = a.get('validTargets') or []
-                if len(choices) + len(targets) > MAX_CHOICES: return None
-                choices.extend(_action(a, {**payment,'targets':[t]}) for t in targets)
+                if len(choices)+len(targets)*len(payments)>MAX_CHOICES:return None
+                choices.extend(_action(a,{**payment,'targets':[t]}) for payment in payments for t in targets)
             elif (a.get('parameterSpec', {}).get('allowedFields') == {}
                   or a.get('requiresTargets') is False and a.get('validTargets') in (None,[]) and a.get('targetRequirements') is None and (a['kind'] in {'CastSpell', 'PlayLand', 'PassPriority'}
-                      or set(a.get('parameterSpec', {}).get('allowedFields', {})) <= ({'targets','targetGroups','xValue','sacrificedPermanents','sacrifice'} if payment else {'targets','targetGroups','xValue'}))):
-                choices.append(_action(a,payment))
+                      or set(a.get('parameterSpec', {}).get('allowedFields', {})) <= ({'targets','targetGroups','xValue','sacrificedPermanents','sacrifice'} if cost else {'targets','targetGroups','xValue'}))):
+                choices.extend(_action(a,payment) for payment in payments)
             else: return None
             if len(choices) > MAX_CHOICES: return None
     return choices if 0 < len(choices) <= MAX_CHOICES else None
@@ -181,9 +186,16 @@ def _candidate_description(wire, o):
         if 'optionIndex' in wire['response']: result['label'] = p['options'][wire['response']['optionIndex']]
         return result
     choice = wire['choice']; a = next(a for a in o['legalActions'] if a['semanticId'] == choice['semanticId'])
-    return {'kind':a['kind'], 'description':a.get('description'), 'card':describe(a.get('action', {}).get('cardId', a.get('action', {}).get('sourceId'))),
+    result={'kind':a['kind'], 'description':a.get('description'), 'card':describe(a.get('action', {}).get('cardId', a.get('action', {}).get('sourceId'))),
             'ability':a.get('action', {}).get('abilityId'), 'parameters':choice['params'],
-            'targetFacts':[describe(t) for t in choice['params'].get('targets',[])], 'nativeAffordable':True}
+            'targetFacts':[describe(t) for t in choice['params'].get('targets',[])], 'nativeAffordable':True,
+            'manaCost':a.get('manaCostString'), 'costSlot':a.get('action',{}).get('declaredCostSlot')}
+    source=cards.get(a.get('action',{}).get('cardId'),{})
+    if source.get('name')=='Into the Roil' and a.get('action',{}).get('declaredCostSlot') in (None,'KICKED'):
+        result['reviewedEffects']={'returnTargetNonlandPermanentToOwnersHand':True,
+                                  'drawCards':1 if a.get('action',{}).get('declaredCostSlot')=='KICKED' else 0}
+    return result
+
 
 
 def decision_context(o, *, frozen, policy_context, facts):
@@ -459,20 +471,9 @@ class BoundedPolicyFallback:
                     continue
                 valid.append(wire)
             wires = valid or None
-        # Compare serialized representations rather than selecting solely by
-        # candidate count. Both retain the same reviewed current menu.
-        if wires and not hints:
-            native_fmt = constrain_native_format(o)
-            if native_fmt is not None:
-                from .lmstudio_pilot import _constrain_untargeted_actions
-                _constrain_untargeted_actions(native_fmt['schema'],o)
-                native_fmt = compact_action_schema(native_fmt)
-                frozen_view = decision_context(o,frozen=True,policy_context=context,facts=self.defaults.facts)
-                frozen_view['choices'] = [dict(option=i,**_candidate_description(w,o)) for i,w in enumerate(wires)]
-                native_view = decision_context(o,frozen=False,policy_context=context,facts=self.defaults.facts)
-                frozen_cost = len(json.dumps(compact_decision_context(frozen_view),separators=(',',':')).encode()) + len(wires)*4 + 160
-                native_cost = len(json.dumps(compact_decision_context(native_view),separators=(',',':')).encode()) + len(json.dumps(native_fmt).encode())
-                if native_cost + 512 < frozen_cost: wires = None
+        # Frozen choices keep field names, routing IDs and costs in the harness.
+        # Prefer them whenever representable, even if a free-form native grammar
+        # would serialize slightly smaller. The prompt target is advisory.
         view = decision_context(o, frozen=bool(wires), policy_context=context, facts=self.defaults.facts)
         selection = {}
         if wires:

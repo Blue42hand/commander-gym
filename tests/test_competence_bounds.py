@@ -97,7 +97,7 @@ class RecordedCompetenceTests(unittest.TestCase):
     def test_recorded_removal_and_autopay_actions_are_bounded(self):
         for n,target in [(4138,'e152'),(5237,'e287')]:
             o=self.rows[n]['observation'];b,r=bounded_observation(o,self.facts)
-            self.assertTrue(any(x['rule'] in {'opponent-removal-targets','development-waits-for-main'} for x in r))
+            self.assertTrue(any(x['rule'] in {'opponent-removal-targets','development-waits-for-main','let-own-stack-resolve'} for x in r))
             for a in b['legalActions']:
                 if a.get('requiresTargets') and a.get('targetRequirements') is None:
                     name=o['state']['cards'].get(a['action'].get('cardId',a['action'].get('sourceId')),{}).get('name')
