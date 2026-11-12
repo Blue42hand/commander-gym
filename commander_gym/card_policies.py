@@ -6,23 +6,70 @@ through inherited scoring hooks; unknown contracts defer to bounded inference.
 from .heuristic_policy import ids_in, mana_cost, affordable, PolicyNotApplicable
 
 
-class SharedCardPolicies:
-    def _card_actions(self, o):
-        s = o.get('state',{}); me = o['agentToAct']
-        if s.get('activePlayerId') != me or s.get('currentStep') not in {'PRECOMBAT_MAIN','POSTCOMBAT_MAIN'} or ids_in(s,'Stack'): return None
-        for a in o.get('legalActions',[]):
-            raw = a.get('action',{})
-            if (affordable(a) and a.get('kind') == 'ActivateAbility' and raw.get('abilityId') == 'Lightning Greaves:1'
-                and a.get('manaCostString') == '{0}' and not a.get('additionalCostInfo')
-                and a.get('targetRequirements') is None and a.get('targetCount') == a.get('minTargets') == 1):
-                targets = [t for t in a.get('validTargets',[]) if self._card(o,t).get('controllerId') == me
-                           and self._card(o,t).get('isCommander') and not {'HASTE','SHROUD'} <= set(self._card(o,t).get('keywords',[]))]
-                if targets: return self._action(a,'shared-card-protect-commander-free-equip',{'targets':[targets[0]]})
+from .resource_policies import ResourcePolicies
+
+
+class SharedCardPolicies(ResourcePolicies):
+    def _card_actions(self,o):
+        if o.get('nativePaymentError') is not None:return None
+        s=o.get('state',{});me=o['agentToAct'];offers=[a for a in o.get('legalActions',[]) if affordable(a)]
+        quiet=not ids_in(s,'Stack');main=s.get('activePlayerId')==me and s.get('currentStep') in {'PRECOMBAT_MAIN','POSTCOMBAT_MAIN'}
+        for a in offers:
+            raw=a.get('action',{});ability=raw.get('abilityId');source=self._card(o,raw.get('sourceId'))
+            simple=(a.get('targetRequirements') is None and a.get('targetCount')==a.get('minTargets')==1 and not a.get('additionalCostInfo'))
+            if ability=='Timberwatch Elf:1' and quiet and s.get('currentStep') in {'DECLARE_ATTACKERS','DECLARE_BLOCKERS'} and simple:
+                combat=s.get('combat') or {};participants={v.get('creatureId') for kind in ['attackers','blockers'] for v in combat.get(kind,[])}
+                targets=[i for i in a.get('validTargets',[]) if i in participants and self._card(o,i).get('controllerId')==me]
+                if targets:
+                    targets.sort(key=lambda i:(not self._card(o,i).get('isCommander'),-(self._card(o,i).get('power') or 0),i))
+                    return self._action(a,'shared-card-pump-combat-participant',{'targets':[targets[0]]})
+            if not main or not quiet:continue
+            if ability=='Lightning Greaves:1' and simple and a.get('manaCostString')=='{0}':
+                targets=[t for t in a.get('validTargets',[]) if self._card(o,t).get('controllerId')==me and self._card(o,t).get('isCommander')
+                         and not {'HASTE','SHROUD'}<=set(self._card(o,t).get('keywords',[])) and raw.get('sourceId') not in self._card(o,t).get('attachments',[])]
+                if targets:return self._action(a,'shared-card-protect-commander-free-equip',{'targets':[targets[0]]})
+            if any(b.get('kind')=='PlayLand' or b.get('kind')=='CastSpell' and self.document['roles'].get(self._card(o,b.get('action',{}).get('cardId')).get('name')) in {'commander','draw_engine','mana_elf','mana_engine','ramp','reducer'} for b in offers):continue
+            if ability=='Skullclamp:2' and simple and a.get('manaCostString')=='{1}':
+                player=next((v for v in s.get('players',[]) if v['playerId']==me),{})
+                if player.get('librarySize',99)<=5:continue
+                targets=[]
+                for t in a.get('validTargets',[]):
+                    c=self._card(o,t)
+                    if (c.get('controllerId')==me and (c.get('toughness') or 0)==1 and not c.get('isCommander')
+                        and 'INDESTRUCTIBLE' not in c.get('keywords',[]) and raw.get('sourceId') not in c.get('attachments',[])
+                        and (c.get('isToken') or c.get('name')=='Wirewood Herald')):targets.append(t)
+                if hasattr(self,'_elves') and len(self._elves(o,True))>=11:targets=[]
+                if targets:
+                    targets.sort(key=lambda t:(self._card(o,t).get('name')!='Wirewood Herald',t))
+                    return self._action(a,'shared-card-clamp-expendable-body',{'targets':[targets[0]]})
+            if a.get('kind')=='CastSpell' and self._card(o,raw.get('cardId')).get('name')=='Skullclamp' and self._plain_cast(a) and not a.get('requiresTargets'):
+                return self._action(a,'shared-card-develop-draw-equipment')
+        # These reviewed utilities have no useful quiet action now. Holding them
+        # is a covered decision; unrepresented competing mechanics still defer.
+        if quiet:
+            useful=[a for a in offers if a.get('kind')!='PassPriority' and not a.get('isManaAbility')]
+            if useful and all(a.get('action',{}).get('abilityId') in {'Skullclamp:2','Timberwatch Elf:1'} for a in useful):
+                passed=self._pass(o)
+                if passed:return self._action(passed,'shared-card-hold-utility-for-payoff')
         return None
 
     def _card_pending(self, o, p):
+        resources=self._resource_pending(o,p)
+        if resources is not None:return resources
         context = p.get('context', {}); source = context.get('sourceName')
         rt = p.get('responseSpec', {}).get('responseType')
+        optional_benefits={
+            'Beastmaster Ascension':('Beastmaster Ascension:1','You may put a quest counter on Beastmaster Ascension'),
+            'Wirewood Herald':('Wirewood Herald:1','You may search your library for an Elf card, reveal it, put it into your hand, then shuffle'),
+        }
+        if (source in optional_benefits and rt=='YesNoResponse' and context.get('phase')=='RESOLUTION'
+            and (context.get('abilityIdentity') or {}).get('abilityId')==optional_benefits[source][0]
+            and p.get('prompt')==optional_benefits[source][1] and not any(p.get(k) for k in ['peerOptions','yesDetail','noDetail'])):
+            return self._decision(p,rt,'shared-card-accept-free-development',choice=p.get('yesAvailable') is True)
+        if (source=='Land Tax' and rt=='YesNoResponse' and context.get('phase')=='RESOLUTION'
+            and (context.get('abilityIdentity') or {}).get('abilityId')=='Land Tax:1'
+            and not any(p.get(k) for k in ['peerOptions','yesDetail','noDetail'])):
+            return self._decision(p,rt,'shared-card-accept-basic-land-search',choice=p.get('yesAvailable') is True)
         if (source == 'Reclamation Sage' and rt == 'YesNoResponse'
             and context.get('phase') == 'RESOLUTION'
             and (context.get('abilityIdentity') or {}).get('abilityId') == 'Reclamation Sage:1'

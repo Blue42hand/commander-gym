@@ -97,7 +97,7 @@ class RecordedCompetenceTests(unittest.TestCase):
     def test_recorded_removal_and_autopay_actions_are_bounded(self):
         for n,target in [(4138,'e152'),(5237,'e287')]:
             o=self.rows[n]['observation'];b,r=bounded_observation(o,self.facts)
-            self.assertTrue(any(x['rule']=='opponent-removal-targets' for x in r))
+            self.assertTrue(any(x['rule'] in {'opponent-removal-targets','development-waits-for-main'} for x in r))
             for a in b['legalActions']:
                 if a.get('requiresTargets') and a.get('targetRequirements') is None:
                     name=o['state']['cards'].get(a['action'].get('cardId',a['action'].get('sourceId')),{}).get('name')
@@ -297,6 +297,7 @@ class CurrentTargetRegressionTests(unittest.TestCase):
 
     def test_timberwatch_uses_own_targets(self):
         o=next(r['observation'] for r in self.states.values() if any(a.get('action',{}).get('abilityId')=='Timberwatch Elf:1' for a in r['observation']['legalActions']))
+        o=deepcopy(o);o['state']['currentStep']='PRECOMBAT_MAIN'
         b,_=bounded_observation(o,self.facts);a=next(a for a in b['legalActions'] if a.get('action',{}).get('abilityId')=='Timberwatch Elf:1')
         self.assertNotIn('e264',a['validTargets']);self.assertTrue(a['validTargets'])
         self.assertTrue(all(o['state']['cards'][t].get('controllerId')==o['agentToAct'] for t in a['validTargets']))

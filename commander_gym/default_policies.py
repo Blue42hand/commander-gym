@@ -76,7 +76,13 @@ class DefaultPolicySubsystem(SharedCardPolicies, MaskedHeuristicSubsystem):
         if shared is not None: return shared
         return self._choose_actions(o)
 
+    def _simple_combat(self,o,offer):
+        from .combat_policies import combat_choice
+        return combat_choice(self,o,offer)
+
     def _combat(self, o, offer):
+        shared=self._simple_combat(o,offer)
+        if shared is not None:return shared
         if (offer.get('kind') == 'DeclareBlockers' and offer.get('validBlockers') == []
             and offer.get('validBlockTargets') == {} and not offer.get('mandatoryBlockerAssignments')):
             return self._action(offer, 'default-no-available-blockers', {'blockers':{}})

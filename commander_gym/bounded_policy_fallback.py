@@ -171,7 +171,8 @@ def _candidate_description(wire, o):
         if isinstance(value, dict): return {k:describe(v) for k,v in value.items()}
         if isinstance(value, str) and value in cards:
             return {'entity':value, 'name':cards[value].get('name'), 'controller':cards[value].get('controllerId'),
-                    'relationship':'self' if cards[value].get('controllerId') == o['agentToAct'] else 'opponent' if cards[value].get('controllerId') else 'unknown'}
+                    'relationship':'self' if cards[value].get('controllerId') == o['agentToAct'] else 'opponent' if cards[value].get('controllerId') else 'unknown',
+                    'zone':cards[value].get('zone'), 'power':cards[value].get('power'), 'toughness':cards[value].get('toughness')}
         if isinstance(value, str) and value in players: return players[value]
         return value
     if wire['channel'] == 'decision':
@@ -180,8 +181,9 @@ def _candidate_description(wire, o):
         if 'optionIndex' in wire['response']: result['label'] = p['options'][wire['response']['optionIndex']]
         return result
     choice = wire['choice']; a = next(a for a in o['legalActions'] if a['semanticId'] == choice['semanticId'])
-    return {'kind':a['kind'], 'description':a.get('description'), 'card':a.get('action', {}).get('cardId', a.get('action', {}).get('sourceId')),
-            'ability':a.get('action', {}).get('abilityId'), 'parameters':choice['params']}
+    return {'kind':a['kind'], 'description':a.get('description'), 'card':describe(a.get('action', {}).get('cardId', a.get('action', {}).get('sourceId'))),
+            'ability':a.get('action', {}).get('abilityId'), 'parameters':choice['params'],
+            'targetFacts':[describe(t) for t in choice['params'].get('targets',[])], 'nativeAffordable':True}
 
 
 def decision_context(o, *, frozen, policy_context, facts):
@@ -231,6 +233,17 @@ def decision_context(o, *, frozen, policy_context, facts):
         view['decision'] = clean({k:v for k,v in p.items() if k != 'cardInfo' and (k != 'cards' or not isinstance(v,dict)) and (not frozen or k not in {'options','hand','semanticId','responseSpec','id'})})
     if not frozen:
         view['legalActions'] = clean([a for a in o.get('legalActions', []) if affordable(a)])
+    summary={}
+    for z in zones:
+        if z.get('zoneId',{}).get('zoneType')!='Battlefield':continue
+        for entity in z.get('cardIds',[]):
+            c=s.get('cards',{}).get(entity,{})
+            if 'CREATURE' not in c.get('cardTypes',[]):continue
+            controller=c.get('controllerId',z.get('zoneId',{}).get('ownerId'))
+            entry=summary.setdefault(controller,{'creatureCount':0,'untappedCreatures':0,'tribeCounts':{}})
+            entry['creatureCount']+=1;entry['untappedCreatures']+=not c.get('isTapped',False)
+            for tribe in c.get('subtypes',[]):entry['tribeCounts'][tribe]=entry['tribeCounts'].get(tribe,0)+1
+    view['battlefieldSummary']=summary
     if summarized: view['summarizedInactiveCards'] = summarized
     if o.get('policyUtilityPlans'): view['utilityPlans'] = o['policyUtilityPlans']
     if o.get('nativePaymentError') is not None: view['nativePaymentError'] = clean(o['nativePaymentError'])
@@ -519,6 +532,9 @@ class BoundedPolicyFallback:
                          ' Choices have explicit zero-based option numbers; card and target IDs refer to the card table and player IDs.'
                          ' actorZones identifies your cards by zone; cards in Command are not creatures on the battlefield.'
                          ' actingCommander identifies your commander; other commanders belong to opponents.'
+                         ' battlefieldSummary counts live creatures, while deckSubtypeCounts counts printed cards in the registered deck. Never substitute deck counts for battlefield counts.'
+                         ' Every supplied frozen choice is currently native-affordable. An empty mana pool does not prevent native AutoPay from tapping sources.'
+                         ' Source and target facts identify the exact live entities. Current types, stats, keywords and ability flags take precedence over printed rules after transformations.'
                          ' summarizedInactiveCards retain identities, ownership, type and cost; their rules are omitted because no current affordable action or pending decision references them. All battlefield and current candidate rules remain available.'
                          ' Verify the selected option matches the action described in your explanation.'
                          ' Apply these defaults before evaluating choices. All current offers and constraints are retained.')

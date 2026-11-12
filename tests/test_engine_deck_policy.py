@@ -142,15 +142,12 @@ class EnginePolicyTests(unittest.TestCase):
         a=offer('CastSpell',1);a.update(requiresTargets=True,targetCount=1,minTargets=1,validTargets=['a','b'])
         self.assertEqual(p._cast_params(o,a,{'name':'All That Glitters'},'aura_payoff'),{'targets':['b']})
 
-    def test_pressure_shortlist_keeps_native_pairs_and_a_defensive_plan(self):
+    def test_uncontested_pressure_is_local_and_keeps_native_pairs(self):
         a=offer('DeclareAttackers',0);a.update(validAttackers=['t1','t2'],validAttackTargets=['enemy'],attackTargetsByAttacker={'t1':['enemy'],'t2':['enemy']},parameterSpec={'allowedFields':{'attackers':'ENTITY_ID_MAP'}})
         o=observation(a);zone(o,'Battlefield','me',**{i:{'name':'Faerie','cardTypes':['CREATURE'],'keywords':['FLYING'],'isToken':True,'power':1} for i in ['t1','t2']})
         r=EngineDeckPolicy(self.f,'alela').try_choose(o)
-        self.assertIsNone(r.choice);plans=r.metadata['candidateChoices']
-        self.assertEqual(len(plans),3);self.assertEqual(plans[0]['params']['attackers'],{})
-        self.assertEqual(len(plans[1]['params']['attackers']),2)
-        self.assertEqual(len(plans[2]['params']['attackers']),1)
-        self.assertTrue(all(t=='enemy' for p in plans for t in p['params']['attackers'].values()))
+        self.assertEqual(r.choice.params,{'attackers':{'t1':'enemy','t2':'enemy'}})
+        self.assertNotIn('candidateChoices',r.metadata)
         a['mandatoryAttackers']=['t1'];r=EngineDeckPolicy(self.f,'alela').try_choose(o)
         self.assertNotIn('candidateChoices',r.metadata)
 

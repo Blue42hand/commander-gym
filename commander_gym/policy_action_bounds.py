@@ -11,6 +11,29 @@ from .heuristic_policy import affordable, ids_in, mana_cost
 OPPONENT_REMOVAL = frozenset({'Reality Shift', 'Seal of Primordium'})
 
 
+NEUTRALIZING_AURAS=frozenset({'Arrest','Pacifism','Darksteel Mutation','Imprisoned in the Moon','Lignify','Noggle the Mind','Amphibian Downpour',"Faith's Fetters"})
+
+
+ABILITY_REMOVING_AURAS=frozenset({'Darksteel Mutation','Imprisoned in the Moon','Lignify','Noggle the Mind','Amphibian Downpour'})
+
+
+def abilities_removed(o,card):
+    return any(o['state'].get('cards',{}).get(i,{}).get('name') in ABILITY_REMOVING_AURAS for i in card.get('attachments',[]))
+
+
+def removal_target_value(o,t,facts,*,neutralize=False):
+    cards=o['state'].get('cards',{});me=o['agentToAct'];c=cards.get(t,{});f=facts.get(c.get('name'))
+    disabled=any(cards.get(i,{}).get('name') in NEUTRALIZING_AURAS for i in c.get('attachments',[]))
+    score=max(0,c.get('power') or 0)+max(0,c.get('toughness') or 0)+f.get('staticValue',0)
+    if c.get('isCommander'):score+=30
+    if 'DRAW' in f.get('tags',[]) and f.get('repeatable'):score+=15
+    if disabled:score=max(0,c.get('power') or 0)+1
+    if c.get('name') in NEUTRALIZING_AURAS and not neutralize:
+        if any(t in v.get('attachments',[]) and v.get('controllerId')==me for v in cards.values()):score+=80
+    if 'LAND' in c.get('cardTypes',[]):score-=15
+    return score
+
+
 def tutor_payoff_score(name, facts, preferred_engines=()):
     """Shared payoff ordering usable both before sacrifice and at native search."""
     fact = facts.get(name); tags = fact.get('tags',[])
@@ -25,12 +48,18 @@ def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=()
     for a in view.get('legalActions', []):
         raw = a.get('action', {}); name = cards.get(raw.get('cardId', raw.get('sourceId')), {}).get('name')
         state = o.get('state',{})
-        if (not o.get('pendingDecision') and state.get('activePlayerId') == me
-            and state.get('currentStep') not in {'PRECOMBAT_MAIN','POSTCOMBAT_MAIN'} and not ids_in(state,'Stack')
-            and (name in {'Think Twice','Flow of Knowledge'} and a.get('kind') in {'CastSpell','ActivateAbility'}
-                 or name == 'Flickering Ward' and a.get('kind') == 'ActivateAbility')):
-            restrictions.append({'action':a['semanticId'],'rule':'reviewed-resource-spending-waits-for-main'}); continue
-        harmful = (a.get('kind') == 'CastSpell' and facts.get(name).get('spellPolarity') == ['HARMFUL']) or name in OPPONENT_REMOVAL
+        quiet=not ids_in(state,'Stack')
+        casting=a.get('kind','').startswith('Cast')
+        if (not o.get('pendingDecision') and quiet and state.get('activePlayerId')==me
+            and state.get('currentStep') in {'UNTAP','UPKEEP','DRAW'}
+            and (casting or raw.get('abilityId') in {'Timberwatch Elf:1','Skullclamp:2','Flickering Ward:1'})):
+            restrictions.append({'action':a['semanticId'],'rule':'development-waits-for-main'});continue
+        if (not o.get('pendingDecision') and quiet and casting and 'DRAW' in facts.get(name).get('tags',[])
+            and not facts.get(name).get('affectsOpponent') and 'COUNTERSPELL' not in facts.get(name).get('tags',[])
+            and not (state.get('activePlayerId')==me and state.get('currentStep') in {'PRECOMBAT_MAIN','POSTCOMBAT_MAIN'}
+                     or state.get('activePlayerId')!=me and state.get('currentStep')=='END_STEP')):
+            restrictions.append({'action':a['semanticId'],'rule':'draw-in-main-or-opponent-end-step'});continue
+        harmful = (casting and facts.get(name).get('spellPolarity') == ['HARMFUL']) or name in OPPONENT_REMOVAL
         if harmful and name not in allow_self_targets and a.get('requiresTargets') is True and a.get('targetRequirements') is None and isinstance(a.get('validTargets'),list):
             # Retain unknown ownership rather than inventing an enemy controller.
             targets = [t for t in a['validTargets'] if cards.get(t, {}).get('controllerId', t) != me]
@@ -38,21 +67,22 @@ def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=()
                 restrictions.append({'action':a['semanticId'],'rule':'opponent-removal-targets'})
                 a['validTargets'] = targets
             if len(targets) < a.get('minTargets',1): continue
-        if (name == 'Flickering Ward' and a.get('kind') == 'CastSpell' or raw.get('abilityId') == 'Timberwatch Elf:1') and a.get('targetRequirements') is None and isinstance(a.get('validTargets'),list):
+        if (casting and (name in {'Flickering Ward','Curiosity','Keen Sense','Sixth Sense'} or facts.get(name).get('spellPolarity')==['BENEFICIAL'] and all(t in ids_in(state,'Battlefield') for t in a.get('validTargets') or [])) or raw.get('abilityId') == 'Timberwatch Elf:1') and a.get('targetRequirements') is None and isinstance(a.get('validTargets'),list):
             a['validTargets'] = [t for t in a['validTargets'] if cards.get(t,{}).get('controllerId') == me]
             restrictions.append({'action':a['semanticId'],'rule':'beneficial-effect-own-creatures'})
             if len(a['validTargets']) < a.get('minTargets',1): continue
-        # For reviewed ordinary hostile Auras, choose strategically meaningful
-        # targets. Unknown effects and complex slot grammars remain untouched.
-        if name in {'Arrest','Darksteel Mutation','Noggle the Mind'} and a.get('targetRequirements') is None and a.get('minTargets') == a.get('targetCount') == 1:
-            targets = a.get('validTargets',[])
-            def threat(t):
-                c = cards.get(t,{})
-                return (100 if c.get('isCommander') else 0) + facts.get(c.get('name')).get('staticValue',0) + max(0,c.get('power') or 0)
-            ranked = sorted(targets,key=lambda t:(-threat(t),t))
-            if ranked and all(cards.get(t,{}).get('controllerId') not in (None,me) for t in ranked):
-                a['validTargets'] = [t for t in ranked if threat(t) >= threat(ranked[0])-3][:3]
-                if a['validTargets'] != targets: restrictions.append({'action':a['semanticId'],'rule':'reviewed-removal-threat-shortlist'})
+        if ((harmful or name in NEUTRALIZING_AURAS or name=="Faith's Fetters") and name not in allow_self_targets
+            and a.get('targetRequirements') is None and a.get('minTargets')==a.get('targetCount')==1):
+            targets=a.get('validTargets') or []
+            if name=="Faith's Fetters":
+                targets=[t for t in targets if not ('LAND' in cards.get(t,{}).get('cardTypes',[]) and facts.get(cards.get(t,{}).get('name')).get('simpleMana'))]
+                a['validTargets']=targets
+                if not targets:restrictions.append({'action':a['semanticId'],'rule':'removal-without-useful-target'});continue
+            if targets and all(t in ids_in(state,'Battlefield') and cards.get(t,{}).get('controllerId') not in (None,me) for t in targets):
+                def score(t):return removal_target_value(o,t,facts,neutralize='NEUTRALIZE' in facts.get(name).get('tags',[]) or name in NEUTRALIZING_AURAS)
+                ranked=sorted(targets,key=lambda t:(-score(t),t))
+                a['validTargets']=[t for t in ranked if score(t)>=score(ranked[0])-3][:3]
+                if a['validTargets']!=targets:restrictions.append({'action':a['semanticId'],'rule':'reviewed-removal-threat-shortlist'})
         if name == "Green Sun's Zenith" and a.get('hasXCost') and type(a.get('maxAffordableX')) is int:
             deck = o.get('knownDeck', {}).get('cards', {})
             eligible = []; green_payoffs = []
@@ -92,7 +122,7 @@ def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=()
         retained.append(a)
     # Native AutoPay already funds an affordable cast/cycle. Keep explicit mana
     # decisions and menus without such a line intact (including enabling mana).
-    if not o.get('pendingDecision') and any(affordable(a) and a.get('isManaAbility') is not True and a.get('kind') in {'CastSpell','ActivateAbility'} and a.get('action',{}).get('paymentStrategy',{}).get('type') == 'AutoPay' for a in retained):
+    if not o.get('pendingDecision') and any(affordable(a) and a.get('isManaAbility') is not True and a.get('action',{}).get('paymentStrategy',{}).get('type') == 'AutoPay' for a in retained):
         productive = [a for a in retained if a.get('isManaAbility') is not True]
         if productive:
             if len(productive)!=len(retained): restrictions.append({'rule':'native-autopay-before-manual-mana'})
@@ -108,7 +138,9 @@ def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=()
                 # A mandatory target is selected before this optional trigger
                 # asks whether to destroy it. Keep a forced self target legal;
                 # the resolution policy declines destruction in that case.
-                if len(filtered) >= requirement.get('minTargets',1): pending['legalTargets'][slot] = filtered
+                if len(filtered) >= requirement.get('minTargets',1):
+                    ranked=sorted(filtered,key=lambda t:(-removal_target_value(o,t,facts),t))
+                    pending['legalTargets'][slot]=[t for t in ranked if removal_target_value(o,t,facts)>=removal_target_value(o,ranked[0],facts)-3][:3] if ranked else []
         restrictions.append({'rule':'reviewed-etb-removal-opponent-targets'})
     view['legalActions']=retained
     view['policyUtilityPlans']=plans

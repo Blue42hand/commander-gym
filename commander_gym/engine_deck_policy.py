@@ -55,10 +55,16 @@ class EngineDeckPolicy(ProfiledDeckPolicy):
         mull = next((a for a in o['legalActions'] if a['kind']=='TakeMulligan' and affordable(a)),None)
         return self._action(mull,self.key+'-opening-needs-engine-plan') if mull else base
 
-    def _role(self, card): return self.profile['roles'].get(card.get('name'))
+    def _role(self, card):
+        role=self.profile['roles'].get(card.get('name'),{'Land Tax':'ramp','Skullclamp':'draw_engine'}.get(card.get('name')))
+        f=self.facts.get(card.get('name'))
+        if role is None and 'DRAW' in f.get('tags',[]) and not f.get('affectsOpponent') and 'COUNTERSPELL' not in f.get('tags',[]):
+            return 'cantrip' if set(f.get('types',[])) & {'INSTANT','SORCERY'} else 'draw_engine' if f.get('repeatable') and 'Aura' not in f.get('subtypes',[]) else None
+        return role
 
     def _engines(self, o):
-        return [c for c in self._own(o) if self._role(c) in {'draw_engine','commander'}
+        from .policy_action_bounds import abilities_removed
+        return [c for c in self._own(o) if self._role(c) in {'draw_engine','commander'} and not abilities_removed(o,c)
                 and (self.key == 'sythis' or self._role(c) == 'draw_engine')]
 
     def _development_score(self, o, card, role):
@@ -113,6 +119,7 @@ class EngineDeckPolicy(ProfiledDeckPolicy):
         reserve = min(counters,key=lambda cost:cost[0]) if counters else None
         # Reserve an actual held interaction spell, never idle generic mana.
         if reserve is None: return True
+        if self._role(card)=='cantrip' and sum('LAND' in c.get('cardTypes',[]) for c in self._own(o))<5 and not any('LAND' in c.get('cardTypes',[]) for c in hand):return True
         cost = mana_cost(card.get('manaCost',self.facts.get(card.get('name')).get('manaCost','')))
         if cost is None: return False
         # Establish the commander/first engine before reserving interaction.
@@ -124,7 +131,9 @@ class EngineDeckPolicy(ProfiledDeckPolicy):
     def _draw_safe(self, o, card):
         own = self._own(o)
         discovery = any(c.get('name') == 'Kindred Discovery' for c in own)
-        if not discovery and card.get('name') != 'Kindred Discovery': return True
+        if not discovery and card.get('name') != 'Kindred Discovery':
+            player=next((p for p in o['state'].get('players',[]) if p['playerId']==o['agentToAct']),{})
+            return 'DRAW' not in self.facts.get(card.get('name')).get('tags',[]) or player.get('librarySize',99)>8
         player = next((p for p in o['state'].get('players',[]) if p['playerId']==o['agentToAct']),{})
         # Establish neither a mandatory draw engine nor new token production near
         # deck-out. An alternate-win replacement requires its own policy/model.
@@ -195,6 +204,8 @@ class EngineDeckPolicy(ProfiledDeckPolicy):
         return self._decision(p,'OptionChosenResponse',self.key+'-choose-engine-type',optionIndex=indexes[0])
 
     def _combat(self, o, offer):
+        shared=self._simple_combat(o,offer)
+        if shared is not None:return shared
         # Only quiet, unconstrained pressure plans are shortlisted. Mandatory
         # assignments, blocks, taxes, teams and unsupported boards retain native
         # inference. The model compares complete plans, never individual attackers.

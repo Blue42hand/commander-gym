@@ -238,7 +238,8 @@ class LathrilDeckSubsystem(DefaultPolicySubsystem):
                 c = self._card(o, target)
                 if c.get('controllerId') in (None, o['agentToAct']) or target not in ids_in(o['state'], 'Battlefield'):
                     continue
-                score = self.facts.get(c.get('name')).get('staticValue', 0) + max(0, c.get('power') or 0)
+                from .policy_action_bounds import removal_target_value
+                score=removal_target_value(o,target,self.facts,neutralize='NEUTRALIZE' in self.facts.get(card.get('name')).get('tags',[]))
                 if score >= 5:
                     candidates.append((score, a, target))
         return sorted(candidates, key=lambda x: (-x[0], x[1]['semanticId'], x[2]))
@@ -294,6 +295,9 @@ class LathrilDeckSubsystem(DefaultPolicySubsystem):
             cap = len(pairs)
         if type(cap) is not int or cap < 0:
             raise PilotContractError('lathril-incomplete-block-cap')
+        participants=set(pairs)|{i for values in pairs.values() for i in values}
+        if any(set(self._card(o,i).get('keywords',[])) & {'TRAMPLE','FIRST_STRIKE','DOUBLE_STRIKE','INFECT','WITHER','PROTECTION'} for i in participants):
+            raise PolicyNotApplicable('lathril-complex-combat-needs-inference')
         attackers = sorted(set(i for values in pairs.values() for i in values),
                            key=lambda i: (-(self._card(o,i).get('power') or 0),i))
         selected = {}; life = next((p.get('life',40) for p in o['state'].get('players',[]) if p['playerId']==o['agentToAct']),40)
@@ -314,6 +318,8 @@ class LathrilDeckSubsystem(DefaultPolicySubsystem):
 
     def _combat(self, o, offer):
         if offer['kind'] == 'DeclareBlockers':
+            shared=self._simple_combat(o,offer)
+            if shared is not None:return shared
             if offer.get('validBlockers') == [] and offer.get('validBlockTargets') == {} and not offer.get('mandatoryBlockerAssignments'):
                 return super()._combat(o, offer)
             return self._block(o, offer)
