@@ -14,7 +14,7 @@ class PublicCardFactsTest {
     private val revision = "12ab2f0ed5bd018334521dc52497e6444f26f5a9"
 
     @Test fun utilityManaAndCheckLandEntryRemainSeparateFromSimpleActivation() {
-        val cards = PublicCardFacts.export(registry, listOf("Myriad Landscape", "Arcane Lighthouse", "Sunpetal Grove", "Underground River", "Serra's Sanctum", "Command Tower", "Adarkar Wastes", "Alela, Artful Provocateur"), revision)["cards"]!!.jsonObject
+        val cards = PublicCardFacts.export(registry, listOf("Myriad Landscape", "Arcane Lighthouse", "Sunpetal Grove", "Underground River", "Serra's Sanctum", "Sanctum Weaver", "Command Tower", "Adarkar Wastes", "Alela, Artful Provocateur"), revision)["cards"]!!.jsonObject
         fun fact(name: String) = cards[name]!!.jsonObject
         assertEquals(listOf("C"), fact("Myriad Landscape")["manaColors"]!!.jsonArray.map { it.jsonPrimitive.content })
         assertEquals(listOf("C"), fact("Arcane Lighthouse")["manaColors"]!!.jsonArray.map { it.jsonPrimitive.content })
@@ -29,6 +29,8 @@ class PublicCardFactsTest {
         assertEquals(listOf("Forest", "Plains"), fact("Sunpetal Grove")["untappedIfLandSubtypes"]!!.jsonArray.map { it.jsonPrimitive.content })
         assertFalse(fact("Sunpetal Grove")["unconditionalUntapped"]!!.jsonPrimitive.boolean)
         assertTrue(fact("Serra's Sanctum")["variableMana"]!!.jsonPrimitive.boolean)
+        assertTrue(fact("Sanctum Weaver")["variableMana"]!!.jsonPrimitive.boolean)
+        assertFalse(fact("Command Tower")["variableMana"]!!.jsonPrimitive.boolean)
         assertEquals(listOf("W"), fact("Serra's Sanctum")["manaColors"]!!.jsonArray.map { it.jsonPrimitive.content })
     }
 

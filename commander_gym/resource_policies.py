@@ -2,7 +2,7 @@
 from collections import Counter
 from itertools import combinations
 from math import comb
-from .heuristic_policy import ids_in,mana_cost
+from .heuristic_policy import ids_in,mana_cost,affordable
 
 CONSTRAINTS = ('selectionLimits','conditionalMinimums','onePerCardType','onePerColor','onePerCardName',
                'onePerBasicLandType','onePerPower','maxTotalManaValue','minTotalManaValue','maxTotalPower')
@@ -41,6 +41,14 @@ class ResourcePolicies:
         rt=p.get('responseSpec',{}).get('responseType');ctx=p.get('context',{});source=ctx.get('sourceName')
         if rt=='ManaSourcesSelectedResponse' and (p.get('canAutoPayNow') is True or self._floating_payable(o,p.get('requiredCost',''))):
             return self._decision(p,rt,'default-fund-native-mana-request',autoPay=True,declined=False,selectedSources=[],waterbendPermanents=[])
+        if (rt=='ManaSourcesSelectedResponse' and p.get('canDecline') is True and p.get('availableSources')==[]
+            and p.get('waterbendPermanents')==[] and not p.get('autoPaySuggestion')
+            and not any(affordable(a) and a.get('isManaAbility') for a in o.get('legalActions',[]))):
+            cost=mana_cost(p.get('requiredCost',''));player=next((v for v in o['state'].get('players',[]) if v['playerId']==o['agentToAct']),{})
+            pool=player.get('manaPool',{});amounts=[pool.get(c,0) for c in ['white','blue','black','red','green','colorless']]
+            if cost is not None and not pool.get('restrictedMana') and all(type(n) is int and n>=0 for n in amounts) and sum(amounts)<cost[0]:
+                if ctx.get('phase')=='COMBAT' and source=='Attack tax':self._unfunded_attack=(o['agentToAct'],o['state'].get('turnNumber'),o['state'].get('currentStep'))
+                return self._decision(p,rt,'default-decline-proven-unfunded-payment',autoPay=False,declined=True,selectedSources=[],waterbendPermanents=[])
         prompt=p.get('prompt','');prefix='Pay ';suffix=' to prevent your spell from being countered?'
         if (rt=='YesNoResponse' and p.get('yesAvailable') is True and prompt.startswith(prefix) and prompt.endswith(suffix)
             and ctx.get('phase')=='RESOLUTION' and not any(p.get(k) for k in ['peerOptions','yesDetail','noDetail'])

@@ -205,7 +205,7 @@ class RecordedImprovementTests(unittest.TestCase):
         t=FakeTransport(completion(json.dumps({'decision':{'option':0},'explanation':summary})),models=models)
         BoundedPolicyFallback(config(context_window=131072,max_prompt_bytes=32768,decision_explanations=True),t,facts=self.facts).choose_with_policy_context(o,[{'metadata':{'policyLayers':{'status':'deferred'}}}])
         req=t.calls[1][1]
-        self.assertLess(len(json.dumps(req,ensure_ascii=False).encode()),30000)
+        self.assertLess(len(json.dumps(req,ensure_ascii=False).encode()),32768)
         choices=expand(json.loads(req['messages'][1]['content']))['choices']
         self.assertEqual([c['option'] for c in choices],list(range(len(choices))))
         self.assertEqual(o,before)

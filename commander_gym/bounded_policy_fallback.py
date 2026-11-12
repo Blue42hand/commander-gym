@@ -176,6 +176,7 @@ def validate_selection_bounds(wire, o):
 
 
 def _candidate_description(wire, o):
+    from .policy_action_bounds import abilities_removed
     cards = {**o.get('state', {}).get('cards', {}), **_pending_card_map(o.get('pendingDecision') or {})}
     players = {p['playerId']:p.get('name', p['playerId']) for p in o.get('state', {}).get('players', [])}
     def describe(value):
@@ -184,7 +185,9 @@ def _candidate_description(wire, o):
         if isinstance(value, str) and value in cards:
             return {'entity':value, 'name':cards[value].get('name'), 'controller':cards[value].get('controllerId'),
                     'relationship':'self' if cards[value].get('controllerId') == o['agentToAct'] else 'opponent' if cards[value].get('controllerId') else 'unknown',
-                    'zone':cards[value].get('zone'), 'power':cards[value].get('power'), 'toughness':cards[value].get('toughness')}
+                    'zone':cards[value].get('zone'), 'power':cards[value].get('power'), 'toughness':cards[value].get('toughness'),
+                    'typeLine':cards[value].get('typeLine'), 'keywords':cards[value].get('keywords'),
+                    **({'printedAbilitiesRemoved':True} if abilities_removed(o,cards[value]) else {})}
         if isinstance(value, str) and value in players: return players[value]
         return value
     if wire['channel'] == 'decision':
@@ -220,6 +223,9 @@ def decision_context(o, *, frozen, policy_context, facts):
         for entity, info in _pending_card_map(p).items():
             if entity not in cards:
                 cards[entity] = clean({k:v for k,v in info.items() if k in _CARD_FIELDS})
+    from .policy_action_bounds import abilities_removed
+    for entity,card in cards.items():
+        if abilities_removed(o,s.get('cards',{}).get(entity,{})):card['printedAbilitiesRemoved']=True
     # Public history can grow indefinitely. Keep identities and ownership for
     # inactive cards; retain complete rules whenever an affordable offer or a
     # pending decision references the card, or it has an observed active effect.
@@ -246,6 +252,22 @@ def decision_context(o, *, frozen, policy_context, facts):
             for subtype in facts.get(name).get('subtypes', []): subtype_counts[subtype] = subtype_counts.get(subtype,0)+count
     view = {'actor':o['agentToAct'], 'state':{k:clean(s[k]) for k in ['turnNumber','currentStep','activePlayerId','priorityPlayerId','players','combat','mulligan'] if k in s},
             'cards':cards, 'zones':zones, 'deckSubtypeCounts':subtype_counts, 'policy':policy_context}
+    if frozen and p is None and o.get('nativePaymentError') is None:
+        automatic=[a for a in o.get('legalActions',[]) if affordable(a) and a.get('isManaAbility') is not True and a.get('action',{}).get('paymentStrategy',{}).get('type')=='AutoPay']
+        if automatic:
+            sources={}
+            for action in automatic:
+                for source in action.get('availableManaSources') or []:
+                    if source.get('entityId') in cards:
+                        sources[source['entityId']]={k:v for k,v in source.items() if k in {'entityId','manaAmount','producesColors','producesColorless','requiresSacrifice','requiresTappingAnotherPermanent'}}
+            view['nativePaymentStatus']='These complete action choices are base-payable now; AutoPay can activate untapped sources. Floating mana is not required.'
+            if sources:view['actorNativeManaSources']={entity:{k:v for k,v in row.items() if k!='entityId'} for entity,row in sources.items()}
+            def empty(value):
+                if isinstance(value,dict):return all(empty(v) for v in value.values())
+                if isinstance(value,list):return all(empty(v) for v in value)
+                return value is None or value is False or type(value) in {int,float} and value==0
+            for player in view['state'].get('players',[]):
+                if player.get('playerId')==o['agentToAct'] and empty(player.get('manaPool')):player.pop('manaPool',None)
     view['actorZones'] = {z['zoneId']['zoneType']:z.get('cardIds',[]) for z in zones if z.get('zoneId',{}).get('ownerId') == o['agentToAct']}
     view['actingCommander'] = [{'entity':i,'name':c.get('name')} for i,c in cards.items() if c.get('isCommander') and c.get('ownerId',c.get('controllerId')) == o['agentToAct']]
     if p is not None:
@@ -316,7 +338,7 @@ def compact_decision_context(view):
         return {'columns':columns, 'rows':{key:cells(row) for key,row in rows.items()}}
     # Null table cells mean an omitted model-view field. Original null/false
     # omission semantics are unchanged; no native constraint is omitted here.
-    for key in ['cards','cardDefinitions']:
+    for key in ['cards','cardDefinitions','actorNativeManaSources']:
         if view.get(key): view[key] = table(view[key])
     if actions:
         view['legalActions'] = table({str(i):a for i,a in enumerate(view['legalActions'])})
@@ -446,7 +468,7 @@ class BoundedPolicyFallback:
         return self.choose_with_policy_context(observation, ())
 
     def choose_with_policy_context(self, o, attempts):
-        context = None; hints = None; base_attempts = []; self_target_exceptions = set(); tutor_engines = set()
+        context = None; hints = None; base_attempts = []; self_target_exceptions = set(); tutor_engines = set(); timing_exceptions=set()
         for attempt in attempts:
             m = attempt.get('metadata', {})
             if m.get('policyLayers'): base_attempts.append(m['policyLayers'])
@@ -454,13 +476,14 @@ class BoundedPolicyFallback:
             if m.get('candidateChoices'): hints = m['candidateChoices']
             self_target_exceptions.update(m.get('approvedSelfTargetEffects',[]))
             tutor_engines.update(m.get('reviewedTutorEngines',[]))
+            timing_exceptions.update(m.get('approvedReactiveTimings',[]))
         # Legacy manifests without a skill still receive the default base layer.
         if not base_attempts:
             result = self.defaults.try_choose(o)
             if result.choice is not None: return result.choice
             base_attempts.append(result.metadata['policyLayers']); context = result.metadata['policyContext']
         from .policy_action_bounds import bounded_observation
-        o, restrictions = bounded_observation(o, self.defaults.facts, allow_self_targets=self_target_exceptions, preferred_engines=tutor_engines)
+        o, restrictions = bounded_observation(o, self.defaults.facts, allow_self_targets=self_target_exceptions, preferred_engines=tutor_engines, reaction_timing_exceptions=timing_exceptions)
         wires = enumerate_choices(o)
         if hints:
             by_id = {a['actionId']:a for a in o.get('legalActions', [])}
@@ -543,6 +566,7 @@ class BoundedPolicyFallback:
                          ' battlefieldSummary counts live creatures, while deckSubtypeCounts counts printed cards in the registered deck. Never substitute deck counts for battlefield counts.'
                          ' Convoke affordability can include creature taps. For native-schema casts, supply xValue and convokedCreatures when mana alone cannot cover the cost.'
                          ' Every supplied frozen choice is currently native-affordable. An empty mana pool does not prevent native AutoPay from tapping sources.'
+                         " printedAbilitiesRemoved marks a reviewed Aura suppressing the creature's printed abilities; printed cardDefinitions do not restore those abilities."
                          ' Source and target facts identify the exact live entities. Current types, stats, keywords and ability flags take precedence over printed rules after transformations.'
                          ' summarizedInactiveCards retain identities, ownership, type and cost; their rules are omitted because no current affordable action or pending decision references them. All battlefield and current candidate rules remain available.'
                          ' Stack cards retain chosen targets and current effect text. Check whether a pending response already answers a threat before spending another card on it.'

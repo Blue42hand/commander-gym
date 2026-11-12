@@ -102,3 +102,13 @@ tasks.register<JavaExec>("runConvokeSavedStateProbe") {
     classpath = sourceSets["test"].runtimeClasspath
     mainClass.set("org.commandergym.argentum.ConvokeSavedStateProbe")
 }
+
+tasks.register<JavaExec>("runSavedStateActionProbe") {
+    group = "verification"
+    dependsOn(tasks.named("testClasses"))
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("org.commandergym.argentum.SavedStateActionProbe")
+    if (providers.gradleProperty("probeInput").isPresent && providers.gradleProperty("probeOutput").isPresent) {
+        args(providers.gradleProperty("probeInput").get(), providers.gradleProperty("probeOutput").get())
+    }
+}

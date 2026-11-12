@@ -50,6 +50,7 @@ class DefaultPolicySubsystem(SharedCardPolicies, MaskedHeuristicSubsystem):
     deck_policy = None
     # Trusted deck code can approve specific rescue/combo self-target effects.
     self_target_exceptions = frozenset()
+    reaction_timing_exceptions = frozenset()
 
     def __init__(self, facts=None):
         super().__init__(facts or UnknownCardFacts())
@@ -58,9 +59,9 @@ class DefaultPolicySubsystem(SharedCardPolicies, MaskedHeuristicSubsystem):
     def try_choose(self, observation):
         from .policy_action_bounds import bounded_observation
         tutor_engines = sorted(n for n,role in self.document['roles'].items() if role=='draw_engine')
-        bounded, restrictions = bounded_observation(observation, self.facts, allow_self_targets=self.self_target_exceptions, preferred_engines=tutor_engines)
+        bounded, restrictions = bounded_observation(observation, self.facts, allow_self_targets=self.self_target_exceptions, preferred_engines=tutor_engines, reaction_timing_exceptions=self.reaction_timing_exceptions)
         result = super().try_choose(bounded)
-        metadata = {**result.metadata, 'reviewedTutorEngines':tutor_engines, 'approvedSelfTargetEffects':sorted(self.self_target_exceptions), 'policyRestrictions': restrictions, 'utilityPlans':bounded.get('policyUtilityPlans',[]), 'policyLayers': {
+        metadata = {**result.metadata, 'reviewedTutorEngines':tutor_engines, 'approvedReactiveTimings':sorted(self.reaction_timing_exceptions), 'approvedSelfTargetEffects':sorted(self.self_target_exceptions), 'policyRestrictions': restrictions, 'utilityPlans':bounded.get('policyUtilityPlans',[]), 'policyLayers': {
             'defaults': 'default-policies-v2', 'deck': self.deck_policy,
             'status': 'handled' if result.choice is not None else 'deferred'},
             'policyContext': {'policy': self.document['policy_id'], 'objectives': list(self.document['rules'].values())}}
@@ -70,6 +71,12 @@ class DefaultPolicySubsystem(SharedCardPolicies, MaskedHeuristicSubsystem):
 
     def _choose(self, o):
         if not isinstance(o.get('state'), dict): return SubsystemDecision(reason='default-missing-masked-state')
+        key=(o['agentToAct'],o['state'].get('turnNumber'),o['state'].get('currentStep'))
+        if getattr(self,'_unfunded_attack',None)!=key:self._unfunded_attack=None
+        elif o.get('pendingDecision') is None:
+            declaration=next((a for a in o.get('legalActions',[]) if a.get('kind')=='DeclareAttackers'),None)
+            if declaration and not declaration.get('mandatoryAttackers'):
+                return self._action(declaration,'default-cancel-unfunded-attack',{'attackers':{}})
         if 'mulligan' in o.get('state', {}): return self._opening(o)
         if o.get('pendingDecision') is not None: return self._pending(o, o['pendingDecision'])
         shared = self._card_actions(o)

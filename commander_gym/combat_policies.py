@@ -2,13 +2,24 @@
 from .heuristic_policy import ids_in
 
 
+def has_landwalk_lane(o,attacker,defender):
+    """Only current native keywords and revealed land subtypes establish the lane."""
+    cards=o['state'].get('cards',{});keywords=set(attacker.get('keywords',[]))
+    for word,subtype in [('FORESTWALK','Forest'),('ISLANDWALK','Island'),('SWAMPWALK','Swamp'),('MOUNTAINWALK','Mountain'),('PLAINSWALK','Plains')]:
+        if word in keywords and any('LAND' in cards.get(i,{}).get('cardTypes',[]) and subtype in cards[i].get('subtypes',[]) for i in ids_in(o['state'],'Battlefield',defender)):return True
+    return False
+
+
 def combat_choice(policy,o,a):
     s=o['state'];me=o['agentToAct'];cards=s.get('cards',{});kind=a.get('kind')
     if (kind not in {'DeclareAttackers','DeclareBlockers'} or a.get('additionalCostInfo')
         or any(p.get('teamIndex') is not None or p.get('activeEffects') for p in s.get('players',[]))
         or a.get('mandatoryBlockers') or a.get('mandatoryAttackers') or a.get('loneAttackers') or a.get('mandatoryBlockerAssignments')):return None
     board=[cards[i] for i in ids_in(s,'Battlefield') if i in cards]
-    if any(c.get('isFaceDown') or c.get('isPhasedOut') or c.get('name') in {'Propaganda','Ghostly Prison','Sphere of Safety','Dueling Grounds'} for c in board):return None
+    if any(c.get('isFaceDown') or c.get('isPhasedOut') for c in board):return None
+    if kind=='DeclareAttackers':
+        from .policy_action_bounds import attack_tax_defenders
+        if attack_tax_defenders(o)&set(a.get('validAttackTargets') or []) or any(c.get('name')=='Dueling Grounds' for c in board):return None
     def creature(c):return 'CREATURE' in c.get('cardTypes',[])
     def kw(c):return set(c.get('keywords',[]))
     def power(c):return max(0,c.get('power') or 0)
@@ -35,7 +46,7 @@ def combat_choice(policy,o,a):
                 c=cards.get(i,{})
                 pairs=a.get('attackTargetsByAttacker');allowed=pairs.get(i,[]) if isinstance(pairs,dict) else targets
                 if target not in allowed or not power(c) or c.get('isTapped') or c.get('hasSummoningSickness') and 'HASTE' not in kw(c):continue
-                legal=[b for b in blockers if 'FLYING' not in kw(c) or kw(b)&{'FLYING','REACH'}]
+                legal=[] if has_landwalk_lane(o,c,target) else [b for b in blockers if 'FLYING' not in kw(c) or kw(b)&{'FLYING','REACH'}]
                 if 'MENACE' in kw(c) and len(legal)<2:legal=[]
                 if legal and any(kw(v)&{'TRAMPLE','DOUBLE_STRIKE','FIRST_STRIKE','PROTECTION','SHADOW','HORSEMANSHIP'} for v in [c,*legal]):return None
                 # Open lanes are safe; small ground attackers never trade a

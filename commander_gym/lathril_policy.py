@@ -361,7 +361,8 @@ class LathrilDeckSubsystem(DefaultPolicySubsystem):
             for target in targets:
                 if target not in allowed:
                     continue
-                blockers = [b for b in ids_in(o['state'], 'Battlefield', target) if 'CREATURE' in self._card(o, b).get('cardTypes', []) and not self._card(o, b).get('isTapped')]
+                from .combat_policies import has_landwalk_lane
+                blockers = [] if has_landwalk_lane(o,c,target) else [b for b in ids_in(o['state'], 'Battlefield', target) if 'CREATURE' in self._card(o, b).get('cardTypes', []) and not self._card(o, b).get('isTapped')]
                 threshold = 2 if c.get('name') == self.document['commander'] and 'MENACE' in c.get('keywords', []) else 1
                 if len(blockers) < threshold:
                     selected[i] = target; break

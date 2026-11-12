@@ -59,6 +59,11 @@ class SharedCardPolicies(ResourcePolicies):
     def _card_pending(self, o, p):
         resources=self._resource_pending(o,p)
         if resources is not None:return resources
+        from .policy_action_bounds import reviewed_exile_decision
+        if reviewed_exile_decision(p):
+            slot=str(p['targetRequirements'][0]['index']);targets=p['legalTargets'].get(slot)
+            if isinstance(targets,list) and len(targets)==1:
+                return self._decision(p,p['responseSpec']['responseType'],'shared-card-clear-removal-target',selectedTargets={slot:targets})
         context = p.get('context', {}); source = context.get('sourceName')
         rt = p.get('responseSpec', {}).get('responseType')
         optional_benefits={

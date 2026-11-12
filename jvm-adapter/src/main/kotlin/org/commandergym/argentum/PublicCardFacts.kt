@@ -131,6 +131,7 @@ object PublicCardFacts {
                 ability.isManaAbility && when (val effect = ability.effect) {
                     is AddManaEffect -> effect.amount !is DynamicAmount.Fixed
                     is AddColorlessManaEffect -> effect.amount !is DynamicAmount.Fixed
+                    is AddManaOfChoiceEffect -> effect.amount !is DynamicAmount.Fixed
                     else -> false
                 }
             })
