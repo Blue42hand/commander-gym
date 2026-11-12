@@ -82,3 +82,18 @@ unblocked opponents with known life totals. Recursion, modal spells, complicated
 payments and tutor constraints are deliberately restricted; the pilot may hold
 useful cards or stop on unsupported decisions. A complete future game and win
 rate are not established by historical-position coverage.
+
+
+Opening and land policy corrections (mirror regression)
+----------------------------------------------------
+Land selection now accounts for Cemetery and forced tapped lands, the useful spells
+that a land enables immediately, and colored pips in the visible hand. This is a
+planning estimate; native legality and payment remain authoritative. Bottoming
+compares complete retained hands, protects the first three land drops and color
+coverage, and values tutors and cheap recursion separately from expensive recovery.
+A castable Demonic Tutor counts as an early setup line and has an explicit cast
+path. Native Scry 1 uses its exact prompt, labels, offered card, and response shape,
+without relying on the misleading triggering source name. It bottoms surplus lands
+when four land drops are already available, and delays situational cards early.
+The recorded mirror regressions cover the missed Sol Ring start, green-source
+choice, Witness/Bidding choice, redundant Swamp, tutor opening, and failed scry.

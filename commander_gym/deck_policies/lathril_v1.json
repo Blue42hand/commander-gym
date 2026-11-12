@@ -5,14 +5,15 @@
   "deck_fingerprint": "2df76a2026e87b51c9b6f802327569136f2382bda8605767db87eb6bb12a8720",
   "primer_fingerprint": "43b9177f9a2fb5e1064b8676ee3ddda494903411caeddb25a870241f0c44ed28",
   "rules": {
-    "opening": "Keep colored mana plus acceleration or an early Elf; stop mulliganing at five cards.",
+    "opening": "Keep colored mana plus acceleration, an early Elf, or a castable Demonic Tutor; stop after two mulligans (six cards in multiplayer with its free first mulligan).",
     "develop": "Make land drops; develop mana, then draw engines and Lathril, then a wide Elf board.",
     "tribe": "Choose Elf for the registered tribal payoffs.",
     "mana": "Cast with native automatic payment. Never float mana without a selected useful action.",
     "recovery": "Reserve recursion and sweepers; do not cast them merely because they are legal.",
     "combat": "Prefer Lathril connections and preserve the ten-Elf drain board; use native attack pairs.",
     "tutor": "Prefer interaction when behind and engines otherwise. Overrun requires a demonstrated lethal attack.",
-    "uncertainty": "Only escalate among complete policy-approved choices. Unsupported mechanics fail visibly."
+    "uncertainty": "Only escalate among complete policy-approved choices. Unsupported mechanics fail visibly.",
+    "scry": "For native Scry 1, bottom redundant lands once four land drops are available, and delay expensive situational cards on an undeveloped board."
   },
   "weights": {
     "mana_elf": 100,
@@ -136,5 +137,21 @@
     "Etchings of the Chosen"
   ],
   "advisor_max_bytes": 8192,
-  "advisor_max_candidates": 3
+  "advisor_max_candidates": 3,
+  "opening_weights": {
+    "mana_elf": 100,
+    "mana_engine": 90,
+    "draw_engine": 85,
+    "commander": 80,
+    "token_engine": 70,
+    "lord": 65,
+    "elf": 50,
+    "utility": 30,
+    "recovery": 45,
+    "tutor": 65,
+    "interaction": 40,
+    "removal": 50,
+    "finisher": 15,
+    "sweeper": 10
+  }
 }

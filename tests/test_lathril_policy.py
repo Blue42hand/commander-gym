@@ -44,6 +44,38 @@ class LathrilPolicyTests(unittest.TestCase):
         o['legalActions'][1].update(actionId=8,semanticId='fresh')
         self.assertEqual(p.try_choose(o).choice.action_id,8)
 
+    def test_recorded_mirror_opening_and_land_regressions(self):
+        fixtures = json.loads((Path(__file__).parent / 'fixtures/lathril_mirror_regressions.json').read_text())
+        p = policy()
+        for seq, expected in [('558', 'Swamp'), ('1050', 'Forest')]:
+            with self.subTest(sequence=seq):
+                o = fixtures[seq]; c = p.try_choose(o).choice
+                a = next(a for a in o['legalActions'] if a['actionId'] == c.action_id)
+                self.assertEqual(o['state']['cards'][a['action']['cardId']]['name'], expected)
+        for seq, expected in [('16', "Patriarch's Bidding"), ('77', 'Swamp')]:
+            with self.subTest(sequence=seq):
+                o = fixtures[seq]; c = p.try_choose(o).choice
+                self.assertEqual([o['pendingDecision']['cards'][i]['name'] for i in c.response['selectedCards']], [expected])
+        o = fixtures['73']; c = p.try_choose(o).choice
+        self.assertEqual(next(a for a in o['legalActions'] if a['actionId'] == c.action_id)['kind'], 'KeepHand')
+
+    def test_recorded_scry_uses_offered_card_and_current_land_needs(self):
+        o = json.loads((Path(__file__).parent / 'fixtures/lathril_mirror_regressions.json').read_text())['scry']
+        self.assertEqual(policy().try_choose(o).choice.response['selectedCards'], o['pendingDecision']['options'])
+        o['state']['zones'] = []
+        self.assertEqual(policy().try_choose(o).choice.response['selectedCards'], [])
+        o['pendingDecision']['prompt'] = 'Choose a card to discard'
+        with self.assertRaises(PilotContractError):
+            policy().try_choose(o)
+
+    def test_cemetery_untaps_after_basic_and_tutor_has_execution_path(self):
+        p = policy()
+        self.assertTrue(p._enters_tapped({'name':'Woodland Cemetery'}, []))
+        self.assertFalse(p._enters_tapped({'name':'Woodland Cemetery'}, [{'name':'Swamp'}]))
+        o = observation(offer('PassPriority',0), offer('CastSpell',1,card='tutor'))
+        zone(o,'Hand','me',tutor={'name':'Demonic Tutor','manaCost':'{1}{B}'})
+        self.assertEqual(p.try_choose(o).choice.action_id,1)
+
     def test_choose_elf_by_exact_label_even_if_indices_change(self):
         p=policy()
         for options in [['Archon','Artificer','Elf'],['Elf','Archon']]:
