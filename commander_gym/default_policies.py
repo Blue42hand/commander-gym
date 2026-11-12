@@ -208,6 +208,14 @@ class DefaultPolicySubsystem(SharedCardPolicies, MaskedHeuristicSubsystem):
     def _pending(self, o, p):
         override = self._deck_pending(o, p)
         if override is not None: return override
+        context = p.get('context',{}); source = context.get('sourceId'); card = self._card(o,source)
+        if (p.get('kind') == 'YesNoDecision' and p.get('responseSpec',{}).get('responseType') == 'YesNoResponse'
+            and p.get('yesAvailable') is True and p.get('yesText') == 'Command zone'
+            and context.get('phase') == 'STATE_BASED' and card.get('isCommander')
+            and card.get('ownerId',card.get('controllerId')) == o['agentToAct']
+            and any(source in ids_in(o['state'],zone,o['agentToAct']) for zone in ['Graveyard','Exile'])
+            and p.get('prompt') in {f"Put {card.get('name')} into the command zone instead of leaving it in the {zone}?" for zone in ['graveyard','exile']}):
+            return self._decision(p,'YesNoResponse','default-return-commander-to-command-zone',choice=True)
         shared = self._card_pending(o, p)
         if shared is not None: return shared
         rt = p.get('responseSpec', {}).get('responseType'); context = p.get('context', {})

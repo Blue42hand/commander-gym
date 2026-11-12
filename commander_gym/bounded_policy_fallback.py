@@ -97,7 +97,17 @@ def enumerate_choices(o):
         for a in o.get('legalActions', []):
             if not affordable(a): continue
             if a['kind'] in {'DeclareAttackers', 'DeclareBlockers'}: return None
-            if not DefaultPolicySubsystem._plain_cast(a) or any(a.get(k) for k in ['requiresManaColorChoice','hasTapForGeneric','hasHarmonize','tapForPower','xConstrainsTargetManaValue','xConstrainsTargetManaValueExactly','xConstrainsTargetPower','xConstrainsTargetCount','xConstrainsTargetCountExactly']): return None
+            payment = {}; plain = a
+            cost = a.get('additionalCostInfo') or {}
+            if cost:
+                source = a.get('action',{}).get('sourceId')
+                if (a.get('kind') != 'ActivateAbility' or cost.get('costType') != 'SacrificeSelf'
+                    or cost.get('validSacrificeTargets') != [source] or cost.get('sacrificeCount') != 1
+                    or cost.get('alsoRequired') or a.get('parameterSpec',{}).get('allowedFields',{}).get('sacrificedPermanents') != 'ENTITY_ID_ARRAY'):
+                    return None
+                payment = {'sacrificedPermanents':[source]}
+                plain = {**a,'additionalCostInfo':None}
+            if not DefaultPolicySubsystem._plain_cast(plain) or any(a.get(k) for k in ['requiresManaColorChoice','hasTapForGeneric','hasHarmonize','tapForPower','xConstrainsTargetManaValue','xConstrainsTargetManaValueExactly','xConstrainsTargetPower','xConstrainsTargetCount','xConstrainsTargetCountExactly']): return None
             if type(a.get('maxRepeatableActivations')) is int and a['maxRepeatableActivations'] > 1: return None
             if any(type(a.get(k)) is int and a[k] > 0 for k in ['maxOptionalCostTimes','maxAdditionalManaForCounters']): return None
             if a.get('requiresTargets') is True:
@@ -105,11 +115,11 @@ def enumerate_choices(o):
                     return None
                 targets = a.get('validTargets') or []
                 if len(choices) + len(targets) > MAX_CHOICES: return None
-                choices.extend(_action(a, {'targets':[t]}) for t in targets)
+                choices.extend(_action(a, {**payment,'targets':[t]}) for t in targets)
             elif (a.get('parameterSpec', {}).get('allowedFields') == {}
                   or a.get('requiresTargets') is False and a.get('validTargets') in (None,[]) and a.get('targetRequirements') is None and (a['kind'] in {'CastSpell', 'PlayLand', 'PassPriority'}
-                      or set(a.get('parameterSpec', {}).get('allowedFields', {})) <= {'targets','targetGroups','xValue'})):
-                choices.append(_action(a))
+                      or set(a.get('parameterSpec', {}).get('allowedFields', {})) <= ({'targets','targetGroups','xValue','sacrificedPermanents','sacrifice'} if payment else {'targets','targetGroups','xValue'}))):
+                choices.append(_action(a,payment))
             else: return None
             if len(choices) > MAX_CHOICES: return None
     return choices if 0 < len(choices) <= MAX_CHOICES else None
@@ -195,6 +205,8 @@ def decision_context(o, *, frozen, policy_context, facts):
             for subtype in facts.get(name).get('subtypes', []): subtype_counts[subtype] = subtype_counts.get(subtype,0)+count
     view = {'actor':o['agentToAct'], 'state':{k:clean(s[k]) for k in ['turnNumber','currentStep','activePlayerId','priorityPlayerId','players','combat','mulligan'] if k in s},
             'cards':cards, 'zones':zones, 'deckSubtypeCounts':subtype_counts, 'policy':policy_context}
+    view['actorZones'] = {z['zoneId']['zoneType']:z.get('cardIds',[]) for z in zones if z.get('zoneId',{}).get('ownerId') == o['agentToAct']}
+    view['actingCommander'] = [{'entity':i,'name':c.get('name')} for i,c in cards.items() if c.get('isCommander') and c.get('ownerId',c.get('controllerId')) == o['agentToAct']]
     if p is not None:
         view['decision'] = clean({k:v for k,v in p.items() if k != 'cardInfo' and (k != 'cards' or not isinstance(v,dict)) and (not frozen or k not in {'options','hand','semanticId','responseSpec','id'})})
     if not frozen:
@@ -477,6 +489,8 @@ class BoundedPolicyFallback:
                          ' Tables contain columns and rows keyed by entity or row ID; zip columns with each row and omit null cells.'
                          ' Replace each {$v:N} with sharedValues[N] recursively before reading tables and defaults.'
                          ' Choices have explicit zero-based option numbers; card and target IDs refer to the card table and player IDs.'
+                         ' actorZones identifies your cards by zone; cards in Command are not creatures on the battlefield.'
+                         ' actingCommander identifies your commander; other commanders belong to opponents.'
                          ' Verify the selected option matches the action described in your explanation.'
                          ' Apply these defaults before evaluating choices. All current offers and constraints are retained.')
         choice = self.model._choose(o, response_format=fmt, model_view=view,

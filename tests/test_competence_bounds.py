@@ -209,3 +209,35 @@ class RecordedImprovementTests(unittest.TestCase):
         choices=expand(json.loads(req['messages'][1]['content']))['choices']
         self.assertEqual([c['option'] for c in choices],list(range(len(choices))))
         self.assertEqual(o,before)
+
+class SelfSacrificeFallbackTests(unittest.TestCase):
+    def test_recorded_seal_keeps_native_target_and_cost_out_of_model_output(self):
+        from pathlib import Path
+        from test_lmstudio import discovery
+        from commander_gym.heuristic_facts import CardFacts
+        from commander_gym.bounded_policy_fallback import enumerate_choices
+        root=Path(__file__).parent/'fixtures';o=json.load(open(root/'seal-sacrifice-fallback.json'))
+        f=CardFacts.load(root/'competence-public-facts.json');b,_=bounded_observation(o,f)
+        wires=enumerate_choices(b)
+        chosen=next(w for w in wires if w.get('choice',{}).get('params',{}).get('targets')==['e107'])
+        self.assertEqual(chosen['choice']['params'],{'targets':['e107'],'sacrificedPermanents':['e251']})
+        models=discovery();models['models'][0]['loaded_instances'][0]['config']['context_length']=131072
+        t=FakeTransport(completion(json.dumps({'option':wires.index(chosen)})),models=models)
+        r=BoundedPolicyFallback(config(context_window=131072,max_prompt_bytes=32768),t,facts=f).choose_with_policy_context(o,[{'metadata':{'policyLayers':{'status':'deferred'}}}])
+        self.assertEqual(r.params,chosen['choice']['params'])
+        self.assertEqual(r.metadata['boundedFallback']['mode'],'frozen-choices')
+        a=next(a for a in b['legalActions'] if a.get('action',{}).get('abilityId')=='Seal of Primordium:1')
+        a['additionalCostInfo']['alsoRequired']=[{'costType':'Discard'}]
+        self.assertIsNone(enumerate_choices(b))
+
+    def test_native_commander_recovery_default_can_be_overridden(self):
+        from pathlib import Path
+        from commander_gym.heuristic_facts import CardFacts
+        root=Path(__file__).parent/'fixtures';o=json.load(open(root/'commander-return-fallback.json'))
+        f=CardFacts.load(root/'competence-public-facts.json')
+        self.assertTrue(DefaultPolicySubsystem(f).try_choose(o).choice.response['choice'])
+        class GraveyardPlan(DefaultPolicySubsystem):
+            def _deck_pending(self,o,p):return self._decision(p,'YesNoResponse','reviewed-graveyard-plan',choice=False)
+        self.assertFalse(GraveyardPlan(f).try_choose(o).choice.response['choice'])
+        o['pendingDecision']['context']['phase']='RESOLUTION'
+        self.assertIsNone(DefaultPolicySubsystem(f).try_choose(o).choice)
