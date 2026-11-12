@@ -34,8 +34,14 @@ class CardFacts:
                   'staticValue', 'repeatable', 'affectsOpponent', 'feeds', 'rewards', 'tribesRewarded'}
         fields |= {'freeOptionalDraws', 'drawSensitive'}
         for name, fact in document['cards'].items():
-            if not isinstance(name, str) or not name or not isinstance(fact, dict) or set(fact) != fields:
+            if not isinstance(name, str) or not name or not isinstance(fact, dict) or not fields <= set(fact) or set(fact) - fields - {'untappedIfLandSubtypes', 'variableMana'}:
                 raise ValueError('invalid native card fact fields')
+            entry = fact.get('untappedIfLandSubtypes', [])
+            if (not isinstance(entry, list) or any(not isinstance(v,str) for v in entry)
+                or set(entry) - {'Forest','Swamp','Plains','Island','Mountain'}):
+                raise ValueError('invalid native land entry condition')
+            if 'variableMana' in fact and type(fact['variableMana']) is not bool:
+                raise ValueError('invalid variable mana flag')
             for key in ('simpleMana', 'simplePermanent', 'unconditionalUntapped', 'entersTapped', 'repeatable', 'affectsOpponent', 'drawSensitive'):
                 if type(fact[key]) is not bool:
                     raise ValueError('invalid native card fact boolean')

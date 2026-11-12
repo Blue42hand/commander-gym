@@ -4,6 +4,12 @@ import com.wingedsheep.ai.engine.knowledge.CardIntentAnalyzer
 import com.wingedsheep.ai.engine.knowledge.SynergyAxes
 import com.wingedsheep.ai.engine.knowledge.TargetPolarityAnalyzer
 import com.wingedsheep.engine.registry.CardRegistry
+import com.wingedsheep.sdk.core.Zone
+import com.wingedsheep.sdk.scripting.EntersTapped
+import com.wingedsheep.sdk.scripting.GameObjectFilter
+import com.wingedsheep.sdk.scripting.conditions.AnyCondition
+import com.wingedsheep.sdk.scripting.conditions.Exists
+import com.wingedsheep.sdk.scripting.references.Player
 import com.wingedsheep.sdk.core.Subtype
 import com.wingedsheep.sdk.model.CardDefinition
 import com.wingedsheep.sdk.scripting.AbilityCost
@@ -66,11 +72,18 @@ object PublicCardFacts {
         val simpleMana = noStatic && noTriggers && noReplacement &&
             (simpleAbilities || card.typeLine.isLand && basics.isNotEmpty() && activated.isEmpty())
         val manaColors = basics.toMutableSet()
-        if (simpleAbilities) {
+        if (activated.isNotEmpty()) {
             // Read the SDK's serialized fixed mana effect. Unknown shapes supply
             // no color estimate rather than guessing from Oracle text.
-            for (ability in script["activatedAbilities"]!!.jsonArray) {
-                val effect = ability.jsonObject["effect"]!!.jsonObject
+            for ((index, ability) in activated.withIndex()) {
+                // A utility ability must not hide an independent, ordinary tap
+                // mana mode. Color knowledge does not authorize its activation.
+                if (!ability.isManaAbility || ability.cost != AbilityCost.Tap) continue
+                val nativeEffect = ability.effect
+                if (nativeEffect !is AddManaEffect && nativeEffect !is AddColorlessManaEffect) continue
+                if (nativeEffect is AddManaEffect && (nativeEffect.restriction != null || nativeEffect.riders.isNotEmpty())) continue
+                if (nativeEffect is AddColorlessManaEffect && (nativeEffect.restriction != null || nativeEffect.riders.isNotEmpty())) continue
+                val effect = script["activatedAbilities"]!!.jsonArray[index].jsonObject["effect"]!!.jsonObject
                 when (effect["type"]?.jsonPrimitive?.content) {
                     "AddColorlessMana" -> manaColors.add("C")
                     "AddMana" -> effect["color"]?.jsonPrimitive?.content?.let {
@@ -79,7 +92,25 @@ object PublicCardFacts {
                 }
             }
         }
+        // Export only an exact OR of own battlefield land-subtype tests.
+        // Other ETB replacements and additional conditions remain unknown.
+        val tapped = card.script.replacementEffects.singleOrNull() as? EntersTapped
+        val condition = tapped?.unlessCondition
+        val branches = if (condition is AnyCondition) condition.conditions else listOfNotNull(condition)
+        val untappedSubtypes = if (tapped?.payLifeCost == null && branches.isNotEmpty()) branches.mapNotNull { branch ->
+            val exists = branch as? Exists ?: return@mapNotNull null
+            if (exists.player != Player.You || exists.zone != Zone.BATTLEFIELD || exists.negate || exists.excludeSelf) return@mapNotNull null
+            basicColors.keys.firstOrNull { exists.filter == GameObjectFilter.Land.withSubtype(it) }
+        }.takeIf { it.size == branches.size } ?: emptyList() else emptyList()
         return buildJsonObject {
+            putJsonArray("untappedIfLandSubtypes") { untappedSubtypes.sorted().forEach { add(it) } }
+            put("variableMana", activated.any { ability ->
+                ability.isManaAbility && when (val effect = ability.effect) {
+                    is AddManaEffect -> effect.amount !is DynamicAmount.Fixed
+                    is AddColorlessManaEffect -> effect.amount !is DynamicAmount.Fixed
+                    else -> false
+                }
+            })
             put("manaCost", card.manaCost.toString())
             putJsonArray("types") { card.typeLine.cardTypes.map { it.name }.sorted().forEach { add(it) } }
             putJsonArray("subtypes") { card.typeLine.subtypes.map { it.value }.sorted().forEach { add(it) } }

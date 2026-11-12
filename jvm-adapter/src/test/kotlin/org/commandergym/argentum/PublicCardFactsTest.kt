@@ -13,6 +13,21 @@ class PublicCardFactsTest {
     private val registry = GameBeansConfig(GameProperties()).cardRegistry()
     private val revision = "12ab2f0ed5bd018334521dc52497e6444f26f5a9"
 
+    @Test fun utilityManaAndCheckLandEntryRemainSeparateFromSimpleActivation() {
+        val cards = PublicCardFacts.export(registry, listOf("Myriad Landscape", "Arcane Lighthouse", "Sunpetal Grove", "Underground River", "Serra's Sanctum"), revision)["cards"]!!.jsonObject
+        fun fact(name: String) = cards[name]!!.jsonObject
+        assertEquals(listOf("C"), fact("Myriad Landscape")["manaColors"]!!.jsonArray.map { it.jsonPrimitive.content })
+        assertEquals(listOf("C"), fact("Arcane Lighthouse")["manaColors"]!!.jsonArray.map { it.jsonPrimitive.content })
+        assertEquals(listOf("C"), fact("Underground River")["manaColors"]!!.jsonArray.map { it.jsonPrimitive.content })
+        assertFalse(fact("Myriad Landscape")["simpleMana"]!!.jsonPrimitive.boolean)
+        assertFalse(fact("Arcane Lighthouse")["simpleMana"]!!.jsonPrimitive.boolean)
+        assertTrue(fact("Myriad Landscape")["entersTapped"]!!.jsonPrimitive.boolean)
+        assertEquals(listOf("Forest", "Plains"), fact("Sunpetal Grove")["untappedIfLandSubtypes"]!!.jsonArray.map { it.jsonPrimitive.content })
+        assertFalse(fact("Sunpetal Grove")["unconditionalUntapped"]!!.jsonPrimitive.boolean)
+        assertTrue(fact("Serra's Sanctum")["variableMana"]!!.jsonPrimitive.boolean)
+        assertEquals(listOf("W"), fact("Serra's Sanctum")["manaColors"]!!.jsonArray.map { it.jsonPrimitive.content })
+    }
+
     @Test fun publicFactsDistinguishOrdinaryManaFromChoicesAndTriggeredBoards() {
         val names = listOf("Forest", "Sol Ring", "Arcane Signet", "Sythis, Harvest's Hand", "Vanquisher's Banner", "Mesa Enchantress", "Underworld Dreams")
         val export = PublicCardFacts.export(registry, names, revision)

@@ -1,0 +1,80 @@
+{
+  "policy_id": "alela-primer-v1",
+  "version": "1",
+  "commander": "Alela, Artful Provocateur",
+  "deck_fingerprint": "80c21873d4db7f46efa3dc61d2e24396740a24004d7996f7ef3d779ec2997936",
+  "primer_fingerprint": "e025def6669e376c69162ff3c2dfd5305b4b83503b6ca7716b79fe527fde21ec",
+  "roles": {
+    "Sol Ring": "ramp",
+    "Arcane Signet": "ramp",
+    "Thought Vessel": "ramp",
+    "Talisman of Dominance": "ramp",
+    "Talisman of Progress": "ramp",
+    "Fellwar Stone": "ramp",
+    "Cloud Key": "reducer",
+    "Starfield Mystic": "reducer",
+    "Starnheim Courser": "reducer",
+    "Inquisitive Glimmer": "reducer",
+    "Mesa Enchantress": "draw_engine",
+    "Entity Tracker": "draw_engine",
+    "Caretaker's Talent": "draw_engine",
+    "Tocasia's Welcome": "draw_engine",
+    "Coastal Piracy": "draw_engine",
+    "Bident of Thassa": "draw_engine",
+    "Reconnaissance Mission": "draw_engine",
+    "Kindred Discovery": "draw_engine",
+    "Wizard Class": "enabler",
+    "Tegwyll, Duke of Splendor": "payoff",
+    "Patchwork Banner": "payoff",
+    "Etchings of the Chosen": "payoff",
+    "Renewed Solidarity": "payoff",
+    "All That Glitters": "aura_payoff",
+    "Tempest Technique": "aura_payoff",
+    "Flickering Ward": "repeatable_aura",
+    "Conviction": "repeatable_aura",
+    "Eiganjo Dynastorian": "recovery",
+    "Hall of Heliod's Generosity": "recovery",
+    "Propaganda": "prison",
+    "Ghostly Prison": "prison",
+    "Laboratory Maniac": "alternate_win",
+    "Alela, Artful Provocateur": "commander"
+  },
+  "weights": {
+    "ramp": 110,
+    "draw_engine": 100,
+    "reducer": 95,
+    "commander": 90,
+    "cantrip": 65,
+    "payoff": 60,
+    "aura_payoff": 55,
+    "enabler": 50
+  },
+  "opening_weights": {
+    "ramp": 100,
+    "draw_engine": 95,
+    "reducer": 90,
+    "commander": 40,
+    "cantrip": 85,
+    "interaction": 70,
+    "payoff": 30,
+    "aura_payoff": 20
+  },
+  "mana_roles": [
+    "ramp"
+  ],
+  "rules": {
+    "plan": "Establish ramp and a live draw engine before commander commitment.",
+    "reserve": "Retain interaction and recovery; do not repeat Auras without a draw budget.",
+    "closing": "Build flying tokens and spread Auras; avoid Discovery deck-out."
+  },
+  "color_priorities": {
+    "W": 10,
+    "U": 10,
+    "B": 8
+  },
+  "opening_colors": [
+    "W",
+    "U"
+  ],
+  "reserve_mana": 1
+}

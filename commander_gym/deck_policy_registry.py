@@ -30,8 +30,15 @@ class DeckPolicyRegistration:
 def registered_deck_policies():
     from .lathril_policy import LathrilDeckSubsystem, lathril_component_ref, policy_document
     doc = policy_document()
+    from .engine_deck_policy import EngineDeckPolicy, engine_deck_component_ref, deck_profile
+    additional = []
+    for key in ['talrand','sythis','alela']:
+        profile = deck_profile(key)
+        additional.append(DeckPolicyRegistration(profile['policy_id'],profile['deck_fingerprint'],profile['primer_fingerprint'],
+                          lambda facts, key=key: EngineDeckPolicy(facts,key),
+                          lambda facts, key=key: engine_deck_component_ref(facts,key)))
     return (DeckPolicyRegistration(doc['policy_id'], doc['deck_fingerprint'], doc['primer_fingerprint'],
-                                   LathrilDeckSubsystem, lathril_component_ref),)
+                                   LathrilDeckSubsystem, lathril_component_ref), *additional)
 
 
 def select_deck_policy(binding):

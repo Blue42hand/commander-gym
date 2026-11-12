@@ -266,7 +266,8 @@ class BoundedFallbackTests(unittest.TestCase):
         self.assertEqual(c.response['orderedObjects'],['b','a'])
         view=json.loads(t.calls[1][1]['messages'][1]['content'])
         self.assertEqual(view['decision']['cards'],['a','b'])
-        self.assertEqual(view['cards']['a']['name'],'Forest')
+        from test_engine_deck_policy import expand
+        self.assertEqual(expand(view)['cards']['a']['name'],'Forest')
 
     def test_trigger_order_fallback_uses_native_index_permutation(self):
         o=decision('OrderTriggersDecision','TriggerOrderResponse',{'resolutionOrder':'INTEGER_ARRAY'},

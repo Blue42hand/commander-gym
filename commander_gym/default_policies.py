@@ -79,7 +79,11 @@ class DefaultPolicySubsystem(SharedCardPolicies, MaskedHeuristicSubsystem):
         if passed and all(a.get('kind') == 'PassPriority' or a.get('isManaAbility') is True for a in offers):
             return self._action(passed, 'default-no-unplanned-mana')
         return super()._choose(o)
-    def _opening(self, o): return self._mulligan(o)
+    def _opening(self, o):
+        if any(self.facts.get(c.get('name')).get('variableMana')
+               for c in o.get('state', {}).get('mulligan', {}).get('cards', {}).values()):
+            return SubsystemDecision(reason='default-variable-opening-mana')
+        return self._mulligan(o)
     def _deck_pending(self, o, p): return None
     def _overrun_is_lethal(self, o, name): return False
 
@@ -107,6 +111,7 @@ class DefaultPolicySubsystem(SharedCardPolicies, MaskedHeuristicSubsystem):
             return SubsystemDecision(reason='default-unknown-land-mana')
         if any(not self.facts.get(self._card(o, a['action'].get('cardId')).get('name')).get('unconditionalUntapped')
                and not self.facts.get(self._card(o, a['action'].get('cardId')).get('name')).get('entersTapped')
+               and not self.facts.get(self._card(o, a['action'].get('cardId')).get('name')).get('untappedIfLandSubtypes')
                and self._card(o, a['action'].get('cardId')).get('name') not in {*BASIC, 'Woodland Cemetery','Overgrown Tomb'} for a in lands):
             return SubsystemDecision(reason='default-unknown-land-timing')
         ranked = sorted(lands, key=lambda a: (-self._land_score(o,a), a['semanticId']))
@@ -135,6 +140,10 @@ class DefaultPolicySubsystem(SharedCardPolicies, MaskedHeuristicSubsystem):
 
     def _enters_tapped(self, card, board):
         name = card.get('name')
+        condition = self.facts.get(name).get('untappedIfLandSubtypes')
+        if condition:
+            return not any(('LAND' in c.get('cardTypes', []) or 'Land' in c.get('typeLine', ''))
+                           and set(c.get('subtypes', self.facts.get(c.get('name')).get('subtypes', []))) & set(condition) for c in board)
         if name in {'Path of Ancestry', 'Temple of Malady', 'Bojuka Bog'}:
             return True
         if name == 'Woodland Cemetery':
@@ -146,10 +155,10 @@ class DefaultPolicySubsystem(SharedCardPolicies, MaskedHeuristicSubsystem):
     def _land_score(self, o, action):
         card = self._card(o, action['action'].get('cardId'))
         board = self._own(o); colors = self._land_colors(card)
-        supply = set().union(*(self._land_colors(c) for c in board)) if board else set()
+        supply = set().union(*(self._land_colors(c) for c in board if not self.facts.get(c.get('name')).get('variableMana'))) if board else set()
         score = sum(self.document.get('color_priorities', {}).get(c, 7) for c in colors - supply)
-        sources = [self._land_colors(c) for c in board if not c.get('isTapped') and self._land_colors(c)]
-        if not self._enters_tapped(card, board):
+        sources = [self._land_colors(c) for c in board if not c.get('isTapped') and self._land_colors(c) and not self.facts.get(c.get('name')).get('variableMana')]
+        if not self._enters_tapped(card, board) and not self.facts.get(card.get('name')).get('variableMana'):
             sources.append(colors)
         hand = [self._card(o, i) for i in ids_in(o['state'], 'Hand', o['agentToAct'])]
         useful = [c for c in hand if self.document['roles'].get(c.get('name')) in self.document['weights']

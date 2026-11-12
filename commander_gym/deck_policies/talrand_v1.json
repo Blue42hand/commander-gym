@@ -1,0 +1,80 @@
+{
+  "policy_id": "talrand-primer-v1",
+  "version": "1",
+  "commander": "Talrand, Sky Summoner",
+  "deck_fingerprint": "c15aaee55b87342c308fb43fe1d2c46ae9350e0e985c1e1dbb75df3922fde25b",
+  "primer_fingerprint": "ade23eff06c7bf4b34f088773283fd1e4d432a67341dc71fc7a7197b0a74c51b",
+  "roles": {
+    "Sol Ring": "ramp",
+    "Arcane Signet": "ramp",
+    "Thought Vessel": "ramp",
+    "Mind Stone": "ramp",
+    "Sky Diamond": "ramp",
+    "Sapphire Medallion": "reducer",
+    "Haughty Djinn": "reducer",
+    "Coastal Piracy": "draw_engine",
+    "Reconnaissance Mission": "draw_engine",
+    "The One Ring": "draw_engine",
+    "Opt": "cantrip",
+    "Consider": "cantrip",
+    "Ponder": "cantrip",
+    "Preordain": "cantrip",
+    "Serum Visions": "cantrip",
+    "Sleight of Hand": "cantrip",
+    "Brainstorm": "cantrip",
+    "Think Twice": "cantrip",
+    "Counterspell": "interaction",
+    "An Offer You Can't Refuse": "interaction",
+    "Swan Song": "interaction",
+    "Negate": "interaction",
+    "Dispel": "interaction",
+    "Spell Pierce": "interaction",
+    "Essence Scatter": "interaction",
+    "Remove Soul": "interaction",
+    "Dissipate": "interaction",
+    "Dissolve": "interaction",
+    "Unwind": "interaction",
+    "Docent of Perfection": "payoff",
+    "Time Warp": "closing",
+    "Wash Out": "closing",
+    "Aetherize": "closing",
+    "Blue Sun's Zenith": "closing",
+    "Finale of Revelation": "closing",
+    "Talrand, Sky Summoner": "commander"
+  },
+  "weights": {
+    "ramp": 110,
+    "draw_engine": 100,
+    "reducer": 95,
+    "commander": 90,
+    "cantrip": 65,
+    "payoff": 60,
+    "aura_payoff": 55,
+    "enabler": 50
+  },
+  "opening_weights": {
+    "ramp": 100,
+    "draw_engine": 95,
+    "reducer": 90,
+    "commander": 40,
+    "cantrip": 85,
+    "interaction": 70,
+    "payoff": 30,
+    "aura_payoff": 20
+  },
+  "mana_roles": [
+    "ramp"
+  ],
+  "rules": {
+    "plan": "Develop mana and Talrand, then cheap spells and evasive pressure.",
+    "reserve": "Keep mana for the cheapest known counter; prefer Talrand before cantrips.",
+    "closing": "Extra turns and mass bounce require a closing plan; defer them."
+  },
+  "color_priorities": {
+    "U": 12
+  },
+  "opening_colors": [
+    "U"
+  ],
+  "reserve_mana": 1
+}

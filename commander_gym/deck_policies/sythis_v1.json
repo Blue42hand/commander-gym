@@ -1,0 +1,84 @@
+{
+  "policy_id": "sythis-primer-v1",
+  "version": "1",
+  "commander": "Sythis, Harvest's Hand",
+  "deck_fingerprint": "e715bf964cc6fd992d2ee0fba2a091e6ded8dc23ba20e138c7f19cdd538561ea",
+  "primer_fingerprint": "79f4500ea019af8d2aa8d959ef82c6443ca15d846dd6539a3f7f561df80b75b6",
+  "roles": {
+    "Sol Ring": "ramp",
+    "Arcane Signet": "ramp",
+    "Thought Vessel": "ramp",
+    "Selesnya Signet": "ramp",
+    "Talisman of Unity": "ramp",
+    "Fertile Ground": "ramp",
+    "Sanctum Weaver": "ramp",
+    "Herald of the Pantheon": "reducer",
+    "Jukai Naturalist": "reducer",
+    "Starfield Mystic": "reducer",
+    "Argothian Enchantress": "draw_engine",
+    "Mesa Enchantress": "draw_engine",
+    "Verduran Enchantress": "draw_engine",
+    "Satyr Enchanter": "draw_engine",
+    "Enchantress's Presence": "draw_engine",
+    "Setessan Champion": "draw_engine",
+    "Tocasia's Welcome": "draw_engine",
+    "Abundant Growth": "cantrip",
+    "Spirited Companion": "cantrip",
+    "Archon of Sun's Grace": "payoff",
+    "Sigil of the Empty Throne": "payoff",
+    "Hallowed Haunting": "payoff",
+    "Felidar Retreat": "payoff",
+    "All That Glitters": "aura_payoff",
+    "Ethereal Armor": "aura_payoff",
+    "Unflinching Courage": "aura_payoff",
+    "Armadillo Cloak": "aura_payoff",
+    "Angelic Destiny": "aura_payoff",
+    "Enlightened Tutor": "tutor",
+    "Idyllic Tutor": "tutor",
+    "Greater Good": "recovery",
+    "Privileged Position": "recovery",
+    "Sterling Grove": "recovery",
+    "Ghostly Prison": "prison",
+    "Dueling Grounds": "prison",
+    "Rule of Law": "prison",
+    "Suppression Field": "prison",
+    "Rest in Peace": "prison",
+    "Sythis, Harvest's Hand": "commander"
+  },
+  "weights": {
+    "ramp": 110,
+    "draw_engine": 100,
+    "reducer": 95,
+    "commander": 90,
+    "cantrip": 65,
+    "payoff": 60,
+    "aura_payoff": 55,
+    "enabler": 50
+  },
+  "opening_weights": {
+    "ramp": 100,
+    "draw_engine": 95,
+    "reducer": 90,
+    "commander": 40,
+    "cantrip": 85,
+    "interaction": 70,
+    "payoff": 30,
+    "aura_payoff": 20
+  },
+  "mana_roles": [
+    "ramp"
+  ],
+  "rules": {
+    "plan": "Develop enchantment mana, Sythis, and cheap enchantments into cards.",
+    "reserve": "Keep redundant draw engines and recovery after establishing two engines.",
+    "closing": "Spread Auras; develop Angels or a ready enchanted attacker."
+  },
+  "color_priorities": {
+    "G": 12,
+    "W": 9
+  },
+  "opening_colors": [
+    "G"
+  ],
+  "reserve_mana": 0
+}

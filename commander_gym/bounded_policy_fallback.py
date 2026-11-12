@@ -202,6 +202,105 @@ def decision_context(o, *, frozen, policy_context, facts):
     return view
 
 
+
+def compact_decision_context(view):
+    """Losslessly factor the masked view; never remove a card, offer or constraint.
+
+    Identical card characteristics share a definition. Common action and raw-action
+    values share defaults, with per-offer differences retained verbatim. This is a
+    prompt representation only; native observations and validators are untouched.
+    """
+    view = deepcopy(view)
+    definitions = {}; by_value = {}
+    fields = {'manaCost','typeLine','cardTypes','subtypes','oracleText','keywords',
+              'abilityFlags','colors','colorIdentity','manaValue'}
+    for card in view.get('cards', {}).values():
+        definition = {k:card.pop(k) for k in list(card) if k in fields}
+        if definition:
+            key = json.dumps(definition, sort_keys=True, separators=(',',':'))
+            if key not in by_value:
+                ref = 'd'+str(len(definitions)); by_value[key] = ref; definitions[ref] = definition
+            card['definition'] = by_value[key]
+    if definitions: view['cardDefinitions'] = definitions
+    actions = view.get('legalActions', [])
+    if actions:
+        def common(rows):
+            # Defaults apply only when the field is absent on a row. Keep exact
+            # values (including parameter constraints), never infer false values.
+            if not rows: return {}
+            return {k:v for k,v in rows[0].items() if all(k in r and r[k] == v for r in rows)}
+        raw = [a.get('action', {}) for a in actions]
+        raw_defaults = common(raw)
+        for a in actions:
+            if 'action' in a:
+                a['action'] = {k:v for k,v in a['action'].items() if k not in raw_defaults}
+        defaults = common(actions)
+        view['legalActions'] = [{k:v for k,v in a.items() if k not in defaults} for a in actions]
+        if defaults: view['actionDefaults'] = defaults
+        if raw_defaults: view['rawActionDefaults'] = raw_defaults
+    def table(rows):
+        columns = sorted({k for row in rows.values() for k in row})
+        return {'columns':columns, 'rows':{key:[row.get(k) for k in columns] for key,row in rows.items()}}
+    # Null table cells mean an omitted model-view field. Original null/false
+    # omission semantics are unchanged; no native constraint is omitted here.
+    for key in ['cards','cardDefinitions']:
+        if view.get(key): view[key] = table(view[key])
+    if actions:
+        view['legalActions'] = table({str(i):a for i,a in enumerate(view['legalActions'])})
+    # Intern repeated structured values (zone identities, parameter specs and
+    # repeated text). References are explicit and losslessly expandable.
+    counts = {}; values = {}
+    def collect(value):
+        if isinstance(value, (dict,list,str)):
+            key = json.dumps(value,sort_keys=True,separators=(',',':'))
+            if len(key) >= 48:
+                counts[key] = counts.get(key,0)+1; values[key] = value
+            if isinstance(value,dict):
+                for child in value.values(): collect(child)
+            elif isinstance(value,list):
+                for child in value: collect(child)
+    collect(view)
+    refs = {}
+    for key,count in counts.items():
+        if count > 1 and (len(key)-12)*count > len(key)+24: refs[key] = len(refs)
+    def encode(value, skip=None):
+        if isinstance(value,(dict,list,str)):
+            key = json.dumps(value,sort_keys=True,separators=(',',':'))
+            if key in refs and key != skip: return {'$v':refs[key]}
+        if isinstance(value,dict): return {k:encode(v) for k,v in value.items()}
+        if isinstance(value,list): return [encode(v) for v in value]
+        return value
+    result = encode(view)
+    if refs: result['sharedValues'] = {str(ref):encode(values[key],skip=key) for key,ref in refs.items()}
+    return result
+
+
+def compact_action_schema(fmt):
+    """Union action identities only when their complete parameter grammar matches."""
+    fmt = deepcopy(fmt)
+    def visit(node):
+        if not isinstance(node, dict): return
+        for value in list(node.values()):
+            if isinstance(value, dict): visit(value)
+            elif isinstance(value, list):
+                for child in value: visit(child)
+        branches = node.get('anyOf')
+        if not isinstance(branches, list): return
+        groups = {}; output = []
+        for branch in branches:
+            semantic = branch.get('properties', {}).get('semanticId', {})
+            if 'const' not in semantic:
+                output.append(branch); continue
+            shape = deepcopy(branch); shape['properties']['semanticId'] = {'type':'string'}
+            key = json.dumps(shape,sort_keys=True,separators=(',',':'))
+            if key not in groups:
+                groups[key] = deepcopy(branch); output.append(groups[key])
+                groups[key]['properties']['semanticId'] = {'type':'string','enum':[]}
+            groups[key]['properties']['semanticId']['enum'].append(semantic['const'])
+        node['anyOf'] = output
+    visit(fmt['schema'])
+    return fmt
+
 def constrain_native_format(o):
     """Retain native grammar for large/combinatorial decisions; tighten finite domains."""
     fmt = _local_native_format(o)
@@ -315,11 +414,21 @@ class BoundedPolicyFallback:
                 return json.dumps(wire)
         else:
             fmt = constrain_native_format(o)
+            if fmt is not None:
+                from .lmstudio_pilot import _constrain_untargeted_actions
+                _constrain_untargeted_actions(fmt['schema'], o)
+                fmt = compact_action_schema(fmt)
             def decode(parsed):
                 validate_selection_bounds(parsed, o)
                 return json.dumps(parsed)
             if fmt is None: raise LMStudioPilotError('bounded_fallback_unsupported_native_response_schema')
             instructions = 'Choose one current native game action or response using only the supplied schema and masked decision context. Null, false and empty metadata fields are omitted. Follow the deck objectives. Return the exact native channel/choice or channel/response object; never supply actionId or decisionId, invent entity IDs, or use fields outside the schema. Spend mana only for a useful action. Native legality remains authoritative.'
+        view = compact_decision_context(view)
+        instructions += (' Card instances inherit cardDefinitions[definition]; instance fields override definitions.'
+                         ' Each legalActions entry inherits actionDefaults; its action inherits rawActionDefaults.'
+                         ' Tables contain columns and rows keyed by entity or row ID; zip columns with each row and omit null cells.'
+                         ' Replace each {$v:N} with sharedValues[N] recursively before reading tables and defaults.'
+                         ' Apply these defaults before evaluating choices. All current offers and constraints are retained.')
         choice = self.model._choose(o, response_format=fmt, model_view=view,
                                    instructions_override=instructions, output_decoder=decode)
         return replace(choice, metadata={**choice.metadata, 'boundedFallback':{
