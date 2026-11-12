@@ -179,6 +179,14 @@ class ArtificialPlayerSubsystem:
         return SubsystemDecision(choice=self.player.choose(observation))
 
 
+@dataclass(frozen=True)
+class ContextualPlayerSubsystem(ArtificialPlayerSubsystem):
+    """Pass this callback's preceding policy results to a bounded fallback."""
+
+    def try_choose_with_context(self, observation, attempts):
+        return SubsystemDecision(choice=self.player.choose_with_policy_context(observation, attempts))
+
+
 class PilotComponentResolver(Protocol):
     """Resolve one exact canonical component reference to executable machinery."""
 
@@ -251,7 +259,10 @@ class ComposedPilot:
         for resolved in self.subsystems:
             spec = resolved.spec
             implementation = resolved.implementation
-            result = implementation.try_choose(observation)
+            if isinstance(implementation, ContextualPlayerSubsystem):
+                result = implementation.try_choose_with_context(observation, tuple(attempts))
+            else:
+                result = implementation.try_choose(observation)
             if not isinstance(result, SubsystemDecision):
                 raise PilotContractError(
                     f"pilot subsystem {implementation.name!r} returned unsupported result"

@@ -69,10 +69,11 @@ class CardFacts:
         return MappingProxyType(deepcopy(self._document['cards'].get(name, {})))
 
 
-def heuristic_component_ref(facts):
-    """Identity covers policy code, public facts and native source revision."""
-    sources = [Path(__file__), Path(__file__).with_name('heuristic_policy.py')]
-    payload = {'version': 1, 'factsSha256': facts.digest,
-               'sources': {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sources}}
-    return ArtifactRef(kind='skill-set', artifact_id='argentum-masked-heuristics', version='1',
+def heuristic_component_ref(facts=None):
+    """Identity of defaults and reusable card mechanics, including optional public facts."""
+    names = ['heuristic_facts.py', 'heuristic_policy.py', 'default_policies.py', 'card_policies.py',
+             'bounded_policy_fallback.py', 'lmstudio_pilot.py', 'pilot_composition.py']
+    payload = {'version': 2, 'factsSha256': facts.digest if facts else 'unavailable',
+               'sources': {name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest() for name in names}}
+    return ArtifactRef(kind='skill-set', artifact_id='argentum-default-policies', version='2',
                        digest='sha256:' + hashlib.sha256(canonical(payload)).hexdigest())

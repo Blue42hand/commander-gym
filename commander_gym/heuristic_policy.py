@@ -53,6 +53,10 @@ def keyword_set(card):
     return set(card.get('keywords', [])) | set(card.get('abilityFlags', []))
 
 
+class PolicyNotApplicable(Exception):
+    """An expected policy coverage gap; route to the next layer."""
+
+
 class MaskedHeuristicSubsystem:
     name = 'argentum-masked-heuristics'
     version = '1'
@@ -77,7 +81,10 @@ class MaskedHeuristicSubsystem:
         started = monotonic()
         if observation.get('nativePaymentError') is not None:
             return SubsystemDecision(reason='heuristic-payment-correction')
-        result = self._choose(observation)
+        try:
+            result = self._choose(observation)
+        except PolicyNotApplicable as exc:
+            result = SubsystemDecision(reason=str(exc))
         metadata = {**result.metadata, 'policyVersion': self.version,
                     'factsSha256': self.facts.digest, 'engineRevision': self.facts.engine_revision,
                     'policyWallTimeMs': round((monotonic() - started) * 1000, 3)}
@@ -389,7 +396,7 @@ class MaskedHeuristicSubsystem:
                 or not ({'CREATURE'} & set(f['types']) or f['simpleMana'] or
                         f['repeatable'] and 'DRAW' in f['tags'])):
                 return SubsystemDecision(reason='heuristic-competing-special-action')
-            score = self.card_value(c, o) + (6 if f['simpleMana'] else 0) + (5 if c.get('isCommander') else 0)
+            score = self._development_value(c, o, f)
             ranked.append((score, a, {}))
         if not ranked:
             return SubsystemDecision(reason='heuristic-no-supported-development')
@@ -445,6 +452,9 @@ class MaskedHeuristicSubsystem:
         if polarity == 'HARMFUL' and ranked[0][0] < 3:
             return None
         return ranked[0][0], action, {'targets': [ranked[0][1]]}
+
+    def _development_value(self, card, observation, fact):
+        return self.card_value(card, observation) + (6 if fact['simpleMana'] else 0) + (5 if card.get('isCommander') else 0)
 
     def card_value(self, card, o):
         """Shared keep/develop value: useful soon, castable colors, repeatable payoff."""

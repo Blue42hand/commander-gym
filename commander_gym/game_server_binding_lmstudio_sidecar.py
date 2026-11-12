@@ -19,18 +19,17 @@ from .game_server_binding_openai_sidecar import (
     _CanonicalBindingPilot,
 )
 from .game_server_sidecar import GameServerSidecarConfig, GameServerSidecarServer
-from .lmstudio_pilot import LMStudioPilot
 from .lmstudio_provider import LMStudioConfig
 from .local_callback_context import local_callback_context
 from .pilot import PilotContractError
-from .pilot_composition import ArtificialPlayerSubsystem, MechanicalHandlerSubsystem, compose_pilot_runtime
+from .pilot_composition import ContextualPlayerSubsystem, MechanicalHandlerSubsystem, compose_pilot_runtime
 from .pilot_routing import ForcedParameterlessChoiceHandler
 
 
 def local_component_ref(config: LMStudioConfig) -> ArtifactRef:
     """Pin model, endpoint and inference limits into the selected Pilot identity."""
     digest = hashlib.sha256(json.dumps(asdict(config), sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-    return ArtifactRef(kind="provider", artifact_id="lmstudio-chat-completions", version="1",
+    return ArtifactRef(kind="provider", artifact_id="lmstudio-chat-completions", version="2",
                        digest="sha256:" + digest)
 
 
@@ -49,16 +48,12 @@ class LocalBindingComponentResolver:
         self.config, self.transport, self.card_facts = config, transport, card_facts
 
     def resolve(self, spec):
-        if spec.role == 'skill' and self.card_facts is not None:
-            from .heuristic_facts import heuristic_component_ref
-            from .heuristic_policy import MaskedHeuristicSubsystem
-            from .lathril_policy import lathril_component_ref, LathrilDeckSubsystem
-            if spec.ref == lathril_component_ref(self.card_facts):
-                return LathrilDeckSubsystem(self.card_facts, self.config, self.transport)
-            if spec.ref == heuristic_component_ref(self.card_facts):
-                return MaskedHeuristicSubsystem(self.card_facts)
+        if spec.role == 'skill':
+            from .deck_policy_registry import resolve_policy_component
+            return resolve_policy_component(spec.ref, self.card_facts)
         if spec.role == "local_generalist" and spec.ref == local_component_ref(self.config):
-            return ArtificialPlayerSubsystem(LMStudioPilot(self.config, transport=self.transport))
+            from .bounded_policy_fallback import BoundedPolicyFallback
+            return ContextualPlayerSubsystem(BoundedPolicyFallback(self.config, self.transport, facts=self.card_facts))
         if spec.role == "deterministic" and spec.ref == BUILTIN_FORCED_PARAMETERLESS_COMPONENT_REF:
             return MechanicalHandlerSubsystem(ForcedParameterlessChoiceHandler())
         if spec.role == "deterministic" and spec.ref == BUILTIN_NATIVE_CERTIFIED_FORCED_PASS_COMPONENT_REF:
@@ -70,20 +65,17 @@ class LocalBindingComponentResolver:
 def build_binding_lmstudio_sidecar(config: LocalBindingConfig, *, game_capture=None,
                                    provenance_sink=None, transport=None):
     facts_path = config.instance_root / 'local' / 'card-facts.json'
-    from .heuristic_facts import CardFacts, heuristic_component_ref
+    from .heuristic_facts import CardFacts
     facts = CardFacts.load(facts_path) if facts_path.exists() else None
     if facts is not None and facts.engine_revision != config.engine_revision:
         raise PilotContractError('heuristic facts must match the explicitly pinned native engine revision')
     resolver = LocalBindingComponentResolver(config.inference, transport, card_facts=facts)
 
     def pilot_factory(pilot, binding):
-        from .lathril_policy import lathril_component_ref, validate_lathril_binding
-        allowed_skills = (heuristic_component_ref(facts), lathril_component_ref(facts)) if facts else ()
-        if facts and pilot.skill_set == lathril_component_ref(facts):
-            validate_lathril_binding(binding)
+        from .deck_policy_registry import validate_policy_binding
+        validate_policy_binding(pilot.skill_set, binding, facts)
         if (pilot.generalist_base != local_component_ref(config.inference)
-            or pilot.escalation_provider is not None or pilot.specialists
-            or pilot.skill_set is not None and pilot.skill_set not in allowed_skills):
+            or pilot.escalation_provider is not None or pilot.specialists):
             raise PilotContractError("local Binding must pin the configured local model and exclude other providers")
         return _CanonicalBindingPilot(compose_pilot_runtime(pilot, resolver), pilot, binding)
 

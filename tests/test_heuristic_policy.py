@@ -23,7 +23,7 @@ from commander_gym.identity import Pilot
 from commander_gym.heuristic_review import review_callbacks
 from commander_gym.captured_choices import CALLBACK_SCHEMA_HASH
 from test_game_server_binding_openai_sidecar import synthetic_catalog, free_port
-from test_lmstudio import config, FakeTransport
+from test_lmstudio import config, FakeTransport, completion
 
 ENGINE = '12ab2f0ed5bd018334521dc52497e6444f26f5a9'
 
@@ -346,7 +346,7 @@ class HeuristicRoutingTests(unittest.TestCase):
 
     def test_large_late_game_observation_bypasses_model_only_when_policy_handles_it(self):
         # The final callback exceeded the model's prompt fence before dispatch.
-        transport = FakeTransport()
+        transport = FakeTransport(completion('{"option":0}'))
         pilot = Pilot(pilot_id='hybrid', revision='1', skill_set=heuristic_component_ref(facts()),
                       generalist_base=local_component_ref(config()))
         runtime = compose_pilot_runtime(pilot, LocalBindingComponentResolver(config(), transport, card_facts=facts()))
@@ -357,13 +357,13 @@ class HeuristicRoutingTests(unittest.TestCase):
         self.assertEqual(runtime.choose(o).action_id, 1)
         self.assertEqual(transport.calls, [])
         o['state']['activePlayerId'] = 'enemy'
-        with self.assertRaisesRegex(LMStudioPilotError, 'local_prompt_byte_limit_exceeded'):
-            runtime.choose(o)
-        self.assertEqual(transport.calls, [])
+        runtime.choose(o)
+        self.assertEqual(len(transport.calls), 2)
+        self.assertNotIn('retained evidence', json.dumps(transport.calls[1][1]))
         self.assertEqual(original['state']['gameLog'], o['state']['gameLog'])
 
     def test_model_escalation_records_reason_and_failure_does_not_fabricate_an_action(self):
-        transport = FakeTransport()
+        transport = FakeTransport(completion('{"option":0}'))
         pilot = Pilot(pilot_id='hybrid', revision='1', skill_set=heuristic_component_ref(facts()),
                       generalist_base=local_component_ref(config()))
         runtime = compose_pilot_runtime(pilot, LocalBindingComponentResolver(config(), transport, card_facts=facts()))
@@ -377,8 +377,8 @@ class HeuristicRoutingTests(unittest.TestCase):
         self.assertIn('heuristic-strategic-priority-window', routing['escalationReasons'])
         self.assertEqual(len(transport.calls), 2)
         request = transport.calls[1][1]
-        self.assertIn('"choice":{"semanticId"', request['messages'][0]['content'])
-        self.assertNotIn('"channel":"action","semanticId"', request['messages'][0]['content'])
+        self.assertIn('option', request['response_format']['json_schema']['schema']['properties'])
+        self.assertEqual(result.metadata['boundedFallback']['mode'], 'frozen-choices')
         broken = FakeTransport(LMStudioError('deadline_exceeded'))
         runtime = compose_pilot_runtime(pilot, LocalBindingComponentResolver(config(), broken, card_facts=facts()))
         with self.assertRaisesRegex(LMStudioPilotError, 'deadline_exceeded'):

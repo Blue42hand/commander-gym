@@ -22,17 +22,14 @@ def validate_local_catalog(catalog, root, inference):
     """Validate exact local components without opening listeners or making calls."""
     from .game_server_binding_lmstudio_sidecar import LocalBindingComponentResolver
     from .pilot_composition import compose_pilot_runtime
-    from .heuristic_facts import CardFacts, heuristic_component_ref
+    from .heuristic_facts import CardFacts
     facts_path = Path(root) / 'local' / 'card-facts.json'
     facts = CardFacts.load(facts_path) if facts_path.exists() else None
     def factory(pilot, binding):
-        from .lathril_policy import lathril_component_ref, validate_lathril_binding
-        allowed_skills = (heuristic_component_ref(facts), lathril_component_ref(facts)) if facts else ()
-        if facts and pilot.skill_set == lathril_component_ref(facts):
-            validate_lathril_binding(binding)
+        from .deck_policy_registry import validate_policy_binding
+        validate_policy_binding(pilot.skill_set, binding, facts)
         if (pilot.generalist_base != local_component_ref(inference) or pilot.escalation_provider is not None
-            or pilot.specialists or pilot.skill_set is not None and
-            pilot.skill_set not in allowed_skills):
+            or pilot.specialists):
             raise PilotContractError('Local catalog requires the exact configured local provider')
         compose_pilot_runtime(pilot, LocalBindingComponentResolver(inference, card_facts=facts))
         return _RecordingPilot(pilot)
@@ -40,9 +37,7 @@ def validate_local_catalog(catalog, root, inference):
     return GameServerBindingRegistry(loaded.resolver, loaded.binding_ids)
 
 
-def prepare_local_catalog(catalog, instance_root, output, inference, *, card_facts=None, lathril_policy=False):
-    if lathril_policy and card_facts is None:
-        raise ValueError('Lathril policy requires pinned native facts')
+def prepare_local_catalog(catalog, instance_root, output, inference, *, card_facts=None, lathril_policy=None):
     root = Path(instance_root).resolve()
     source = Path(catalog).resolve()
     # Validate references and artifact payload hashes before copying anything.
@@ -74,7 +69,7 @@ def prepare_local_catalog(catalog, instance_root, output, inference, *, card_fac
             write(entry[key], source_path.read_bytes())
     from .heuristic_facts import CardFacts, heuristic_component_ref
     facts = CardFacts.load(card_facts) if card_facts is not None else None
-    skill = heuristic_component_ref(facts) if facts is not None else None
+    skill = heuristic_component_ref(facts)
     if facts is not None:
         document('local/card-facts.json', facts.document())
     provider_digest = local_component_ref(inference).digest
@@ -88,25 +83,24 @@ def prepare_local_catalog(catalog, instance_root, output, inference, *, card_fac
                  for name in raw['bindings']]
     paths, ids = [], []
     pilot_paths = ['local/pilot.json']
-    deck_pilot = None
-    if lathril_policy:
-        from .lathril_policy import lathril_component_ref
-        deck_skill = lathril_component_ref(facts)
-        deck_suffix = hashlib.sha256((provider_digest + deck_skill.digest).encode()).hexdigest()[:16]
-        deck_pilot = replace(pilot, pilot_id='lathril-'+deck_suffix, skill_set=deck_skill)
-        document('local/lathril-pilot.json', deck_pilot.to_dict())
-        pilot_paths.append('local/lathril-pilot.json')
+    deck_pilots = {}
+    from .deck_policy_registry import select_deck_policy
     for index, binding_id in enumerate(loaded.binding_ids):
         resolved = loaded.resolver.resolve(binding_id)
         original = next(binding for binding in originals if binding.ref() == resolved.binding)
         display = {**original.metadata.get('display', {}), 'name':inference.model+' · '+original.metadata.get('display', {}).get('name', binding_id)}
         selected_pilot, selected_suffix = pilot, suffix
-        if deck_pilot is not None:
-            from .lathril_policy import policy_document, validate_lathril_binding
-            if original.deck.fingerprint == policy_document()['deck_fingerprint']:
-                validate_lathril_binding(original)
-                selected_pilot, selected_suffix = deck_pilot, deck_suffix
-                display['name'] += ' · Lathril deck policy'
+        registration = select_deck_policy(original)
+        if registration is not None:
+            deck_skill = registration.component_ref(facts)
+            deck_suffix = hashlib.sha256((provider_digest + deck_skill.digest).encode()).hexdigest()[:16]
+            if registration.policy_id not in deck_pilots:
+                deck_pilot = replace(pilot, pilot_id=registration.policy_id+'-'+deck_suffix, skill_set=deck_skill)
+                policy_path = 'local/'+registration.policy_id+'-pilot.json'
+                document(policy_path, deck_pilot.to_dict()); pilot_paths.append(policy_path)
+                deck_pilots[registration.policy_id] = deck_pilot
+            selected_pilot, selected_suffix = deck_pilots[registration.policy_id], deck_suffix
+            display['name'] += ' · '+registration.policy_id
         binding = replace(original, binding_id=binding_id+'-local-'+selected_suffix, revision='1', pilot=selected_pilot.ref(),
                           metadata={**original.metadata, 'display':display})
         name = f'local/binding-{index}.json'
@@ -126,8 +120,8 @@ def main():
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--inference-config', required=True, type=Path)
     parser.add_argument('--card-facts', type=Path,
-                        help='Opt into the pinned heuristic skill using an offline native public-facts export')
-    parser.add_argument('--lathril-policy', action='store_true', help='Opt the exact reviewed Lathril deck into its bounded primer policy')
+                        help='Optional pinned native facts; defaults apply to every deck without this flag')
+    parser.add_argument('--lathril-policy', action='store_true', help='Compatibility alias; matching registered deck policies are selected automatically')
     args = parser.parse_args()
     config = LMStudioConfig(**json.loads(args.inference_config.read_text()))
     registry = prepare_local_catalog(args.catalog, args.instance_root, args.output, config, card_facts=args.card_facts, lathril_policy=args.lathril_policy)

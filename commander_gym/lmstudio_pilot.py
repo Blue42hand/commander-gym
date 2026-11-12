@@ -242,13 +242,18 @@ class LMStudioPilot:
         self.cancel = cancel
 
     def choose(self, observation: Mapping[str, Any]) -> PilotChoice:
+        return self._choose(observation)
+
+    def _choose(self, observation, *, response_format=None, model_view=None,
+                instructions_override=None, output_decoder=None):
+        """Reuse provider budgets/retries and original native validation for bounded plans."""
         _require_observation(observation)
         cancel = self.cancel if self.cancel is not None else current_cancel.get()
         started = monotonic()
         deadline = started + self.config.timeout_seconds
         attempts = []
         try:
-            schema_format = _local_native_format(observation)
+            schema_format = response_format if response_format is not None else _local_native_format(observation)
         except (OpenAIResponsesPilotError, PilotContractError) as exc:
             raise LMStudioPilotError(str(exc)) from exc
         if schema_format is None:
@@ -258,63 +263,69 @@ class LMStudioPilot:
             _schema_check(schema_format["schema"])
         except LMStudioError as exc:
             raise LMStudioPilotError(str(exc)) from exc
-        instructions = _LOCAL_INSTRUCTIONS + (
-            "\nWhen requiresTargets is false and validTargets and targetRequirements are null, "
-            "the action has no targets: omit targets and targetGroups or use empty arrays. "
-            "Entries marked isAffordable=false or affordable=false are disabled display entries; "
-            "do not select them. A mana ability does not target its own source. Do not tap mana merely to pass "
-            "through a phase; mana empties between steps and phases."
-        )
-        if observation.get('callbackKind') == 'decideMulligan':
-            instructions += (
-                "\nThis is a London mulligan decision. Read state.mulligan, including hand, cards, "
-                "mulliganCount and cardsToPutOnBottom. Keeping retains only hand size minus "
-                "cardsToPutOnBottom cards. Further mulligans cost more cards; do not repeatedly "
-                "search for a perfect hand. Keep a playable hand with lands and early plays. "
-                "After two mulligans, strongly prefer keeping even an imperfect hand. "
-                "When cardsToPutOnBottom is at least hand size, choose KeepHand: another "
-                "mulligan cannot improve retained hand size. Return the exact offered KeepHand "
-                "or TakeMulligan semanticId using the required nested choice format."
+        if instructions_override is None:
+            instructions = _LOCAL_INSTRUCTIONS + (
+                "\nWhen requiresTargets is false and validTargets and targetRequirements are null, "
+                "the action has no targets: omit targets and targetGroups or use empty arrays. "
+                "Entries marked isAffordable=false or affordable=false are disabled display entries; "
+                "do not select them. A mana ability does not target its own source. Do not tap mana merely to pass "
+                "through a phase; mana empties between steps and phases."
             )
-            mulligan = observation.get('state', {}).get('mulligan', {})
-            count = mulligan.get('mulliganCount')
-            keep = next((a for a in observation.get('legalActions', [])
-                         if a.get('kind') == 'KeepHand'), None)
-            if type(count) is int and count >= 2 and keep is not None:
+            if observation.get('callbackKind') == 'decideMulligan':
                 instructions += (
-                    f"\nYou have already mulliganed {count} times. Preserve the remaining cards: "
-                    "choose the offered KeepHand action now. Its exact response is "
-                    + json.dumps({'channel': 'action', 'choice': {
-                        'semanticId': keep['semanticId'], 'params': {}}})
-                    + ". Do not confuse this identifier with TakeMulligan."
+                    "\nThis is a London mulligan decision. Read state.mulligan, including hand, cards, "
+                    "mulliganCount and cardsToPutOnBottom. Keeping retains only hand size minus "
+                    "cardsToPutOnBottom cards. Further mulligans cost more cards; do not repeatedly "
+                    "search for a perfect hand. Keep a playable hand with lands and early plays. "
+                    "After two mulligans, strongly prefer keeping even an imperfect hand. "
+                    "When cardsToPutOnBottom is at least hand size, choose KeepHand: another "
+                    "mulligan cannot improve retained hand size. Return the exact offered KeepHand "
+                    "or TakeMulligan semanticId using the required nested choice format."
                 )
-        if schema_format["name"] in {"commander_gym_native_action", "commander_gym_native_mixed_payment"}:
-            instructions += "\nUse the schema's nested choice object containing semanticId and params."
-        if schema_format["name"] == "commander_gym_native_mixed_payment":
-            instructions += (
-                "\nFor this payment window, choose either an explicitly offered native mana ability "
-                "via channel action and nested choice, or the pending native payment response via "
-                "channel decision and response. Use only availableSources for selectedSources. "
-                "If canAutoPayNow is false, do not use autoPay. If autoPay is true, selectedSources "
-                "must be empty. CancelDecisionResponse is allowed only when the schema permits it."
-            )
-        model_observation = _without_live_routing(observation)
-        if self.config.compact_observation:
-            model_observation = compact_inference_observation(model_observation)
-            if model_observation.get('format') == SHARED_VIEW_FORMAT:
-                instructions += SHARED_VIEW_INSTRUCTIONS
-            instructions += (
-                "\nThis request uses the format named in format. The observation is inside "
-                "observation; cardDefaults lists exact values for omitted fields on every "
-                "state.cards entry. Restore these fields before choosing. No other state "
-                "fields or legal choices are omitted. When deckTable is present, state.deck "
-                "contains value arrays ordered by deckTable.columns; prepend the exact "
-                "deckTable.stringPrefixes value to each indicated string column. "
-                "In argentum-seat-tables-v3, actionDefaults gives exact omitted fields on each "
-                "legalActions entry. Each state.gameLog row starts with its gameLogColumns index, "
-                "followed by values in those columns; chronological order is unchanged. "
-                "Use semanticId from observation.legalActions."
-            )
+                mulligan = observation.get('state', {}).get('mulligan', {})
+                count = mulligan.get('mulliganCount')
+                keep = next((a for a in observation.get('legalActions', [])
+                             if a.get('kind') == 'KeepHand'), None)
+                if type(count) is int and count >= 2 and keep is not None:
+                    instructions += (
+                        f"\nYou have already mulliganed {count} times. Preserve the remaining cards: "
+                        "choose the offered KeepHand action now. Its exact response is "
+                        + json.dumps({'channel': 'action', 'choice': {
+                            'semanticId': keep['semanticId'], 'params': {}}})
+                        + ". Do not confuse this identifier with TakeMulligan."
+                    )
+            if schema_format["name"] in {"commander_gym_native_action", "commander_gym_native_mixed_payment"}:
+                instructions += "\nUse the schema's nested choice object containing semanticId and params."
+            if schema_format["name"] == "commander_gym_native_mixed_payment":
+                instructions += (
+                    "\nFor this payment window, choose either an explicitly offered native mana ability "
+                    "via channel action and nested choice, or the pending native payment response via "
+                    "channel decision and response. Use only availableSources for selectedSources. "
+                    "If canAutoPayNow is false, do not use autoPay. If autoPay is true, selectedSources "
+                    "must be empty. CancelDecisionResponse is allowed only when the schema permits it."
+                )
+        else:
+            instructions = instructions_override
+        if model_view is None:
+            model_observation = _without_live_routing(observation)
+            if self.config.compact_observation:
+                model_observation = compact_inference_observation(model_observation)
+                if model_observation.get('format') == SHARED_VIEW_FORMAT:
+                    instructions += SHARED_VIEW_INSTRUCTIONS
+                instructions += (
+                    "\nThis request uses the format named in format. The observation is inside "
+                    "observation; cardDefaults lists exact values for omitted fields on every "
+                    "state.cards entry. Restore these fields before choosing. No other state "
+                    "fields or legal choices are omitted. When deckTable is present, state.deck "
+                    "contains value arrays ordered by deckTable.columns; prepend the exact "
+                    "deckTable.stringPrefixes value to each indicated string column. "
+                    "In argentum-seat-tables-v3, actionDefaults gives exact omitted fields on each "
+                    "legalActions entry. Each state.gameLog row starts with its gameLogColumns index, "
+                    "followed by values in those columns; chronological order is unchanged. "
+                    "Use semanticId from observation.legalActions."
+                )
+        else:
+            model_observation = deepcopy(model_view)
         instructions += "\nThe current native parameterSpec and response schema define all allowed fields, including additional cost payments."
         base_input = json.dumps(_cache_ordered_observation(model_observation), separators=(",", ":"))
         request = {
@@ -400,6 +411,8 @@ class LMStudioPilot:
                         raise LMStudioError("provider_context_budget_exceeded")
                 content, parsed = _parse_final(response, self.config.model)
                 _schema_check(schema_format["schema"], parsed, validate=True)
+                if output_decoder is not None:
+                    content = output_decoder(parsed)
                 choice = validator._choice_from_response(
                     {"status": "completed", "output_text": content}, observation, retry_count=index,
                 )

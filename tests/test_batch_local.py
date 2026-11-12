@@ -125,6 +125,7 @@ class LocalBatchTests(unittest.TestCase):
         before={str(p.relative_to(source)):p.read_bytes() for p in source.rglob('*') if p.is_file()}
         output=self.root/'local'
         registry=prepare_local_catalog(catalog,source,output,config())
+        self.assertEqual(json.loads((output/'local/pilot.json').read_text())['skill_set']['artifact_id'],'argentum-default-policies')
         self.assertTrue(all('-local-' in p['id'] for p in registry.profile_payloads()))
         for directory in output.rglob('*'):
             if directory.is_dir():self.assertEqual(directory.stat().st_mode & 0o022,0)

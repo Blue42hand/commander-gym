@@ -1,21 +1,19 @@
-"""Opt-in primer policy over current masked offers, never native engine state.
+"""Lathril strategy overrides over shared policies and current masked offers.
 
 Strategic simplifications are deliberate: develop a wide Elf board, avoid unplanned
-mana and reserve recovery. Unrepresented decisions stop visibly; they never reopen
-an unrestricted model action space. All selected choices use the native validator.
+mana and reserve recovery. Unrepresented decisions defer to the bounded fallback. All selected choices use the native validator.
 """
 from dataclasses import replace
 import hashlib
 import json
-from itertools import combinations
 from pathlib import Path
 
 from .deck_package import ArtifactRef
 from .heuristic_facts import canonical
-from .heuristic_policy import MaskedHeuristicSubsystem, ids_in, affordable, mana_cost
+from .heuristic_policy import PolicyNotApplicable, ids_in, affordable, mana_cost
+from .default_policies import DefaultPolicySubsystem
 from .pilot import ArgentumActionChoice, PilotContractError
 from .pilot_composition import SubsystemDecision
-from .bounded_deck_advisor import BoundedDeckAdvisor
 
 POLICY_PATH = Path(__file__).with_name('deck_policies') / 'lathril_v1.json'
 
@@ -25,10 +23,11 @@ def policy_document():
 
 
 def lathril_component_ref(facts):
-    sources = ['lathril_policy.py', 'bounded_deck_advisor.py', 'heuristic_policy.py', 'heuristic_facts.py']
-    payload = {'facts': facts.digest, 'policy': policy_document(),
+    sources = ['lathril_policy.py', 'deck_policy_registry.py']
+    from .heuristic_facts import heuristic_component_ref
+    payload = {'defaults': heuristic_component_ref(facts).digest, 'policy': policy_document(),
                'sources': {p: hashlib.sha256(Path(__file__).with_name(p).read_bytes()).hexdigest() for p in sources}}
-    return ArtifactRef(kind='skill-set', artifact_id='lathril-primer-policy', version='1',
+    return ArtifactRef(kind='skill-set', artifact_id='lathril-primer-policy', version='2',
                        digest='sha256:' + hashlib.sha256(canonical(payload)).hexdigest())
 
 
@@ -39,30 +38,21 @@ def validate_lathril_binding(binding):
         raise PilotContractError('Lathril policy requires its exact reviewed deck and primer')
 
 
-class LathrilDeckSubsystem(MaskedHeuristicSubsystem):
+class LathrilDeckSubsystem(DefaultPolicySubsystem):
     name = 'lathril-primer-policy'
-    version = '1'
+    version = '2'
+    deck_policy = 'lathril-primer-v2'
 
     def __init__(self, facts, config=None, transport=None):
         super().__init__(facts)
         self.document = policy_document()
-        self.advisor = BoundedDeckAdvisor(config, transport) if config is not None else None
 
     def try_choose(self, observation):
         result = super().try_choose(observation)
-        if result.choice is None:
-            # No static-order escape into an unrestricted generalist.
-            raise PilotContractError('lathril-unsupported: ' + str(result.reason))
         metadata = {**result.metadata, 'deckPolicy': self.document['policy_id'],
                     'policyDigest': lathril_component_ref(self.facts).digest}
-        choice_metadata = {**result.choice.metadata, **metadata.pop('advisorMetadata', {})}
-        return replace(result, choice=replace(result.choice, metadata={**choice_metadata, 'deckPolicy': metadata}), metadata=metadata)
-
-    def _card(self, o, entity):
-        return o.get('state', {}).get('cards', {}).get(entity, {})
-
-    def _own(self, o):
-        return [self._card(o, i) for i in ids_in(o['state'], 'Battlefield', o['agentToAct'])]
+        if result.choice is None: return replace(result, metadata=metadata)
+        return replace(result, choice=replace(result.choice, metadata={**result.choice.metadata, 'deckPolicy': metadata}), metadata=metadata)
 
     def _elves(self, o, untapped=False):
         return [i for i in ids_in(o['state'], 'Battlefield', o['agentToAct'])
@@ -70,13 +60,9 @@ class LathrilDeckSubsystem(MaskedHeuristicSubsystem):
                 and 'Elf' in self._card(o, i).get('subtypes', [])
                 and (not untapped or not self._card(o, i).get('isTapped'))]
 
-    @staticmethod
-    def _pass(o):
-        return next((a for a in o['legalActions'] if a.get('kind') == 'PassPriority' and affordable(a)), None)
-
-    def _choose(self, o):
+    def _choose_actions(self, o):
         if o.get('nativePaymentError') is not None:
-            raise PilotContractError('lathril-unsupported-payment-correction')
+            raise PolicyNotApplicable('lathril-unsupported-payment-correction')
         if 'mulligan' in o.get('state', {}):
             return self._opening(o)
         if o.get('pendingDecision') is not None:
@@ -146,14 +132,6 @@ class LathrilDeckSubsystem(MaskedHeuristicSubsystem):
                                 candidates=[{'card': name, 'score': score} for score, _, name in ranked])
         return self._interaction(o, removal, passed)
 
-    @staticmethod
-    def _plain_cast(a):
-        raw = a.get('action', {})
-        return not (a.get('hasXCost') or a.get('additionalCostInfo') or a.get('modalEnumeration')
-                    or a.get('hasConvoke') or a.get('hasDelve') or a.get('requiresDamageDistribution')
-                    or raw.get('useAlternativeCost') or raw.get('chosenModes') or raw.get('castFaceDown')
-                    or raw.get('faceIndex') is not None)
-
     def _development_score(self, o, card, role):
         score = self.document['weights'][role]
         own = self._own(o); elves = len(self._elves(o))
@@ -173,18 +151,18 @@ class LathrilDeckSubsystem(MaskedHeuristicSubsystem):
         cost = mana_cost(card.get('manaCost', self.facts.get(card.get('name')).get('manaCost', '')))
         return score - (cost[0]*.25 if cost else 0)
 
-    def _land_colors(self, card):
-        return set(self.document['lands'].get(card.get('name'), self.facts.get(card.get('name')).get('manaColors', [])))
-
-    def _enters_tapped(self, card, board):
-        name = card.get('name')
-        if name in {'Path of Ancestry', 'Temple of Malady', 'Bojuka Bog'}:
-            return True
-        if name == 'Woodland Cemetery':
-            return not any(c.get('name') in {'Forest', 'Swamp', 'Overgrown Tomb'}
-                           or set(c.get('subtypes', [])) & {'Forest', 'Swamp'} for c in board)
-        # Tomb can enter untapped by paying life; native owns that decision.
-        return False
+    def _search_score(self, o, pending, card):
+        name = card.get('name'); role = self.document['roles'].get(name)
+        if role == 'finisher': return 200 if self._overrun_is_lethal(o, name) else -1
+        if role == 'removal':
+            own_power = sum(max(0, c.get('power') or 0) for c in self._own(o))
+            enemy_power = max((sum(max(0, self._card(o, i).get('power') or 0)
+                              for i in ids_in(o['state'], 'Battlefield', player['playerId']))
+                              for player in o['state'].get('players', []) if player['playerId'] != o['agentToAct']), default=0)
+            return 150 if enemy_power > max(10, own_power*1.5) else 20
+        if 'Land' in card.get('typeLine', '') or 'LAND' in card.get('cardTypes', []):
+            return 100 if pending.get('context', {}).get('sourceName') == 'Wood Elves' else 10
+        return self.document['weights'].get(role, -1)
 
     def _opening_value(self, card):
         role = self.document['roles'].get(card.get('name'))
@@ -194,27 +172,6 @@ class LathrilDeckSubsystem(MaskedHeuristicSubsystem):
         if card.get('name') in {"Patriarch's Bidding", 'Cryptolith Rite', 'Growing Rites of Itlimoc', 'Elvish Guidance'}:
             value -= 20  # Requires a developed board or graveyard.
         return value
-
-    def _land_score(self, o, action):
-        card = self._card(o, action['action'].get('cardId'))
-        board = self._own(o); colors = self._land_colors(card)
-        supply = set().union(*(self._land_colors(c) for c in board)) if board else set()
-        score = (8 if 'G' in colors - supply else 0) + (6 if 'B' in colors - supply else 0)
-        sources = [self._land_colors(c) for c in board if not c.get('isTapped') and self._land_colors(c)]
-        if not self._enters_tapped(card, board):
-            sources.append(colors)
-        hand = [self._card(o, i) for i in ids_in(o['state'], 'Hand', o['agentToAct'])]
-        useful = [c for c in hand if self.document['roles'].get(c.get('name')) in self.document['weights']]
-        playable = [self._opening_value(c) for c in useful
-                    if (cost := mana_cost(c.get('manaCost', self.facts.get(c.get('name')).get('manaCost', ''))))
-                    and cost[0] > 0 and self._payable(cost, sources)]
-        # A useful cast this turn takes precedence over abstract color coverage.
-        score += max(playable, default=0) * 2
-        for c in useful:
-            cost = mana_cost(c.get('manaCost', self.facts.get(c.get('name')).get('manaCost', '')))
-            if cost and cost[0] <= 4:
-                score += sum(min(cost[1][color], 2) for color in colors & {'G', 'B'}) * 2
-        return score
 
     def _opening(self, o):
         m = o['state']['mulligan']; hand = m.get('hand', []); cards = m.get('cards', {})
@@ -236,7 +193,7 @@ class LathrilDeckSubsystem(MaskedHeuristicSubsystem):
             raise PilotContractError('lathril-opening-offer-missing')
         return self._action(offer, 'lathril-opening-mana-and-early-elf', objective='cast-early-elves', landCount=len(lands))
 
-    def _pending(self, o, p):
+    def _deck_pending(self, o, p):
         context = p.get('context', {}); source = context.get('sourceName'); rt = p.get('responseSpec', {}).get('responseType')
         if (p.get('kind') == 'SelectCardsDecision' and source == self.document['commander']
             and p.get('minSelections') == p.get('maxSelections') == 10):
@@ -251,146 +208,7 @@ class LathrilDeckSubsystem(MaskedHeuristicSubsystem):
             for color in ['GREEN', 'BLACK', 'COLORLESS']:
                 if color in choices:
                     return self._decision(p, rt, 'lathril-mana-color', color=color)
-        free_tokens = {
-            'Wirewood Hivemaster': 'You may create a 1/1 green Insect creature token',
-            'Lys Alana Huntmaster': 'You may create a 1/1 green Elf Warrior creature token',
-        }
-        if (p.get('kind') == 'YesNoDecision' and rt == 'YesNoResponse' and source in free_tokens
-            and (context.get('abilityIdentity') or {}).get('abilityId') == source + ':1'
-            and context.get('phase') == 'RESOLUTION'
-            and p.get('prompt', '').rstrip('.').casefold() == free_tokens[source].casefold()
-            and not any(p.get(k) for k in ['peerOptions', 'yesDetail', 'noDetail'])):
-            return self._decision(p, rt, 'lathril-accept-free-token', choice=p.get('yesAvailable') is True)
-        if (p.get('kind') == 'YesNoDecision' and rt == 'YesNoResponse' and source == 'Overgrown Tomb'
-            and p.get('prompt') == 'Pay 2 life to have Overgrown Tomb enter untapped?'):
-            board = [self._card(o, i) for i in ids_in(o['state'], 'Battlefield', o['agentToAct']) if i != context.get('sourceId')]
-            sources = [self._land_colors(c) for c in board if not c.get('isTapped') and self._land_colors(c)]
-            life = next((x.get('life', 0) for x in o['state'].get('players', []) if x.get('playerId') == o['agentToAct']), 0)
-            unlocks = False
-            for i in ids_in(o['state'], 'Hand', o['agentToAct']):
-                card = self._card(o, i)
-                if self.document['roles'].get(card.get('name')) not in self.document['weights'] and card.get('name') != 'Demonic Tutor':
-                    continue
-                cost = mana_cost(card.get('manaCost', self.facts.get(card.get('name')).get('manaCost', '')))
-                if cost and cost[0] > 0 and self._payable(cost, sources + [{'G', 'B'}]) and not self._payable(cost, sources):
-                    unlocks = True
-            return self._decision(p, rt, 'lathril-pay-life-for-development', choice=p.get('yesAvailable') is True and life > 4 and unlocks)
-        if p.get('kind') == 'YesNoDecision' and source == 'Leaf-Crowned Visionary' and (context.get('abilityIdentity') or {}).get('abilityId') == 'Leaf-Crowned Visionary:1':
-            me = next((x for x in o['state'].get('players', []) if x.get('playerId') == o['agentToAct']), {})
-            return self._decision(p, rt, 'lathril-pay-for-cards', choice=p.get('yesAvailable') is True and me.get('librarySize', 0) > 3)
-        if rt == 'ManaSourcesSelectedResponse' and source == 'Leaf-Crowned Visionary' and p.get('requiredCost') == '{G}':
-            available = {a['entityId'] for a in p.get('availableSources', []) if not a.get('requiresSacrifice') and not a.get('requiresTappingAnotherPermanent')}
-            suggestion = p.get('autoPaySuggestion', [])
-            if suggestion and len(suggestion) == len(set(suggestion)) and set(suggestion) <= available:
-                return self._decision(p, rt, 'lathril-pay-native-suggestion', autoPay=False, declined=False, selectedSources=suggestion, waterbendPermanents=[])
-            if p.get('canAutoPayNow') is True:
-                return self._decision(p, rt, 'lathril-native-autopay', autoPay=True, declined=False, selectedSources=[], waterbendPermanents=[])
-            if p.get('canDecline') is True:
-                return self._decision(p, rt, 'lathril-decline-unfunded-draw', autoPay=False, declined=True, selectedSources=[], waterbendPermanents=[])
-        if (p.get('kind') == 'SelectCardsDecision' and rt == 'CardsSelectedResponse'
-            and ((source == 'Growing Rites of Itlimoc'
-                  and p.get('prompt') == 'You may reveal a creature card and put it into your hand')
-                 or (source == "Herald's Horn" and p.get('selectedLabel') == 'Reveal and put into your hand'
-                     and p.get('remainderLabel') == 'Leave on top of your library'))
-            and p.get('minSelections') == 0 and p.get('maxSelections') == 1
-            and not any(p.get(k) for k in ['selectionLimits', 'conditionalMinimums', 'onePerCardType',
-                'onePerColor', 'onePerCardName', 'onePerBasicLandType', 'onePerPower',
-                'maxTotalManaValue', 'minTotalManaValue', 'maxTotalPower'])):
-            candidates = [i for i in p.get('options', []) if i not in p.get('nonSelectableOptions', [])]
-            info = p.get('cardInfo') or {}
-            if any(i not in info or 'Creature' not in info[i].get('typeLine', '') for i in candidates):
-                raise PilotContractError('lathril-incomplete-revealed-creatures')
-            def reveal_value(entity):
-                card = info[entity]; role = self.document['roles'].get(card.get('name'))
-                return self._development_score(o, card, role) if role in self.document['weights'] else self._opening_value(card)
-            chosen = sorted(candidates, key=lambda i: (-reveal_value(i), i))[:1]
-            return self._decision(p, rt, 'lathril-reveal-development-creature', selectedCards=chosen)
-        if p.get('kind') in {'SearchLibraryDecision', 'SelectCardsDecision'} and p.get('minSelections') in {0, 1} and p.get('maxSelections') == 1 and source in {'Demonic Tutor', 'Elvish Harbinger', 'Wood Elves', 'Sylvan Messenger', 'Collected Company'}:
-            if any(p.get(k) for k in ['selectionLimits', 'conditionalMinimums', 'onePerCardType', 'onePerColor', 'onePerCardName', 'onePerBasicLandType', 'onePerPower', 'maxTotalManaValue', 'minTotalManaValue', 'maxTotalPower']):
-                raise PilotContractError('lathril-unsupported-search-constraints')
-            own_power = sum(max(0, c.get('power') or 0) for c in self._own(o))
-            enemy_power = max((sum(max(0, self._card(o, i).get('power') or 0) for i in ids_in(o['state'], 'Battlefield', player['playerId'])) for player in o['state'].get('players', []) if player['playerId'] != o['agentToAct']), default=0)
-            def search_score(entity):
-                card = (p.get('cardInfo') or {}).get(entity, self._card(o, entity))
-                name = card.get('name'); role = self.document['roles'].get(name)
-                if role == 'finisher':
-                    return 200 if self._overrun_is_lethal(o, name) else -1
-                if role == 'removal':
-                    return 150 if enemy_power > max(10, own_power*1.5) else 20
-                if 'Land' in card.get('typeLine', '') or 'LAND' in card.get('cardTypes', []):
-                    return 100 if source == 'Wood Elves' else 10
-                return self.document['weights'].get(role, -1)
-            candidates = [(search_score(i), i) for i in p.get('options', []) if i not in p.get('nonSelectableOptions', [])]
-            # Library order never enters scoring; options are native permitted choices.
-            if candidates:
-                target = max(candidates, key=lambda x: (x[0], x[1]))[1]
-                return self._decision(p, rt, 'lathril-search-for-engine', selectedCards=[target])
-            if p.get('minSelections') == 0:
-                return self._decision(p, rt, 'lathril-search-no-eligible-card', selectedCards=[])
-        count = p.get('minSelections')
-        options = p.get('options', [])
-        hand = ids_in(o.get('state', {}), 'Hand', o['agentToAct'])
-        if (p.get('kind') == 'SelectCardsDecision' and rt == 'CardsSelectedResponse'
-            and type(count) is int and count > 0 and p.get('maxSelections') == count
-            and p.get('prompt') == f'Discard down to 7 cards (choose {count} to discard)'
-            and context.get('phase') == 'STATE_BASED' and o['state'].get('currentStep') == 'CLEANUP'
-            and len(hand) - 7 == count and len(options) == len(hand) and set(options) == set(hand)
-            and not p.get('librarySearch') and not any(p.get(k) for k in [
-                'nonSelectableOptions', 'selectionLimits', 'conditionalMinimums', 'onePerCardType',
-                'onePerColor', 'onePerCardName', 'onePerBasicLandType', 'onePerPower',
-                'maxTotalManaValue', 'minTotalManaValue', 'maxTotalPower'])):
-            if any(not self._card(o, i).get('name') for i in options):
-                raise PilotContractError('lathril-incomplete-discard-hand')
-            lands = sum(bool(self._land_colors(c)) for c in self._own(o))
-            hand_lands = sum(bool(self._land_colors(self._card(o, i))) for i in hand)
-            def discard_value(entity):
-                card = self._card(o, entity)
-                if 'Land' in card.get('typeLine', '') or 'LAND' in card.get('cardTypes', []):
-                    return 150 if lands < 3 else (60 if lands + hand_lands <= 5 else 0)
-                role = self.document['roles'].get(card.get('name'))
-                if role == 'finisher' and self._overrun_is_lethal(o, card.get('name')):
-                    return 200
-                value = self._opening_value(card)
-                if role in {'mana_elf', 'mana_engine'} and lands >= 5:
-                    value -= 35
-                return value
-            chosen = sorted(options, key=lambda i: (discard_value(i), i))[:count]
-            return self._decision(p, rt, 'lathril-discard-for-hand-limit', selectedCards=chosen)
-        if p.get('kind') == 'BottomCards':
-            cards = p.get('cards', {}); hand = p.get('hand', []); count = p.get('cardsToPutOnBottom')
-            if type(count) is not int or not 0 <= count <= len(hand) or any(i not in cards for i in hand):
-                raise PilotContractError('lathril-incomplete-bottom')
-            def retained_value(retained):
-                lands = [cards[i] for i in retained if 'Land' in cards[i].get('typeLine', '')]
-                colors = set().union(*(self._land_colors(c) for c in lands)) if lands else set()
-                pip_support = sum(min(sum(color in self._land_colors(c) for c in lands),
-                                      max((cards[i].get('manaCost', '').count('{' + color + '}') for i in retained if cards[i] not in lands), default=0))
-                                  for color in ['G', 'B'])
-                return (pip_support * 8 + sum(self._opening_value(cards[i]) for i in retained if cards[i] not in lands)
-                        + min(len(lands), 3) * 150 + max(0, len(lands)-3) * 5
-                        + (35 if 'G' in colors else 0) + (25 if 'B' in colors else 0))
-            # Compare complete retained hands; entity IDs only settle equivalent plans.
-            kept = max(combinations(sorted(hand), len(hand)-count), key=retained_value)
-            return self._decision(p, rt, 'lathril-bottom-delayed-cards', selectedCards=sorted(set(hand)-set(kept)))
-        if (p.get('kind') == 'SelectCardsDecision' and rt == 'CardsSelectedResponse'
-            and p.get('prompt') == 'Scry 1: choose cards to put on the bottom of your library'
-            and p.get('selectedLabel') == 'Put on bottom' and p.get('remainderLabel') == 'Put on top'
-            and p.get('minSelections') == 0 and p.get('maxSelections') == 1
-            and len(p.get('options', [])) == 1 and not p.get('librarySearch')
-            and not any(p.get(k) for k in ['nonSelectableOptions', 'selectionLimits', 'conditionalMinimums', 'onePerCardType', 'onePerColor', 'onePerCardName', 'onePerBasicLandType', 'onePerPower', 'maxTotalManaValue', 'minTotalManaValue', 'maxTotalPower'])):
-            entity = p['options'][0]
-            card = p.get('cardInfo', {}).get(entity)
-            if not isinstance(card, dict) or not card.get('name'):
-                raise PilotContractError('lathril-incomplete-scry-card')
-            board_lands = sum(bool(self._land_colors(c)) for c in self._own(o))
-            hand = [self._card(o, i) for i in ids_in(o['state'], 'Hand', o['agentToAct'])]
-            hand_lands = sum(bool(self._land_colors(c)) for c in hand)
-            is_land = 'Land' in card.get('typeLine', '') or 'LAND' in card.get('cardTypes', [])
-            bottom = (board_lands + hand_lands >= 4) if is_land else (self._opening_value(card) < 10 and board_lands < 5)
-            return self._decision(p, rt, 'lathril-scry-for-development', selectedCards=[entity] if bottom else [])
-        # Preserve the shared forced/free-draw contracts, but never its generic
-        # tribal inference or unrestricted generalist escalation.
-        return super()._pending(o, p)
+        return None
 
     def _removal_candidates(self, o, offers):
         candidates = []
@@ -415,16 +233,15 @@ class LathrilDeckSubsystem(MaskedHeuristicSubsystem):
             options = [(self._card(o, a['action']['cardId']).get('name') + ' on ' + self._card(o, t).get('name', 'unknown'),
                         ArgentumActionChoice(a['actionId'], {'targets': [t]})) for _, a, t in near]
             if len(options) > 1:
-                if self.advisor is None:
-                    raise PilotContractError('lathril-bounded-advisor-required')
-                context = {'objective': 'remove-opponent-engine', 'threats': [
-                    {k: self._card(o, t).get(k) for k in ['name', 'power', 'toughness', 'oracleText', 'isTapped', 'isCommander']} for _, _, t in near]}
-                choice = self.advisor.choose('Which offered threat should we remove?', options, context)
-                return SubsystemDecision(choice=choice, metadata={'reason': 'lathril-bounded-removal', 'advisorMetadata': dict(choice.metadata)})
+                return SubsystemDecision(reason='lathril-uncertain-removal', metadata={
+                    'candidateChoices': [{'actionId': c.action_id, 'params': dict(c.params), 'label': label} for label,c in options]})
             return self._action(best[1], 'lathril-remove-opponent-threat', {'targets': [best[2]]})
-        if passed:
+        offers = [a for a in o['legalActions'] if affordable(a)]
+        unknown = [a for a in offers if a['kind'] != 'PassPriority' and a.get('isManaAbility') is not True
+                   and not (a['kind'] == 'CastSpell' and self.document['roles'].get(self._card(o, a.get('action', {}).get('cardId')).get('name')) in {'finisher', 'recovery', 'sweeper'} and self._plain_cast(a))]
+        if passed and not unknown:
             return self._action(passed, 'lathril-preserve-resources', objective='no-unplanned-mana-or-utility')
-        raise PilotContractError('lathril-unsupported-no-policy-choice')
+        raise PolicyNotApplicable('lathril-unsupported-no-policy-choice')
 
     def _overrun_is_lethal(self, o, name):
         if name not in {'Overwhelming Stampede', 'Craterhoof Behemoth'}:
@@ -454,7 +271,7 @@ class LathrilDeckSubsystem(MaskedHeuristicSubsystem):
         if not offer.get('validBlockers') and pairs in (None, {}):
             return self._action(offer, 'lathril-no-blockers', {'blockers': {}})
         if not isinstance(pairs, dict) or offer.get('mandatoryBlockers'):
-            raise PilotContractError('lathril-unsupported-block-requirements')
+            raise PolicyNotApplicable('lathril-unsupported-block-requirements')
         cap = offer.get('maxTotalBlockers')
         if cap is None:
             cap = len(pairs)
@@ -483,7 +300,7 @@ class LathrilDeckSubsystem(MaskedHeuristicSubsystem):
             return self._block(o, offer)
         if (offer.get('mandatoryAttackers') or offer.get('loneAttackers')
             or any(p.get('teamIndex') is not None for p in o['state'].get('players', []))):
-            raise PilotContractError('lathril-unsupported-combat-requirements')
+            raise PolicyNotApplicable('lathril-unsupported-combat-requirements')
         targets = offer.get('validAttackTargets')
         attackers = offer.get('validAttackers')
         if not isinstance(targets, list) or not isinstance(attackers, list):

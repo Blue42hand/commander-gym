@@ -1,6 +1,6 @@
 {
-  "policy_id": "lathril-primer-v1",
-  "version": "1",
+  "policy_id": "lathril-primer-v2",
+  "version": "2",
   "commander": "Lathril, Blade of the Elves",
   "deck_fingerprint": "2df76a2026e87b51c9b6f802327569136f2382bda8605767db87eb6bb12a8720",
   "primer_fingerprint": "43b9177f9a2fb5e1064b8676ee3ddda494903411caeddb25a870241f0c44ed28",
@@ -12,7 +12,7 @@
     "recovery": "Reserve recursion and sweepers; do not cast them merely because they are legal.",
     "combat": "Prefer Lathril connections and preserve the ten-Elf drain board; use native attack pairs.",
     "tutor": "Prefer interaction when behind and engines otherwise. Overrun requires a demonstrated lethal attack.",
-    "uncertainty": "Only escalate among complete policy-approved choices. Unsupported mechanics fail visibly.",
+    "uncertainty": "Defer uncertain or unsupported decisions to bounded inference using current native offers.",
     "scry": "For native Scry 1, bottom redundant lands once four land drops are available, and delay expensive situational cards on an undeveloped board."
   },
   "weights": {
@@ -153,5 +153,17 @@
     "removal": 50,
     "finisher": 15,
     "sweeper": 10
-  }
+  },
+  "color_priorities": {
+    "G": 8,
+    "B": 6
+  },
+  "opening_color_bonus": {
+    "G": 35,
+    "B": 25
+  },
+  "mana_roles": [
+    "mana_elf",
+    "mana_engine"
+  ]
 }

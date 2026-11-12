@@ -65,20 +65,17 @@ class LathrilPolicyTests(unittest.TestCase):
         o['state']['zones'] = []
         self.assertEqual(policy().try_choose(o).choice.response['selectedCards'], [])
         o['pendingDecision']['prompt'] = 'Choose a card to discard'
-        with self.assertRaises(PilotContractError):
-            policy().try_choose(o)
+        self.assertIsNone(policy().try_choose(o).choice)
 
     def test_recorded_hand_limit_discards_utility_and_rejects_other_effects(self):
         o = json.loads((Path(__file__).parent / 'fixtures/lathril_mirror_regressions.json').read_text())['discard']
         c = policy().try_choose(o).choice
         self.assertEqual([o['state']['cards'][i]['name'] for i in c.response['selectedCards']], ['Staff of Domination'])
         o['pendingDecision']['prompt'] = 'Choose a creature to sacrifice'
-        with self.assertRaises(PilotContractError):
-            policy().try_choose(o)
+        self.assertIsNone(policy().try_choose(o).choice)
         o['pendingDecision']['prompt'] = 'Discard down to 7 cards (choose 1 to discard)'
         o['pendingDecision']['nonSelectableOptions'] = ['e159']
-        with self.assertRaises(PilotContractError):
-            policy().try_choose(o)
+        self.assertIsNone(policy().try_choose(o).choice)
 
     def test_recorded_shock_land_pays_life_only_for_development(self):
         o = json.loads((Path(__file__).parent / 'fixtures/lathril_mirror_regressions.json').read_text())['tomb']
@@ -120,8 +117,7 @@ class LathrilPolicyTests(unittest.TestCase):
         p['prompt'] = 'you may create a 1/1 green Elf Warrior creature token.'
         self.assertTrue(policy().try_choose(o).choice.response['choice'])
         p['context']['abilityIdentity']['abilityId'] = 'other:1'
-        with self.assertRaises(PilotContractError):
-            policy().try_choose(o)
+        self.assertIsNone(policy().try_choose(o).choice)
 
     def test_horn_native_reveal_contract_takes_offered_elf(self):
         o = decision('SelectCardsDecision','CardsSelectedResponse',{'selectedCards':'ENTITY_ID_ARRAY'},
@@ -144,10 +140,9 @@ class LathrilPolicyTests(unittest.TestCase):
             o=decision('ChooseOptionDecision','OptionChosenResponse',{'optionIndex':'INTEGER'},options=options,context={'sourceName':"Herald's Horn"})
             self.assertEqual(p.try_choose(o).choice.response['optionIndex'],options.index('Elf'))
 
-    def test_unrepresented_choice_cannot_fall_through_to_generalist(self):
+    def test_unrepresented_choice_defers_to_fallback(self):
         p=policy();o=decision('ChooseOptionDecision','OptionChosenResponse',{'optionIndex':'INTEGER'},options=['foo','bar'],context={'sourceName':'Unknown'})
-        with self.assertRaisesRegex(PilotContractError,'lathril-unsupported'):
-            p.try_choose(o)
+        self.assertIsNone(p.try_choose(o).choice)
 
     def test_development_is_not_vetoed_by_available_utility_or_mana(self):
         p=policy();o=observation(offer('PassPriority',0),offer('CastSpell',1,card='engine'),offer('CastSpell',2,card='staff'),offer('ActivateAbility',3,mana=True))
@@ -166,8 +161,7 @@ class LathrilPolicyTests(unittest.TestCase):
     def test_unsupported_special_cast_is_not_invented_or_sent_to_model(self):
         o=observation(offer('CastSpell',1,card='elf'));o['legalActions'][0]['hasXCost']=True
         zone(o,'Hand','me',elf=creature('Llanowar Elves'))
-        with self.assertRaisesRegex(PilotContractError,'no-policy-choice'):
-            policy().try_choose(o)
+        self.assertIsNone(policy().try_choose(o).choice)
 
     def test_dont_spend_recovery_or_sweeper_on_empty_board(self):
         o=observation(offer('PassPriority',0),offer('CastSpell',1,card='recovery'),offer('CastSpell',2,card='wrath'))
@@ -191,14 +185,15 @@ class LathrilPolicyTests(unittest.TestCase):
         o['state']['mulligan']['cards']['c']['name']='Forest'
         self.assertEqual(policy().try_choose(o).choice.action_id,0)
 
-    def test_unrestricted_generalist_is_not_reached_after_policy_failure(self):
-        p=policy();cfg=config();transport=FakeTransport()
+    def test_uncovered_choice_reaches_only_bounded_model(self):
+        p=policy();cfg=config();transport=FakeTransport(completion('{"option":1}'))
         pilot=Pilot(pilot_id='test-lathril',revision='1',generalist_base=local_component_ref(cfg),skill_set=lathril_component_ref(p.facts))
         composed=compose_pilot_runtime(pilot,LocalBindingComponentResolver(cfg,transport,card_facts=p.facts))
         o=decision('ChooseOptionDecision','OptionChosenResponse',{'optionIndex':'INTEGER'},options=['unknown','other'],context={'sourceName':'Unknown'})
-        with self.assertRaisesRegex(PilotContractError,'lathril-unsupported'):
-            composed.choose(o)
-        self.assertEqual(transport.calls,[])
+        c=composed.choose(o)
+        self.assertEqual(c.response['optionIndex'],1)
+        self.assertEqual(c.metadata['boundedFallback']['mode'],'frozen-choices')
+        self.assertEqual(len(transport.calls),2)
 
     def test_policy_cannot_be_assigned_to_a_different_deck_or_primer(self):
         from types import SimpleNamespace
@@ -240,15 +235,16 @@ class LathrilPolicyTests(unittest.TestCase):
         c=policy().try_choose(o).choice
         self.assertEqual(c.action_id,1);self.assertEqual(len(c.params['tappedPermanents']),10);self.assertNotIn('lathril',c.params['tappedPermanents'])
         o['legalActions'][1]['action']['abilityId']='Cryptolith Rite:1'
-        self.assertEqual(policy().try_choose(o).choice.action_id,0)
+        self.assertIsNone(policy().try_choose(o).choice)
         o['legalActions'][1]['action']['abilityId']='Lathril, Blade of the Elves:2'
         o['state']['cards']['e0']['isTapped']=True
-        self.assertEqual(policy().try_choose(o).choice.action_id,0)
+        self.assertIsNone(policy().try_choose(o).choice)
 
     def test_unsupported_blocking_is_explicit(self):
         a=offer('DeclareBlockers',0);a['validBlockers']=['elf']
-        with self.assertRaisesRegex(PilotContractError,'block-requirements'):
-            policy().try_choose(observation(a))
+        r=policy().try_choose(observation(a))
+        self.assertIsNone(r.choice)
+        self.assertIn('block-requirements',r.reason)
 
     def test_basic_block_uses_native_pairs_and_cap(self):
         a=offer('DeclareBlockers',0);a.update(validBlockers=['elf'],validBlockTargets={'elf':['attacker']},maxTotalBlockers=1,parameterSpec={'allowedFields':{'blockers':'ENTITY_ID_ARRAY_MAP'}})
@@ -270,18 +266,21 @@ class LathrilPolicyTests(unittest.TestCase):
         zone(o,'Battlefield','enemy',blocker=creature('Enemy'))
         self.assertEqual(policy().try_choose(o).choice.action_id,0)
 
-    def test_top_threats_use_bounded_advisor_and_exclude_own_targets(self):
+    def test_top_threats_defer_to_bounded_fallback_and_exclude_own_targets(self):
         p=policy();t=FakeTransport(completion('{"option":1}',usage={'prompt_tokens':100,'completion_tokens':5,'total_tokens':105}))
-        p.advisor=BoundedDeckAdvisor(config(),t)
         a=offer('CastSpell',1,card='removal');a.update(requiresTargets=True,targetCount=1,minTargets=1,targetRequirements=None,validTargets=['mine','a','b'],parameterSpec={'allowedFields':{'targets':'ENTITY_ID_ARRAY'}})
         o=observation(offer('PassPriority',0),a)
         zone(o,'Hand','me',removal={'name':'Abrupt Decay'})
         zone(o,'Battlefield','me',mine=creature('Beast Whisperer'))
         zone(o,'Battlefield','enemy',a={**creature('Elf'),'power':10,'controllerId':'enemy'},b={**creature('Elf'),'power':10,'controllerId':'enemy'})
-        c=p.try_choose(o).choice
+        result=p.try_choose(o)
+        self.assertIsNone(result.choice)
+        self.assertEqual(len(result.metadata['candidateChoices']),2)
+        from commander_gym.bounded_policy_fallback import BoundedPolicyFallback
+        c=BoundedPolicyFallback(config(),t,facts=p.facts).choose_with_policy_context(o,[{'metadata':result.metadata}])
         self.assertIn(c.params['targets'][0],['a','b']);self.assertNotIn('mine',c.params['targets'])
         self.assertIn('modelIo',c.metadata)
-        self.assertEqual(c.metadata['deckAdvisor']['candidateCount'],2)
+        self.assertEqual(c.metadata['boundedFallback']['candidateCount'],2)
 
     def test_hidden_or_administrative_fields_do_not_change_choice(self):
         o=observation(offer('PassPriority',0),offer('ActivateAbility',1,mana=True));p=policy()
