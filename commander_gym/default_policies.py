@@ -51,6 +51,7 @@ class DefaultPolicySubsystem(SharedCardPolicies, MaskedHeuristicSubsystem):
     # Trusted deck code can approve specific rescue/combo self-target effects.
     self_target_exceptions = frozenset()
     reaction_timing_exceptions = frozenset()
+    counter_target_exceptions = frozenset()
 
     def __init__(self, facts=None):
         super().__init__(facts or UnknownCardFacts())
@@ -59,9 +60,9 @@ class DefaultPolicySubsystem(SharedCardPolicies, MaskedHeuristicSubsystem):
     def try_choose(self, observation):
         from .policy_action_bounds import bounded_observation
         tutor_engines = sorted(n for n,role in self.document['roles'].items() if role=='draw_engine')
-        bounded, restrictions = bounded_observation(observation, self.facts, allow_self_targets=self.self_target_exceptions, preferred_engines=tutor_engines, reaction_timing_exceptions=self.reaction_timing_exceptions)
+        bounded, restrictions = bounded_observation(observation, self.facts, allow_self_targets=self.self_target_exceptions, preferred_engines=tutor_engines, reaction_timing_exceptions=self.reaction_timing_exceptions, counter_target_exceptions=self.counter_target_exceptions)
         result = super().try_choose(bounded)
-        metadata = {**result.metadata, 'reviewedTutorEngines':tutor_engines, 'approvedReactiveTimings':sorted(self.reaction_timing_exceptions), 'approvedSelfTargetEffects':sorted(self.self_target_exceptions), 'policyRestrictions': restrictions, 'utilityPlans':bounded.get('policyUtilityPlans',[]), 'policyLayers': {
+        metadata = {**result.metadata, 'reviewedTutorEngines':tutor_engines, 'approvedReactiveTimings':sorted(self.reaction_timing_exceptions), 'approvedCounterTargets':sorted(self.counter_target_exceptions), 'approvedSelfTargetEffects':sorted(self.self_target_exceptions), 'policyRestrictions': restrictions, 'utilityPlans':bounded.get('policyUtilityPlans',[]), 'policyLayers': {
             'defaults': 'default-policies-v2', 'deck': self.deck_policy,
             'status': 'handled' if result.choice is not None else 'deferred'},
             'policyContext': {'policy': self.document['policy_id'], 'objectives': list(self.document['rules'].values())}}

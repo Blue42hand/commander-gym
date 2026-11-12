@@ -112,7 +112,7 @@ def attack_tax_defenders(o):
         and cards[i].get('name') in ATTACK_TAX_SOURCES and not abilities_removed(o,cards[i])}
 
 
-def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=(), reaction_timing_exceptions=()):
+def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=(), reaction_timing_exceptions=(), counter_target_exceptions=()):
     view = deepcopy(o); cards = view.get('state', {}).get('cards', {}); me = view['agentToAct']
     restrictions = []; retained = []; plans = []
     answered=pending_counter_answers(o);held_autopay=False;state=o.get('state',{})
@@ -146,6 +146,18 @@ def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=()
             and not (state.get('activePlayerId')==me and state.get('currentStep') in {'PRECOMBAT_MAIN','POSTCOMBAT_MAIN'}
                      or state.get('activePlayerId')!=me and state.get('currentStep')=='END_STEP')):
             restrictions.append({'action':a['semanticId'],'rule':'draw-in-main-or-opponent-end-step'});held_autopay |= raw.get('paymentStrategy',{}).get('type')=='AutoPay';continue
+        # A two-card counter is reserved for threats beyond routine mana fixing.
+        # Unknown spells and engines keep their native choices for the model.
+        exile_cost=a.get('additionalCostInfo') or {}
+        if (casting and 'COUNTERSPELL' in facts.get(name).get('tags',[]) and exile_cost.get('costType')=='ExileFromHand'
+            and a.get('minTargets')==a.get('targetCount')==1 and a.get('targetRequirements') is None
+            and isinstance(a.get('validTargets'),list) and name not in counter_target_exceptions):
+            routine={'Thought Vessel','Mind Stone','Arcane Signet','Fellwar Stone',"Commander's Sphere","Wayfarer's Bauble"}
+            targets=[t for t in a['validTargets'] if cards.get(t,{}).get('name') not in routine]
+            if targets!=a['validTargets']:
+                restrictions.append({'action':a['semanticId'],'rule':'preserve-two-card-counter-for-material-threat'})
+                a['validTargets']=targets
+                if not targets:continue
         if (casting and 'COUNTERSPELL' in facts.get(name).get('tags',[]) and answered
             and a.get('minTargets')==a.get('targetCount')==1 and a.get('targetRequirements') is None
             and isinstance(a.get('validTargets'),list)):

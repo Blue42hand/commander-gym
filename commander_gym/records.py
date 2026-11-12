@@ -94,6 +94,34 @@ def validate_bounce_payment(params: Mapping[str, Any], offered: Mapping[str, Any
 CONVOKE_COLORS = frozenset({'WHITE','BLUE','BLACK','RED','GREEN'})
 
 
+def native_hand_exile_offer(offered: Mapping[str, Any]) -> tuple[list[str], int, int] | None:
+    """Read a simple native hand-exile cost; compound/weighted costs stay native."""
+    fields = offered.get('parameterSpec', {}).get('allowedFields', {})
+    if fields.get('exiledCards') != 'ENTITY_ID_ARRAY': return None
+    cost = offered.get('additionalCostInfo', offered.get('costChoices'))
+    if not isinstance(cost, Mapping) or cost.get('costType') != 'ExileFromHand': return None
+    if cost.get('alsoRequired') or cost.get('exileMinTotalWeight') or cost.get('exileWeightPerTarget'): return None
+    ids = cost.get('validExileTargets'); low = cost.get('exileMinCount'); high = cost.get('exileMaxCount')
+    if (not isinstance(ids, list) or any(not isinstance(i, str) or not i for i in ids)
+        or len(ids) != len(set(ids)) or type(low) is not int or type(high) is not int
+        or not 1 <= low <= high <= len(ids)):
+        raise RecordValidationError('native hand-exile payment offer is malformed')
+    return ids, low, high
+
+
+def validate_hand_exile_payment(params: Mapping[str, Any], offered: Mapping[str, Any]) -> None:
+    offer = native_hand_exile_offer(offered)
+    if offer is None: return
+    ids, low, high = offer
+    if params.get('exiledCards') and params.get('exile'):
+        raise RecordValidationError('Send either exile or exiledCards, not both')
+    selected = params.get('exiledCards') or params.get('exile')
+    if (not isinstance(selected, list) or not low <= len(selected) <= high
+        or any(not isinstance(i, str) for i in selected) or len(selected) != len(set(selected))
+        or any(i not in ids for i in selected)):
+        raise RecordValidationError(f'ActionParams.exiledCards requires {low}..{high} distinct native offered IDs')
+
+
 def is_convoke_payment_map(value: Any) -> bool:
     return isinstance(value, dict) and all(
         isinstance(entity, str) and bool(entity) and isinstance(payment, dict)
@@ -163,6 +191,7 @@ def validate_action_params(params: Any, offered: Mapping[str, Any]) -> None:
         if not valid:
             raise RecordValidationError(f"chosen_action_params.{name} requires {kind}")
     validate_bounce_payment(params, offered)
+    validate_hand_exile_payment(params, offered)
     validate_convoke_payment(params, offered)
 
 

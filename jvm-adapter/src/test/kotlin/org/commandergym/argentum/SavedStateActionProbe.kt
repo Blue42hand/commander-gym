@@ -15,22 +15,40 @@ object SavedStateActionProbe {
         val json = Json { serializersModule = engineSerializersModule; allowStructuredMapKeys = true }
         val fixture = Json.parseToJsonElement(Files.readString(Path.of(args[0]))).jsonObject
         val state = json.decodeFromJsonElement<GameState>(fixture.getValue("state"))
-        val processor = ActionProcessor(EngineServices(GameBeansConfig(GameProperties()).cardRegistry()))
-        fun action(key: String) = json.decodeFromJsonElement<GameAction>(fixture.getValue(key))
+        val services = EngineServices(GameBeansConfig(GameProperties()).cardRegistry())
+        val processor = ActionProcessor(services)
+        fun action(key: String): GameAction {
+            val template = json.decodeFromJsonElement<GameAction>(fixture.getValue(key))
+            val params = fixture[key.removeSuffix("Action") + "Params"] ?: return template
+            check(template is CastSpell)
+            val offered = services.legalActionEnumerator.enumerate(state, template.playerId).single {
+                val cast = it.action as? CastSpell
+                cast?.cardId == template.cardId && cast.declaredCostSlot == template.declaredCostSlot &&
+                    cast.useAlternativeCost == template.useAlternativeCost && cast.alternativeCostType == template.alternativeCostType
+            }
+            return ActionParameterizer.apply(offered, json.decodeFromJsonElement<ActionParams>(params), state)
+        }
         val baseline = processor.process(state, action("baselineAction")).result
         check(baseline.outcome is Outcome.Rejected)
-        check(baseline.outcome.toString().contains("Cannot pay attack tax"))
+        val expected = fixture["expectedFailureText"]?.jsonPrimitive?.content ?: "Cannot pay attack tax"
+        check(baseline.outcome.toString().contains(expected))
         val replacement = processor.process(state, action("replacementAction")).result
         check(replacement.outcome is Outcome.Done) { "Recovery rejected: ${replacement.outcome}" }
         check(replacement.state.pendingDecision == null)
-        val followup = processor.process(replacement.state, action("followupAction")).result
-        check(followup.outcome is Outcome.Done) { "Followup rejected: ${followup.outcome}" }
-        check(followup.state.pendingDecision == null)
+        val spell = fixture["expectedSpellOnStack"]?.jsonPrimitive?.content
+        if (spell != null) check(replacement.state.stack.any { it.value == spell })
+        val followup = fixture["followupAction"]?.let {
+            processor.process(replacement.state, action("followupAction")).result.also { result ->
+                check(result.outcome is Outcome.Done) { "Followup rejected: ${result.outcome}" }
+                check(result.state.pendingDecision == null)
+            }
+        }
         val report = buildJsonObject {
-            put("scope", "Same saved native checkpoint; rejected baseline, policy decline and empty attack declaration executed offline")
+            put("scope", "Same saved native checkpoint; rejected baseline and corrected native action executed offline")
             put("baselineOutcome", baseline.outcome.toString())
             put("replacementAccepted", true)
-            put("followupAccepted", true)
+            if (followup != null) put("followupAccepted", true)
+            if (spell != null) put("spellOnStack", true)
             put("noPendingPayment", true)
         }
         Files.writeString(Path.of(args[1]), report.toString())

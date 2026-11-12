@@ -32,6 +32,7 @@ from .action_contracts import constrain_target_params, validate_target_params
 from .records import native_convoke_offer, validate_convoke_payment, is_convoke_payment_map
 
 from .records import native_bounce_offer, validate_bounce_payment, RecordValidationError
+from .records import native_hand_exile_offer, validate_hand_exile_payment
 from .pilot import ArgentumActionChoice, ArgentumDecisionChoice, PilotChoice
 from .openai_run_budget import OpenAIRunBudget, OpenAIRunBudgetError
 from .observation_projection import compact_seat_observation
@@ -478,6 +479,12 @@ def _native_attack_targets(action: Mapping[str, Any]) -> tuple[list[str], list[s
 
 
 def _native_action_field_schema(action: Mapping[str, Any], name: str, kind: str) -> dict[str, Any]:
+    if name in {'exiledCards','exile'} and kind == 'ENTITY_ID_ARRAY':
+        try: offer = native_hand_exile_offer(action)
+        except RecordValidationError as exc: raise OpenAIResponsesPilotError(str(exc)) from exc
+        if offer is not None:
+            ids, low, high = offer
+            return {**_offered_id_array_schema(ids), 'minItems':low, 'maxItems':high}
     if name == 'convokedCreatures' and kind == 'CONVOKE_PAYMENT_MAP':
         try: candidates=native_convoke_offer(action)
         except ValueError as exc: raise OpenAIResponsesPilotError(str(exc)) from exc
@@ -588,6 +595,8 @@ def _native_action_format(
             return None
         semantic_id = _require_string(action.get("semanticId"), "legal semanticId")
         required_params=(["bouncedPermanents"] if "bouncedPermanents" in fields else []) + (["xValue"] if action.get("hasXCost") is True and "xValue" in fields else [])
+        if native_hand_exile_offer(action) is not None:
+            required_params.append('exiledCards'); fields={k:v for k,v in fields.items() if k!='exile'}
         variants.append({
             "type": "object",
             "properties": {
@@ -893,6 +902,8 @@ def _validate_native_action_params(
         if not _matches_action_param_kind(value, kind):
             raise OpenAIResponsesPilotError(f"ActionParams.{name} requires {kind}")
     try: validate_convoke_payment(params, action)
+    except ValueError as exc: raise OpenAIResponsesPilotError(str(exc)) from exc
+    try: validate_hand_exile_payment(params, action)
     except ValueError as exc: raise OpenAIResponsesPilotError(str(exc)) from exc
     targets = _native_block_targets(action)
     if targets is not None and "blockers" in params and any(
