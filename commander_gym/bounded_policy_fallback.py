@@ -14,6 +14,7 @@ from .default_policies import DefaultPolicySubsystem
 from .heuristic_policy import affordable
 from .lmstudio_pilot import LMStudioPilot, _local_native_format, LMStudioPilotError
 from .pilot import PilotContractError
+from .selection_contracts import conditional_selection_valid, validate_conditional_selection
 
 MAX_CHOICES = 128
 PROMPT_TARGET_BYTES = 32768
@@ -66,7 +67,7 @@ def enumerate_choices(o):
             if p['maxValue'] - p['minValue'] >= MAX_CHOICES: return None
             choices = [_decision(p, number=i) for i in range(p['minValue'], p['maxValue']+1)]
         elif rt == 'CardsSelectedResponse':
-            if any(p.get(k) is not None and p.get(k) is not False and p.get(k) != [] for k in ['onePerCardType','onePerColor','onePerCardName','onePerBasicLandType','onePerPower','maxTotalManaValue','minTotalManaValue','maxTotalPower','conditionalMinimums','selectionLimits']): return None
+            if any(p.get(k) is not None and p.get(k) is not False and p.get(k) != [] for k in ['onePerCardType','onePerColor','onePerCardName','onePerBasicLandType','onePerPower','maxTotalManaValue','minTotalManaValue','maxTotalPower','selectionLimits']): return None
             options = p.get('hand') if p.get('kind') == 'BottomCards' else p.get('options')
             if not isinstance(options, list) or p.get('ordered'): return None
             options = [i for i in options if i not in (p.get('nonSelectableOptions') or [])]
@@ -74,7 +75,7 @@ def enumerate_choices(o):
             high = low if p.get('kind') == 'BottomCards' else p.get('maxSelections')
             selected = _selections(options, low, min(high, len(options)) if type(high) is int else high)
             if selected is None: return None
-            choices = [_decision(p, selectedCards=c) for c in selected]
+            choices = [_decision(p, selectedCards=c) for c in selected if conditional_selection_valid(c,p)]
         elif rt in {'TargetsResponse', 'TargetsChosenResponse'}:
             slots = p.get('targetRequirements'); legal = p.get('legalTargets')
             if not isinstance(slots, list) or not isinstance(legal, dict): return None
@@ -156,6 +157,8 @@ def validate_selection_bounds(wire, o):
     r = wire['response']; rt = r['type']
     if rt == 'CardsSelectedResponse':
         ids = r['selectedCards']
+        try: validate_conditional_selection(ids,p)
+        except ValueError as exc: raise PilotContractError(str(exc)) from exc
         options = p.get('hand') if p.get('kind') == 'BottomCards' else p.get('options')
         low = p.get('cardsToPutOnBottom') if p.get('kind') == 'BottomCards' else p.get('minSelections')
         high = low if p.get('kind') == 'BottomCards' else p.get('maxSelections')

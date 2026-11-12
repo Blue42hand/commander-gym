@@ -88,18 +88,19 @@ def tutor_payoff_score(name, facts, preferred_engines=()):
 UNCONDITIONAL_COUNTERS = frozenset({'Counterspell','Negate','Dissolve','Swan Song','Arcane Denial'})
 
 
-def pending_counter_answers(o):
-    """Targets already answered by our own unopposed unconditional counter.
+def pending_counter_answers(o,facts=None):
+    """Targets of an unopposed own counter attempt that should resolve first.
 
-    A visible response targeting the counter makes its success uncertain again.
-    Unknown effects, conditional counters and ability copies keep model control.
+    This does not assume a conditional counter succeeds. Priority returns if its
+    target remains after resolution. A response threatening our counter restores
+    uncertainty now; unknown effects and ability copies retain model control.
     """
     state=o.get('state',{});cards=state.get('cards',{});stack=ids_in(state,'Stack')
     threatened={t.get('spellEntityId') for i in stack for t in cards.get(i,{}).get('targets',[]) if t.get('type')=='Spell'}
     covered=set()
     for i in stack:
         c=cards.get(i,{})
-        if (i in threatened or c.get('controllerId')!=o['agentToAct'] or c.get('name') not in UNCONDITIONAL_COUNTERS
+        if (i in threatened or c.get('controllerId')!=o['agentToAct'] or not (c.get('name') in UNCONDITIONAL_COUNTERS or facts is not None and 'COUNTERSPELL' in facts.get(c.get('name')).get('tags',[]))
             or c.get('abilityIdentity') or c.get('activeEffects')):continue
         targets=c.get('targets',[])
         if len(targets)==1 and targets[0].get('type')=='Spell' and targets[0].get('spellEntityId') in stack:
@@ -128,7 +129,7 @@ def removal_reaction(name,facts,casting=True):
 def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=(), reaction_timing_exceptions=(), counter_target_exceptions=()):
     view = deepcopy(o); cards = view.get('state', {}).get('cards', {}); me = view['agentToAct']
     restrictions = []; retained = []; plans = []
-    answered=pending_counter_answers(o);held_autopay=False;state=o.get('state',{})
+    answered=pending_counter_answers(o,facts);held_autopay=False;state=o.get('state',{})
     for a in view.get('legalActions', []):
         raw = a.get('action', {}); name = cards.get(raw.get('cardId', raw.get('sourceId')), {}).get('name')
         state = o.get('state',{})

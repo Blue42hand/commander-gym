@@ -283,3 +283,20 @@ suppression detection work for cards such as Utter Insignificance, Eaten by
 Piranhas and Witness Protection. Prompt annotations, engine valuation, removal
 ranking and commander rescue share this fact; Arrest and Faith's Fetters remain
 distinct. Older facts retain reviewed compatibility rules.
+
+An unopposed own counter attempt now waits for resolution before another counter
+can target the same original spell. Native counterspell tags cover conditional
+counters such as Spell Pierce too; this rule does not assume that the tax is paid
+or declined. A visible response threatening the first counter restores model
+control immediately, and the original target becomes available again if it remains
+after resolution. Unknown effects and ability copies still defer.
+
+`selection_contracts.py` reads native `conditionalMinimums` without parsing card
+text. Small selection menus enumerate only complete legal sets, and both bounded
+and general provider validators reject an unmet conditional minimum before native
+submission. Multiple alternatives follow the native rule that any applicable
+lower minimum may satisfy the selection. Known discard spells compare the valid
+sets locally, including Thirst's one-matching-card discount, while preserving the
+next land drop. Low-priority cards retain positive opportunity value, preventing
+an unnecessary extra discard merely because its development score is negative.
+Larger or otherwise unsupported selections retain model control and validation.

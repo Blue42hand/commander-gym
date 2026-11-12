@@ -103,8 +103,10 @@ class ResourcePolicies:
             and getattr(self,'_ponder_review',None) and self._ponder_review[0]==key):
             _,shuffle=self._ponder_review
             return self._decision(p,rt,'default-keep-reviewed-ponder-top',choice=p.get('yesAvailable') is True and shuffle)
+        discards={'Flow of Knowledge':"Choose two cards to discard",'Thirst for Discovery':'Choose 2 cards to discard, or 1 basic land card','Thirst for Knowledge':'Choose 2 cards to discard, or 1 artifact card'}
+        known_discard=source in discards and p.get('prompt')==discards[source]
         if (p.get('kind') not in {'SearchLibraryDecision','SelectCardsDecision'} or rt!='CardsSelectedResponse'
-            or p.get('ordered') or any(p.get(k) for k in CONSTRAINTS) or p.get('nonSelectableOptions')):return None
+            or p.get('ordered') or any(p.get(k) for k in CONSTRAINTS if k!='conditionalMinimums' or not known_discard) or p.get('nonSelectableOptions')):return None
         options=p.get('options');info=dict(o['state'].get('cards',{}))
         for entity,detail in (p.get('cardInfo') or {}).items():info[entity]={**info.get(entity,{}),**detail}
         if not isinstance(options,list) or not all(i in info and info[i].get('name') for i in options):return None
@@ -114,17 +116,23 @@ class ResourcePolicies:
             and low==0 and 1<=high<=5 and p.get('prompt')==f'Scry {high}: choose cards to put on the bottom of your library'):
             bottom=[i for i in options if self._resource_value(o,info[i])<25]
             return self._decision(p,rt,'default-scry-for-curve',selectedCards=bottom[:high])
-        discards={'Flow of Knowledge':"Choose two cards to discard",'Thirst for Discovery':'Choose 2 cards to discard, or 1 basic land card','Thirst for Knowledge':'Choose 2 cards to discard, or 1 artifact card'}
-        if source in discards and p.get('prompt')==discards[source] and low==high==2:
-            # Respect the advertised count even if the English prompt mentions
-            # an alternative not represented by native cardinality constraints.
-            if comb(len(options),2)>512:return None
+        if known_discard and 1<=low<=high<=2 and (low==high or p.get('conditionalMinimums')):
+            from .selection_contracts import conditional_selection_valid
+            if sum(comb(len(options),n) for n in range(low,high+1))>512:return None
+            candidates=[c for n in range(low,high+1) for c in combinations(sorted(options),n) if conditional_selection_valid(c,p)]
+            if not candidates:return None
             board_lands=sum('LAND' in c.get('cardTypes',[]) for c in self._own(o))
             hand_lands={i for i in ids_in(o['state'],'Hand',o['agentToAct']) if 'Land' in self._card(o,i).get('typeLine','') or 'LAND' in self._card(o,i).get('cardTypes',[])}
-            needed=min(len(hand_lands),max(0,5-board_lands))
+            # Discounted discards preserve card advantage while keeping the next
+            # land drop toward ordinary four-mana development available.
+            curve_target=4 if p.get('conditionalMinimums') else 5
+            needed=min(len(hand_lands),max(0,curve_target-board_lands))
+            # Even a low-priority card has some retention value; a discount
+            # must not encourage an unnecessary extra discard of a negative score.
+            values={i:max(1,self._resource_value(o,info[i])) for i in options}
             def retained_value(discard):
-                return sum(self._resource_value(o,info[i]) for i in options if i not in discard)-500*max(0,needed-len(hand_lands-set(discard)))
-            chosen=list(max(combinations(sorted(options),2),key=retained_value))
+                return -sum(values[i] for i in discard)-500*max(0,needed-len(hand_lands-set(discard)))
+            chosen=list(max(candidates,key=retained_value))
             return self._decision(p,rt,'default-discard-for-development',selectedCards=chosen)
         if source=='Land Tax' and low==0 and high==3 and all('Basic Land' in info[i].get('typeLine','') for i in options):
             need=Counter()

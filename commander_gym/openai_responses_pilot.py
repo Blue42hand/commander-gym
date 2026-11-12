@@ -29,6 +29,7 @@ from time import perf_counter
 from typing import Any, Mapping
 
 from .action_contracts import constrain_target_params, validate_target_params
+from .selection_contracts import validate_conditional_selection
 from .records import native_convoke_offer, validate_convoke_payment, is_convoke_payment_map
 
 from .records import native_bounce_offer, validate_bounce_payment, RecordValidationError
@@ -1689,6 +1690,10 @@ class OpenAIResponsesPilot:
             raise OpenAIResponsesPilotError(
                 "native response selectedCards must be offered in options"
             )
+
+        if response_type=='CardsSelectedResponse':
+            try: validate_conditional_selection(response['selectedCards'],pending)
+            except ValueError as exc: raise OpenAIResponsesPilotError(str(exc)) from exc
 
         submitted = dict(response)
         submitted["decisionId"] = decision_id

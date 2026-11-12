@@ -134,3 +134,14 @@ tasks.register<JavaExec>("runModalSavedStateProbe") {
         args(providers.gradleProperty("probeInput").get(), providers.gradleProperty("probeOutput").get())
     }
 }
+
+// Explicit offline sequencing proof; no provider and no ordinary game startup.
+tasks.register<JavaExec>("runCounterSavedStateProbe") {
+    group = "verification"
+    dependsOn(tasks.named("testClasses"))
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("org.commandergym.argentum.CounterSavedStateProbe")
+    if (providers.gradleProperty("probeInput").isPresent && providers.gradleProperty("probeOutput").isPresent) {
+        args(providers.gradleProperty("probeInput").get(), providers.gradleProperty("probeOutput").get())
+    }
+}
