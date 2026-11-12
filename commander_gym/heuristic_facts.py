@@ -34,8 +34,15 @@ class CardFacts:
                   'staticValue', 'repeatable', 'affectsOpponent', 'feeds', 'rewards', 'tribesRewarded'}
         fields |= {'freeOptionalDraws', 'drawSensitive'}
         for name, fact in document['cards'].items():
-            if not isinstance(name, str) or not name or not isinstance(fact, dict) or not fields <= set(fact) or set(fact) - fields - {'untappedIfLandSubtypes', 'variableMana'}:
+            if not isinstance(name, str) or not name or not isinstance(fact, dict) or not fields <= set(fact) or set(fact) - fields - {'untappedIfLandSubtypes', 'variableMana', 'commanderColorMana', 'painManaColors', 'colorIdentity', 'untappedPayLife'}:
                 raise ValueError('invalid native card fact fields')
+            for key in ['painManaColors','colorIdentity']:
+                if key in fact and (not isinstance(fact[key],list) or any(not isinstance(c,str) or c not in 'WUBRG' for c in fact[key])):
+                    raise ValueError('invalid native mana colors')
+            if 'commanderColorMana' in fact and type(fact['commanderColorMana']) is not bool:
+                raise ValueError('invalid commander mana flag')
+            if 'untappedPayLife' in fact and (type(fact['untappedPayLife']) is not int or not 0 <= fact['untappedPayLife'] <= 20):
+                raise ValueError('invalid land life payment')
             entry = fact.get('untappedIfLandSubtypes', [])
             if (not isinstance(entry, list) or any(not isinstance(v,str) for v in entry)
                 or set(entry) - {'Forest','Swamp','Plains','Island','Mountain'}):
@@ -78,7 +85,7 @@ class CardFacts:
 def heuristic_component_ref(facts=None):
     """Identity of defaults and reusable card mechanics, including optional public facts."""
     names = ['heuristic_facts.py', 'heuristic_policy.py', 'default_policies.py', 'card_policies.py',
-             'bounded_policy_fallback.py', 'lmstudio_pilot.py', 'pilot_composition.py']
+             'bounded_policy_fallback.py', 'lmstudio_pilot.py', 'pilot_composition.py', 'action_contracts.py', 'openai_responses_pilot.py', 'policy_action_bounds.py']
     payload = {'version': 2, 'factsSha256': facts.digest if facts else 'unavailable',
                'sources': {name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest() for name in names}}
     return ArtifactRef(kind='skill-set', artifact_id='argentum-default-policies', version='2',

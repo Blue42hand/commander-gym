@@ -297,6 +297,8 @@ class LathrilDeckSubsystem(DefaultPolicySubsystem):
 
     def _combat(self, o, offer):
         if offer['kind'] == 'DeclareBlockers':
+            if offer.get('validBlockers') == [] and offer.get('validBlockTargets') == {} and not offer.get('mandatoryBlockerAssignments'):
+                return super()._combat(o, offer)
             return self._block(o, offer)
         if (offer.get('mandatoryAttackers') or offer.get('loneAttackers')
             or any(p.get('teamIndex') is not None for p in o['state'].get('players', []))):

@@ -182,16 +182,17 @@ class CompactPromptTests(unittest.TestCase):
                     except Exception:return False
                 self.assertEqual(accepted(original['schema']),accepted(compact['schema']))
 
-    def test_recorded_large_alela_request_fits_without_omitting_offers(self):
+    def test_recorded_large_alela_request_fits_after_autopay_policy_bounds(self):
         o=json.loads((Path(__file__).parent/'fixtures/alela_large_fallback.json').read_text());before=deepcopy(o)
         # Native-schema mode uses the recorded legal pass only as a test answer.
         a=next(a for a in o['legalActions'] if a['kind']=='PassPriority')
         response={'channel':'action','choice':{'semanticId':a['semanticId'],'params':{}}}
         models=discovery();models['models'][0]['loaded_instances'][0]['config']['context_length']=131072
-        t=FakeTransport(completion(json.dumps(response)),models=models)
+        t=FakeTransport(completion(json.dumps({'option':0})),models=models)
         f=BoundedPolicyFallback(config(context_window=131072,max_prompt_bytes=32768),t)
         f.choose(o);req=t.calls[1][1]
         self.assertLessEqual(len(json.dumps(req,ensure_ascii=False).encode()),32768)
         view=expand(json.loads(req['messages'][1]['content']))
-        self.assertEqual(len(view['legalActions']),sum(a.get('affordable') or a.get('isAffordable') for a in o['legalActions']))
+        self.assertEqual(len(view['choices']),16)
+        self.assertFalse(any(c.get('ability','') and 'intrinsic_mana' in c['ability'] for c in view['choices']))
         self.assertEqual(o,before)

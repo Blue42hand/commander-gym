@@ -88,7 +88,7 @@ class EngineDeckPolicy(ProfiledDeckPolicy):
             if c.get('isTapped') or c.get('hasSummoningSickness') or c.get('activeEffects'): continue
             if not (f.get('simpleMana') or 'LAND' in c.get('cardTypes',[])): continue
             if f.get('variableMana'): continue
-            colors = set(f.get('manaColors',[]))
+            colors = self._land_colors(c,o)
             if colors: sources.append(colors)
         return sources
 

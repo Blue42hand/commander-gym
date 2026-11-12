@@ -28,6 +28,8 @@ import re
 from time import perf_counter
 from typing import Any, Mapping
 
+from .action_contracts import constrain_target_params, validate_target_params
+
 from .records import native_bounce_offer, validate_bounce_payment, RecordValidationError
 from .pilot import ArgentumActionChoice, ArgentumDecisionChoice, PilotChoice
 from .openai_run_budget import OpenAIRunBudget, OpenAIRunBudgetError
@@ -554,6 +556,7 @@ def _offered_id_array_schema(ids: list[str]) -> dict[str, Any]:
     return schema
 
 
+
 def _native_action_format(
     observation: Mapping[str, Any], *, allow_priority_delegation: bool = False,
     allow_named_deferrals: bool = False,
@@ -580,7 +583,7 @@ def _native_action_format(
             "type": "object",
             "properties": {
                 "semanticId": {"type": "string", "const": semantic_id},
-                "params": {
+                "params": constrain_target_params({
                     "type": "object",
                     "properties": {
                         name: _native_action_field_schema(action, name, kind)
@@ -588,7 +591,7 @@ def _native_action_format(
                     },
                     "additionalProperties": False,
                     **({"required": ["bouncedPermanents"]} if "bouncedPermanents" in fields else {}),
-                },
+                }, action),
             },
             "required": ["semanticId", "params"],
             "additionalProperties": False,
@@ -909,6 +912,10 @@ def _validate_native_action_params(
                 raise OpenAIResponsesPilotError(
                     "ActionParams.delvedCards exceeds native maxDelveCards"
                 )
+    try:
+        validate_target_params(params, action)
+    except ValueError as exc:
+        raise OpenAIResponsesPilotError(str(exc)) from exc
     try:
         validate_bounce_payment(params, action)
     except RecordValidationError as exc:

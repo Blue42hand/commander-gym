@@ -160,7 +160,8 @@ def _candidate_description(wire, o):
         if isinstance(value, list): return [describe(v) for v in value]
         if isinstance(value, dict): return {k:describe(v) for k,v in value.items()}
         if isinstance(value, str) and value in cards:
-            return {'entity':value, 'name':cards[value].get('name')}
+            return {'entity':value, 'name':cards[value].get('name'), 'controller':cards[value].get('controllerId'),
+                    'relationship':'self' if cards[value].get('controllerId') == o['agentToAct'] else 'opponent' if cards[value].get('controllerId') else 'unknown'}
         if isinstance(value, str) and value in players: return players[value]
         return value
     if wire['channel'] == 'decision':
@@ -198,6 +199,7 @@ def decision_context(o, *, frozen, policy_context, facts):
         view['decision'] = clean({k:v for k,v in p.items() if k != 'cardInfo' and (k != 'cards' or not isinstance(v,dict)) and (not frozen or k not in {'options','hand','semanticId','responseSpec','id'})})
     if not frozen:
         view['legalActions'] = clean([a for a in o.get('legalActions', []) if affordable(a)])
+    if o.get('policyUtilityPlans'): view['utilityPlans'] = o['policyUtilityPlans']
     if o.get('nativePaymentError') is not None: view['nativePaymentError'] = clean(o['nativePaymentError'])
     return view
 
@@ -372,17 +374,21 @@ class BoundedPolicyFallback:
         return self.choose_with_policy_context(observation, ())
 
     def choose_with_policy_context(self, o, attempts):
-        context = None; hints = None; base_attempts = []
+        context = None; hints = None; base_attempts = []; self_target_exceptions = set(); tutor_engines = set()
         for attempt in attempts:
             m = attempt.get('metadata', {})
             if m.get('policyLayers'): base_attempts.append(m['policyLayers'])
             if m.get('policyContext'): context = m['policyContext']
             if m.get('candidateChoices'): hints = m['candidateChoices']
+            self_target_exceptions.update(m.get('approvedSelfTargetEffects',[]))
+            tutor_engines.update(m.get('reviewedTutorEngines',[]))
         # Legacy manifests without a skill still receive the default base layer.
         if not base_attempts:
             result = self.defaults.try_choose(o)
             if result.choice is not None: return result.choice
             base_attempts.append(result.metadata['policyLayers']); context = result.metadata['policyContext']
+        from .policy_action_bounds import bounded_observation
+        o, restrictions = bounded_observation(o, self.defaults.facts, allow_self_targets=self_target_exceptions, preferred_engines=tutor_engines)
         wires = enumerate_choices(o)
         if hints:
             by_id = {a['actionId']:a for a in o.get('legalActions', [])}
@@ -423,6 +429,32 @@ class BoundedPolicyFallback:
                 return json.dumps(parsed)
             if fmt is None: raise LMStudioPilotError('bounded_fallback_unsupported_native_response_schema')
             instructions = 'Choose one current native game action or response using only the supplied schema and masked decision context. Null, false and empty metadata fields are omitted. Follow the deck objectives. Return the exact native channel/choice or channel/response object; never supply actionId or decisionId, invent entity IDs, or use fields outside the schema. Spend mana only for a useful action. Native legality remains authoritative.'
+        if self.config.decision_explanations:
+            explanation_schema = {'type':'object','properties':{
+                'goal':{'type':'string'},
+                'keyFacts':{'type':'array','items':{'type':'string'},'maxItems':3},
+                'evidenceIds':{'type':'array','items':{'type':'string'},'maxItems':6},
+                'uncertainty':{'type':'string','enum':['low','medium','high']},
+                'missingInformation':{'type':'array','items':{'type':'string'},'maxItems':3}},
+                'required':['goal','keyFacts','evidenceIds','uncertainty','missingInformation'],'additionalProperties':False}
+            fmt = {**fmt, 'schema':{'type':'object','properties':{'decision':fmt['schema'], 'explanation':explanation_schema},
+                                  'required':['decision','explanation'],'additionalProperties':False}}
+            base_decode = decode
+            def decode(parsed):
+                explanation = parsed['explanation']
+                texts = [explanation['goal'], *explanation['keyFacts'], *explanation['missingInformation']]
+                if any(len(t)>180 for t in texts) or sum(map(len,texts))>720:
+                    raise PilotContractError('decision-explanation-too-long')
+                known_ids = set(o.get('state',{}).get('cards',{})) | set(_pending_card_map(o.get('pendingDecision') or {})) | {p['playerId'] for p in o.get('state',{}).get('players',[])}
+                if not set(explanation['evidenceIds']) <= known_ids:
+                    raise PilotContractError('decision-explanation-unknown-evidence')
+                selection['explanation'] = deepcopy(explanation)
+                return base_decode(parsed['decision'])
+            instructions += (' Wrap the requested decision in {"decision":...,"explanation":...}.'
+                ' Supply a brief decision summary: goal, up to three keyFacts, visible evidenceIds, uncertainty, and missingInformation.'
+                ' Describe the relevant game facts and intended benefit, not a step-by-step reasoning trace.'
+                ' Each text must be at most 180 characters, all text at most 720 characters.'
+                ' Report uncertainty honestly; use empty missingInformation if none. Explanations are diagnostic only.')
         view = compact_decision_context(view)
         instructions += (' Card instances inherit cardDefinitions[definition]; instance fields override definitions.'
                          ' Each legalActions entry inherits actionDefaults; its action inherits rawActionDefaults.'
@@ -432,6 +464,7 @@ class BoundedPolicyFallback:
         choice = self.model._choose(o, response_format=fmt, model_view=view,
                                    instructions_override=instructions, output_decoder=decode)
         return replace(choice, metadata={**choice.metadata, 'boundedFallback':{
-            'mode':'frozen-choices' if wires else 'native-schema', 'selectedOption':selection.get('option'), 'candidateCount':len(wires) if wires else None,
+            'utilityPlans':o.get('policyUtilityPlans',[]), 'decisionExplanation':selection.get('explanation'), 'explanationIsModelReport':bool(selection.get('explanation')),
+            'explanationAddedToFuturePrompts':False, 'policyRestrictions':restrictions, 'mode':'frozen-choices' if wires else 'native-schema', 'selectedOption':selection.get('option'), 'candidateCount':len(wires) if wires else None,
             'maxPromptBytes':self.config.max_prompt_bytes,'historyIncluded':False,'fullPrimerIncluded':False,
             'policyAttempts':base_attempts}})

@@ -39,11 +39,12 @@ class LMStudioConfig:
     provider: str = "lmstudio"
     compact_observation: bool = False
     stream: bool = False
+    decision_explanations: bool = False
 
     def __post_init__(self):
         if self.provider != "lmstudio":
             raise ValueError("local configuration requires provider lmstudio")
-        for name in ("compact_observation", "stream"):
+        for name in ("compact_observation", "stream", "decision_explanations"):
             if type(getattr(self, name)) is not bool:
                 raise ValueError(f"{name} must be boolean")
         try:

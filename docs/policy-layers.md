@@ -174,3 +174,65 @@ The native exporter tests distinguish utility mana, damaging mana, check-land
 conditions and variable production. Recorded-state qualification remains
 counterfactual; a fresh immutable catalog and matching exporter output are needed
 for these changes. Preparing that catalog does not activate production.
+
+## Competency bounds and decision explanations
+
+The shared `policy_action_bounds.py` applies reviewed restrictions to a copy of
+current native offers before either policy selection or bounded inference. It
+preserves the original recorder observation and native routing handles. Ordinary
+harmful single-slot targets exclude the acting player's permanents; unknown
+ownership and complex target contracts defer to native inference. Trusted deck
+code can explicitly approve a rescue/combo effect with `self_target_exceptions`;
+that approval is passed to bounded inference through policy metadata. An unknown
+card or mechanic does not become a fabricated pass.
+
+Costs and targets are independent: paying Wirewood Symbiote's bounce cost does
+not satisfy its required untap target. Flat and single-group target bounds are
+constrained in the grammar and checked again at runtime. Native execution still
+owns complex legality. Quiet main-phase Symbiote activations with no tapped target
+are suppressed; stack rescue windows remain available.
+
+Known empty Green Sun's Zenith searches are excluded using exact deck definitions,
+with a conservative creature mana-value lower bound. Known green payoffs supply
+an intended card and X recommendation. Sterling Grove plans an enchantment
+payoff before sacrifice and reconstructs that plan against fresh native search
+options. Repeatable engines supersede cantrips, and deck engine roles supersede
+general card scores. These plans contain names and goals, never queued entity IDs
+or inferred library order. They are stateless across callbacks and seats.
+
+An affordable native AutoPay cast/cycle removes manual mana setup from that
+fallback menu. Explicit payment decisions and mana needed to enable an otherwise
+unaffordable spell retain their native offers. Native land definitions distinguish
+commander-color mana, painful colored modes, subtype-based entry conditions, and
+life-paid untapped entry. Painful modes are excluded from conservative supply
+estimates at two life or less. Land scoring considers colored pips and an
+immediately payable development spell; an affordable Felidar Retreat precedes the
+land drop. Empty native blocker domains and ordinary Felidar modes are local.
+
+Set `"decision_explanations": true` in the LM Studio inference configuration and
+prepare a fresh catalog. Existing configurations default to false. This changes
+the provider identity, so it requires freshly prepared, matching manifests. The
+bounded model emits a wrapper with `decision` and `explanation`. The explanation
+contains `goal`, up to three `keyFacts`, up to six visible `evidenceIds`,
+`uncertainty` (`low`, `medium`, `high`), and up to three `missingInformation` items.
+Each text is limited to 180 characters, with 720 total text characters. Evidence
+IDs must exist in the current masked context. Invalid summaries use the same
+bounded retry path as invalid actions. The 32 KiB prompt and 768 output-token
+ceilings remain in force.
+
+Only the native decision is executed. The explanation is recorded separately in
+`metadata.boundedFallback.decisionExplanation`, marked as a model report, and is
+never appended to later prompts. It is a brief account of intended benefit and
+information needs, not a request for a private reasoning trace. Grounded IDs do
+not establish that every reported fact or explanation is faithful. Compare the
+summary against the masked position, offered candidates, and actual outcome when
+diagnosing missing inputs.
+
+The November 12 regression corpus contains 891 authenticated callbacks from game
+`d22fb035-9394-4fc3-9ef9-944ec5c49499`; eleven selected masked positions and pinned
+public facts are included in `tests/fixtures/competence-*`. The source journal and
+native observation digests accompany each selected position. Extraction verifies
+the complete Gym hash chain and native observation provenance. Same-state
+comparisons use the immediately preceding `d0f95de4` implementation and its facts.
+Simulated answers test routing, prompt budgets and response contracts; they do not
+measure live wall time, strategic strength, win rate, or native game completion.

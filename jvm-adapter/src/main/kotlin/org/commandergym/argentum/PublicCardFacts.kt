@@ -14,6 +14,10 @@ import com.wingedsheep.sdk.core.Subtype
 import com.wingedsheep.sdk.model.CardDefinition
 import com.wingedsheep.sdk.scripting.AbilityCost
 import com.wingedsheep.sdk.scripting.values.DynamicAmount
+import com.wingedsheep.sdk.scripting.effects.CompositeEffect
+import com.wingedsheep.sdk.scripting.effects.DealDamageEffect
+import com.wingedsheep.sdk.scripting.effects.AddManaOfChoiceEffect
+import com.wingedsheep.sdk.scripting.values.ManaColorSet
 import com.wingedsheep.sdk.scripting.effects.AddManaEffect
 import com.wingedsheep.sdk.scripting.effects.AddColorlessManaEffect
 import com.wingedsheep.sdk.scripting.effects.GatedEffect
@@ -92,6 +96,25 @@ object PublicCardFacts {
                 }
             }
         }
+        // Recognize only the exact fixed mana + one self-damage painland shape.
+        // This expands color estimates, never the safe activation whitelist.
+        val painColors = mutableSetOf<String>()
+        for (ability in activated) {
+            if (!ability.isManaAbility || ability.cost != AbilityCost.Tap) continue
+            val parts = (ability.effect as? CompositeEffect)?.effects ?: continue
+            if (parts.size != 2) continue
+            val mana = parts[0] as? AddManaEffect ?: continue
+            val damage = parts[1] as? DealDamageEffect ?: continue
+            if (mana.amount != DynamicAmount.Fixed(1) || mana.restriction != null || mana.riders.isNotEmpty() ||
+                damage.amount != DynamicAmount.Fixed(1) || damage.target != EffectTarget.PlayerRef(Player.You)) continue
+            mapOf("WHITE" to "W", "BLUE" to "U", "BLACK" to "B", "RED" to "R", "GREEN" to "G")[mana.color.name]?.let(painColors::add)
+        }
+        manaColors.addAll(painColors)
+        val commanderMana = activated.any {
+            val effect = it.effect as? AddManaOfChoiceEffect
+            it.isManaAbility && it.cost == AbilityCost.Tap && effect != null &&
+                effect.colorSet == ManaColorSet.CommanderIdentity && effect.amount == DynamicAmount.Fixed(1) && effect.restriction == null && effect.riders.isEmpty() && effect.recipient == EffectTarget.Controller
+        }
         // Export only an exact OR of own battlefield land-subtype tests.
         // Other ETB replacements and additional conditions remain unknown.
         val tapped = card.script.replacementEffects.singleOrNull() as? EntersTapped
@@ -111,6 +134,10 @@ object PublicCardFacts {
                     else -> false
                 }
             })
+            put("untappedPayLife", if (tapped?.unlessCondition == null) tapped?.payLifeCost ?: 0 else 0)
+            put("commanderColorMana", commanderMana)
+            putJsonArray("painManaColors") { painColors.sorted().forEach { add(it) } }
+            putJsonArray("colorIdentity") { card.colorIdentity.mapNotNull { mapOf("WHITE" to "W", "BLUE" to "U", "BLACK" to "B", "RED" to "R", "GREEN" to "G")[it.name] }.sorted().forEach { add(it) } }
             put("manaCost", card.manaCost.toString())
             putJsonArray("types") { card.typeLine.cardTypes.map { it.name }.sorted().forEach { add(it) } }
             putJsonArray("subtypes") { card.typeLine.subtypes.map { it.value }.sorted().forEach { add(it) } }

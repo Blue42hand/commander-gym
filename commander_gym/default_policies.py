@@ -48,19 +48,24 @@ class DefaultPolicySubsystem(SharedCardPolicies, MaskedHeuristicSubsystem):
     name = 'argentum-default-policies'
     version = '2'
     deck_policy = None
+    # Trusted deck code can approve specific rescue/combo self-target effects.
+    self_target_exceptions = frozenset()
 
     def __init__(self, facts=None):
         super().__init__(facts or UnknownCardFacts())
         self.document = default_document(self.facts)
 
     def try_choose(self, observation):
-        result = super().try_choose(observation)
-        metadata = {**result.metadata, 'policyLayers': {
+        from .policy_action_bounds import bounded_observation
+        tutor_engines = sorted(n for n,role in self.document['roles'].items() if role=='draw_engine')
+        bounded, restrictions = bounded_observation(observation, self.facts, allow_self_targets=self.self_target_exceptions, preferred_engines=tutor_engines)
+        result = super().try_choose(bounded)
+        metadata = {**result.metadata, 'reviewedTutorEngines':tutor_engines, 'approvedSelfTargetEffects':sorted(self.self_target_exceptions), 'policyRestrictions': restrictions, 'utilityPlans':bounded.get('policyUtilityPlans',[]), 'policyLayers': {
             'defaults': 'default-policies-v2', 'deck': self.deck_policy,
             'status': 'handled' if result.choice is not None else 'deferred'},
             'policyContext': {'policy': self.document['policy_id'], 'objectives': list(self.document['rules'].values())}}
         if result.choice is not None:
-            return replace(result, choice=replace(result.choice, metadata={**result.choice.metadata, 'policyLayers': metadata['policyLayers']}), metadata=metadata)
+            return replace(result, choice=replace(result.choice, metadata={**result.choice.metadata, 'policyRestrictions':restrictions, 'utilityPlans':bounded.get('policyUtilityPlans',[]), 'policyLayers': metadata['policyLayers']}), metadata=metadata)
         return replace(result, metadata=metadata)
 
     def _choose(self, o):
@@ -68,6 +73,12 @@ class DefaultPolicySubsystem(SharedCardPolicies, MaskedHeuristicSubsystem):
         if 'mulligan' in o.get('state', {}): return self._opening(o)
         if o.get('pendingDecision') is not None: return self._pending(o, o['pendingDecision'])
         return self._choose_actions(o)
+
+    def _combat(self, o, offer):
+        if (offer.get('kind') == 'DeclareBlockers' and offer.get('validBlockers') == []
+            and offer.get('validBlockTargets') == {} and not offer.get('mandatoryBlockerAssignments')):
+            return self._action(offer, 'default-no-available-blockers', {'blockers':{}})
+        return super()._combat(o, offer)
 
     def _choose_actions(self, o):
         legal = o.get('legalActions', [])
@@ -107,12 +118,21 @@ class DefaultPolicySubsystem(SharedCardPolicies, MaskedHeuristicSubsystem):
         return self._development_score(o, card, role) + (5 if card.get('isCommander') else 0)
 
     def _land(self, o, lands):
-        if any(not self._land_colors(self._card(o, a['action'].get('cardId'))) for a in lands):
+        # Landfall payoff first when the native menu already approves its cost.
+        if not any(c.get('name') == 'Felidar Retreat' for c in self._own(o)):
+            setup = next((a for a in o.get('legalActions',[]) if a.get('kind')=='CastSpell' and affordable(a)
+                          and self._card(o,a.get('action',{}).get('cardId')).get('name')=='Felidar Retreat' and self._plain_cast(a)),None)
+            if setup: return self._action(setup, 'shared-card-landfall-before-land')
+        def timing_known(a):
+            card = self._card(o,a['action'].get('cardId')); f = self.facts.get(card.get('name'))
+            return (f.get('unconditionalUntapped') or f.get('entersTapped') or f.get('untappedIfLandSubtypes')
+                    or f.get('untappedPayLife') or card.get('name') in {*BASIC,'Woodland Cemetery','Overgrown Tomb'})
+        supported = [a for a in lands if timing_known(a) and self._land_colors(self._card(o,a['action'].get('cardId')),o)]
+        if supported and len(supported) < len(lands) and max(self._land_score(o,a) for a in supported) >= 100:
+            lands = supported
+        if any(not self._land_colors(self._card(o,a['action'].get('cardId')),o) for a in lands):
             return SubsystemDecision(reason='default-unknown-land-mana')
-        if any(not self.facts.get(self._card(o, a['action'].get('cardId')).get('name')).get('unconditionalUntapped')
-               and not self.facts.get(self._card(o, a['action'].get('cardId')).get('name')).get('entersTapped')
-               and not self.facts.get(self._card(o, a['action'].get('cardId')).get('name')).get('untappedIfLandSubtypes')
-               and self._card(o, a['action'].get('cardId')).get('name') not in {*BASIC, 'Woodland Cemetery','Overgrown Tomb'} for a in lands):
+        if any(not timing_known(a) for a in lands):
             return SubsystemDecision(reason='default-unknown-land-timing')
         ranked = sorted(lands, key=lambda a: (-self._land_score(o,a), a['semanticId']))
         return self._action(ranked[0], 'default-develop-colored-mana')
@@ -135,11 +155,20 @@ class DefaultPolicySubsystem(SharedCardPolicies, MaskedHeuristicSubsystem):
                     or raw.get('useAlternativeCost') or raw.get('chosenModes') or raw.get('castFaceDown')
                     or raw.get('faceIndex') is not None)
 
-    def _land_colors(self, card):
-        return set(self.document['lands'].get(card.get('name'), self.facts.get(card.get('name')).get('manaColors', [])))
+    def _land_colors(self, card, o=None):
+        fact = self.facts.get(card.get('name'))
+        if fact.get('commanderColorMana') and o is not None:
+            return {color for c in o.get('state',{}).get('cards',{}).values() if c.get('isCommander') and c.get('ownerId',c.get('controllerId')) == o['agentToAct'] for color in self.facts.get(c.get('name')).get('colorIdentity',[])}
+        colors = set(self.document['lands'].get(card.get('name'), fact.get('manaColors', [])))
+        if o is not None and next((p.get('life',0) for p in o.get('state',{}).get('players',[]) if p.get('playerId')==o['agentToAct']),0) <= 2:
+            colors -= set(fact.get('painManaColors',[]))
+        return colors
 
-    def _enters_tapped(self, card, board):
+    def _enters_tapped(self, card, board, o=None):
         name = card.get('name')
+        life_cost = self.facts.get(name).get('untappedPayLife')
+        if life_cost:
+            return o is None or next((p.get('life',0) for p in o.get('state',{}).get('players',[]) if p.get('playerId')==o['agentToAct']),0) <= life_cost + 2
         condition = self.facts.get(name).get('untappedIfLandSubtypes')
         if condition:
             return not any(('LAND' in c.get('cardTypes', []) or 'Land' in c.get('typeLine', ''))
@@ -154,15 +183,15 @@ class DefaultPolicySubsystem(SharedCardPolicies, MaskedHeuristicSubsystem):
 
     def _land_score(self, o, action):
         card = self._card(o, action['action'].get('cardId'))
-        board = self._own(o); colors = self._land_colors(card)
-        supply = set().union(*(self._land_colors(c) for c in board if not self.facts.get(c.get('name')).get('variableMana'))) if board else set()
+        board = self._own(o); colors = self._land_colors(card,o)
+        supply = set().union(*(self._land_colors(c,o) for c in board if not self.facts.get(c.get('name')).get('variableMana'))) if board else set()
         score = sum(self.document.get('color_priorities', {}).get(c, 7) for c in colors - supply)
-        sources = [self._land_colors(c) for c in board if not c.get('isTapped') and self._land_colors(c) and not self.facts.get(c.get('name')).get('variableMana')]
-        if not self._enters_tapped(card, board) and not self.facts.get(card.get('name')).get('variableMana'):
+        sources = [self._land_colors(c,o) for c in board if not c.get('isTapped') and self._land_colors(c,o) and not self.facts.get(c.get('name')).get('variableMana')]
+        if not self._enters_tapped(card, board,o) and not self.facts.get(card.get('name')).get('variableMana'):
             sources.append(colors)
         hand = [self._card(o, i) for i in ids_in(o['state'], 'Hand', o['agentToAct'])]
         useful = [c for c in hand if self.document['roles'].get(c.get('name')) in self.document['weights']
-                  or not self.facts.get(c.get('name')) and mana_cost(c.get('manaCost')) and not self._land_colors(c)]
+                  or not self.facts.get(c.get('name')) and mana_cost(c.get('manaCost')) and not self._land_colors(c,o)]
         playable = [self._opening_value(c) for c in useful
                     if (cost := mana_cost(c.get('manaCost', self.facts.get(c.get('name')).get('manaCost', ''))))
                     and cost[0] > 0 and self._payable(cost, sources)]
