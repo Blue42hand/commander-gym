@@ -3,10 +3,23 @@
 These handlers implement the card's ordinary benefit. Deck strategy enters only
 through inherited scoring hooks; unknown contracts defer to bounded inference.
 """
-from .heuristic_policy import ids_in, mana_cost, PolicyNotApplicable
+from .heuristic_policy import ids_in, mana_cost, affordable, PolicyNotApplicable
 
 
 class SharedCardPolicies:
+    def _card_actions(self, o):
+        s = o.get('state',{}); me = o['agentToAct']
+        if s.get('activePlayerId') != me or s.get('currentStep') not in {'PRECOMBAT_MAIN','POSTCOMBAT_MAIN'} or ids_in(s,'Stack'): return None
+        for a in o.get('legalActions',[]):
+            raw = a.get('action',{})
+            if (affordable(a) and a.get('kind') == 'ActivateAbility' and raw.get('abilityId') == 'Lightning Greaves:1'
+                and a.get('manaCostString') == '{0}' and not a.get('additionalCostInfo')
+                and a.get('targetRequirements') is None and a.get('targetCount') == a.get('minTargets') == 1):
+                targets = [t for t in a.get('validTargets',[]) if self._card(o,t).get('controllerId') == me
+                           and self._card(o,t).get('isCommander') and not {'HASTE','SHROUD'} <= set(self._card(o,t).get('keywords',[]))]
+                if targets: return self._action(a,'shared-card-protect-commander-free-equip',{'targets':[targets[0]]})
+        return None
+
     def _card_pending(self, o, p):
         context = p.get('context', {}); source = context.get('sourceName')
         rt = p.get('responseSpec', {}).get('responseType')

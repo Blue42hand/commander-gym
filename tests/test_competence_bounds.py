@@ -137,3 +137,75 @@ class RecordedCompetenceTests(unittest.TestCase):
         self.assertEqual(p._land_colors({'name':'Adarkar Wastes'},o),set('WUC'))
         o['state']['players'][0]['life']=2
         self.assertEqual(p._land_colors({'name':'Adarkar Wastes'},o),{'C'})
+
+class RecordedImprovementTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        import gzip
+        from pathlib import Path
+        from commander_gym.heuristic_facts import CardFacts
+        root=Path(__file__).parent/'fixtures'
+        cls.rows=json.load(gzip.open(root/'policy-improvements-recorded.json.gz','rt'))
+        cls.facts=CardFacts.load(root/'competence-public-facts.json')
+
+    def state(self,n):return deepcopy(self.rows[str(n)]['observation'])
+
+    def test_upkeep_drain_and_unblocked_lethal(self):
+        from commander_gym.lathril_policy import LathrilDeckSubsystem
+        p=LathrilDeckSubsystem(self.facts);o=self.state(6076);r=p.try_choose(o)
+        a=next(a for a in o['legalActions'] if a['actionId']==r.choice.action_id)
+        paid=r.choice.params['tappedPermanents']
+        self.assertEqual(a['action']['abilityId'],'Lathril, Blade of the Elves:2')
+        self.assertEqual(len(set(paid)),10)
+        self.assertTrue(set(paid)<=set(a['additionalCostInfo']['validTapTargets']))
+        sick={i for i in a['additionalCostInfo']['validTapTargets'] if o['state']['cards'][i].get('hasSummoningSickness')}
+        self.assertTrue(sick<=set(paid))
+        o=self.state(7847);r=p.try_choose(o);attackers=r.choice.params['attackers']
+        self.assertEqual(set(attackers.values()),{'policy-talrand'})
+        self.assertGreaterEqual(sum(o['state']['cards'][i]['power'] for i in attackers),2)
+        self.assertLessEqual(len(attackers),2)
+
+    def test_ranger_search_and_discard_keep_development(self):
+        from commander_gym.lathril_policy import LathrilDeckSubsystem
+        from commander_gym.engine_deck_policy import EngineDeckPolicy
+        o=self.state(7773);r=LathrilDeckSubsystem(self.facts).try_choose(o)
+        self.assertEqual(o['pendingDecision']['cardInfo'][r.choice.response['selectedCards'][0]]['name'],'Quirion Ranger')
+        o=self.state(3857);r=EngineDeckPolicy(self.facts,'talrand').try_choose(o)
+        self.assertEqual(set(r.choice.response['selectedCards']),{'e105','e108'})
+
+    def test_free_equip_and_upkeep_preserve_mana(self):
+        from commander_gym.engine_deck_policy import EngineDeckPolicy
+        o=self.state(7378);r=EngineDeckPolicy(self.facts,'alela').try_choose(o)
+        a=next(a for a in o['legalActions'] if a['actionId']==r.choice.action_id)
+        self.assertEqual(a['action']['abilityId'],'Lightning Greaves:1')
+        self.assertEqual(r.choice.params,{'targets':['e300']})
+        o=self.state(1722);r=EngineDeckPolicy(self.facts,'sythis').try_choose(o)
+        self.assertEqual(next(a['kind'] for a in o['legalActions'] if a['actionId']==r.choice.action_id),'PassPriority')
+
+    def test_removal_prefers_commander_and_beneficial_aura_stays_friendly(self):
+        o=self.state(4431);b,_=bounded_observation(o,self.facts)
+        a=next(a for a in b['legalActions'] if o['state']['cards'].get(a['action'].get('cardId'),{}).get('name')=='Darksteel Mutation')
+        self.assertIn('e0',a['validTargets']);self.assertNotIn('e406',a['validTargets'])
+        o=self.state(679);b,_=bounded_observation(o,self.facts)
+        auras=[a for a in b['legalActions'] if o['state']['cards'].get(a['action'].get('cardId'),{}).get('name')=='Flickering Ward']
+        self.assertTrue(all(o['state']['cards'][i]['controllerId']==o['agentToAct'] for a in auras for i in a['validTargets']))
+        self.assertTrue(any(x['rule']=='beneficial-aura-own-creatures' for x in bounded_observation(o,self.facts)[1]))
+
+    def test_generated_tribe_with_empty_board(self):
+        from commander_gym.engine_deck_policy import EngineDeckPolicy
+        o=decision('ChooseOptionDecision','OptionChosenResponse',{'optionIndex':'INTEGER'},options=['Human','Elf','Faerie'],prompt='Choose creature type',context={'sourceName':'Renewed Solidarity'})
+        self.assertEqual(EngineDeckPolicy(self.facts,'alela').try_choose(o).choice.response['optionIndex'],2)
+
+    def test_original_overflow_fits_with_explanations_and_numbered_choices(self):
+        from test_lmstudio import discovery
+        from test_engine_deck_policy import expand
+        o=self.state('overflow');before=deepcopy(o)
+        models=discovery();models['models'][0]['loaded_instances'][0]['config']['context_length']=131072
+        summary={'goal':'Contract test','keyFacts':[],'evidenceIds':[],'uncertainty':'high','missingInformation':[]}
+        t=FakeTransport(completion(json.dumps({'decision':{'option':0},'explanation':summary})),models=models)
+        BoundedPolicyFallback(config(context_window=131072,max_prompt_bytes=32768,decision_explanations=True),t,facts=self.facts).choose_with_policy_context(o,[{'metadata':{'policyLayers':{'status':'deferred'}}}])
+        req=t.calls[1][1]
+        self.assertLess(len(json.dumps(req,ensure_ascii=False).encode()),30000)
+        choices=expand(json.loads(req['messages'][1]['content']))['choices']
+        self.assertEqual([c['option'] for c in choices],list(range(len(choices))))
+        self.assertEqual(o,before)

@@ -24,6 +24,12 @@ def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=()
     restrictions = []; retained = []; plans = []
     for a in view.get('legalActions', []):
         raw = a.get('action', {}); name = cards.get(raw.get('cardId', raw.get('sourceId')), {}).get('name')
+        state = o.get('state',{})
+        if (not o.get('pendingDecision') and state.get('activePlayerId') == me
+            and state.get('currentStep') not in {'PRECOMBAT_MAIN','POSTCOMBAT_MAIN'} and not ids_in(state,'Stack')
+            and (name in {'Think Twice','Flow of Knowledge'} and a.get('kind') in {'CastSpell','ActivateAbility'}
+                 or name == 'Flickering Ward' and a.get('kind') == 'ActivateAbility')):
+            restrictions.append({'action':a['semanticId'],'rule':'reviewed-resource-spending-waits-for-main'}); continue
         harmful = (a.get('kind') == 'CastSpell' and facts.get(name).get('spellPolarity') == ['HARMFUL']) or name in OPPONENT_REMOVAL
         if harmful and name not in allow_self_targets and a.get('requiresTargets') is True and a.get('targetRequirements') is None and isinstance(a.get('validTargets'),list):
             # Retain unknown ownership rather than inventing an enemy controller.
@@ -32,6 +38,21 @@ def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=()
                 restrictions.append({'action':a['semanticId'],'rule':'opponent-removal-targets'})
                 a['validTargets'] = targets
             if len(targets) < a.get('minTargets',1): continue
+        if name == 'Flickering Ward' and a.get('kind') == 'CastSpell' and a.get('targetRequirements') is None and isinstance(a.get('validTargets'),list):
+            a['validTargets'] = [t for t in a['validTargets'] if cards.get(t,{}).get('controllerId') == me]
+            restrictions.append({'action':a['semanticId'],'rule':'beneficial-aura-own-creatures'})
+            if len(a['validTargets']) < a.get('minTargets',1): continue
+        # For reviewed ordinary hostile Auras, choose strategically meaningful
+        # targets. Unknown effects and complex slot grammars remain untouched.
+        if name in {'Arrest','Darksteel Mutation','Noggle the Mind'} and a.get('targetRequirements') is None and a.get('minTargets') == a.get('targetCount') == 1:
+            targets = a.get('validTargets',[])
+            def threat(t):
+                c = cards.get(t,{})
+                return (100 if c.get('isCommander') else 0) + facts.get(c.get('name')).get('staticValue',0) + max(0,c.get('power') or 0)
+            ranked = sorted(targets,key=lambda t:(-threat(t),t))
+            if ranked and all(cards.get(t,{}).get('controllerId') not in (None,me) for t in ranked):
+                a['validTargets'] = [t for t in ranked if threat(t) >= threat(ranked[0])-3][:3]
+                if a['validTargets'] != targets: restrictions.append({'action':a['semanticId'],'rule':'reviewed-removal-threat-shortlist'})
         if name == "Green Sun's Zenith" and a.get('hasXCost') and type(a.get('maxAffordableX')) is int:
             deck = o.get('knownDeck', {}).get('cards', {})
             eligible = []; green_payoffs = []
@@ -71,7 +92,7 @@ def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=()
         retained.append(a)
     # Native AutoPay already funds an affordable cast/cycle. Keep explicit mana
     # decisions and menus without such a line intact (including enabling mana).
-    if not o.get('pendingDecision') and any(affordable(a) and (a.get('kind')=='CastSpell' or 'Cycling' in str(a.get('action',{}).get('abilityId',''))) and a.get('action',{}).get('paymentStrategy',{}).get('type') == 'AutoPay' for a in retained):
+    if not o.get('pendingDecision') and any(affordable(a) and a.get('isManaAbility') is not True and a.get('kind') in {'CastSpell','ActivateAbility'} and a.get('action',{}).get('paymentStrategy',{}).get('type') == 'AutoPay' for a in retained):
         productive = [a for a in retained if a.get('isManaAbility') is not True]
         if productive:
             if len(productive)!=len(retained): restrictions.append({'rule':'native-autopay-before-manual-mana'})

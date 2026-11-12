@@ -60,6 +60,12 @@ class LathrilDeckSubsystem(DefaultPolicySubsystem):
                 and 'Elf' in self._card(o, i).get('subtypes', [])
                 and (not untapped or not self._card(o, i).get('isTapped'))]
 
+    def _drain_payment(self, o, candidates):
+        # Sick tokens can pay the native tap-other-Elves cost. Keep useful
+        # attackers, mana creatures and engines available whenever possible.
+        return sorted(candidates,key=lambda i:(not self._card(o,i).get('hasSummoningSickness'),
+            not self._card(o,i).get('isToken'),self._card(o,i).get('power') or 0,i))[:10]
+
     def _choose_actions(self, o):
         if o.get('nativePaymentError') is not None:
             raise PolicyNotApplicable('lathril-unsupported-payment-correction')
@@ -82,16 +88,16 @@ class LathrilDeckSubsystem(DefaultPolicySubsystem):
                 return self._combat(o, a)
         s = o['state']
         quiet = not any(z.get('zoneId', {}).get('zoneType') == 'Stack' and z.get('size', len(z.get('cardIds', []))) for z in s.get('zones', []))
-        # Do not spend resources in arbitrary priority windows. Interaction is a
-        # separate shortlist; no land/development cast is allowed onto a stack.
-        removal = self._removal_candidates(o, offers)
-        if not quiet or s.get('activePlayerId') != o['agentToAct'] or s.get('currentStep') not in {'PRECOMBAT_MAIN', 'POSTCOMBAT_MAIN'}:
-            return self._interaction(o, removal, passed)
-        lands = [a for a in offers if a['kind'] == 'PlayLand']
-        if lands:
-            ranked = sorted(((self._land_score(o, a), a) for a in lands), key=lambda x: (-x[0], x[1]['semanticId']))
-            return self._action(ranked[0][1], 'lathril-develop-colored-mana', objective='mana-before-engines',
-                                candidates=[{'semanticId': a['semanticId'], 'score': score} for score, a in ranked])
+        for a in offers:
+            raw = a.get('action',{}); cost = a.get('additionalCostInfo') or {}
+            if (quiet and s.get('activePlayerId') == o['agentToAct'] and raw.get('abilityId') == 'Quirion Ranger:1'
+                and cost.get('bounceCount') == 1 and not cost.get('alsoRequired')
+                and a.get('minTargets') == a.get('targetCount') == 1 and a.get('targetRequirements') is None):
+                targets = [t for t in a.get('validTargets',[]) if self._card(o,t).get('name') == self.document['commander'] and self._card(o,t).get('isTapped')]
+                forests = [t for t in cost.get('validBounceTargets',[]) if self._card(o,t).get('controllerId') == o['agentToAct'] and 'Forest' in self._card(o,t).get('subtypes',[])]
+                if targets and forests and len(self._elves(o,True)) >= 10:
+                    forests.sort(key=lambda t:(not self._card(o,t).get('isTapped'),t))
+                    return self._action(a,'lathril-ranger-enable-second-drain',{'targets':[targets[0]],'bouncedPermanents':[forests[0]]})
         # Native owns tap costs. Never invent additional-cost selections.
         for a in offers:
             raw = a.get('action', {}); cost = a.get('additionalCostInfo') or {}
@@ -102,7 +108,17 @@ class LathrilDeckSubsystem(DefaultPolicySubsystem):
                 and a.get('parameterSpec', {}).get('allowedFields', {}).get('tappedPermanents') == 'ENTITY_ID_ARRAY'):
                 candidates = set(cost.get('validTapTargets', [])) & (set(self._elves(o, True)) - {raw.get('sourceId')})
                 if len(candidates) >= 10:
-                    return self._action(a, 'lathril-ten-elf-drain', {'tappedPermanents': sorted(candidates)[:10]}, objective='drain-opponents')
+                    return self._action(a, 'lathril-ten-elf-drain', {'tappedPermanents': self._drain_payment(o,candidates)}, objective='drain-opponents')
+        # Do not spend resources in arbitrary priority windows. Interaction is a
+        # separate shortlist; no land/development cast is allowed onto a stack.
+        removal = self._removal_candidates(o, offers)
+        if not quiet or s.get('activePlayerId') != o['agentToAct'] or s.get('currentStep') not in {'PRECOMBAT_MAIN', 'POSTCOMBAT_MAIN'}:
+            return self._interaction(o, removal, passed)
+        lands = [a for a in offers if a['kind'] == 'PlayLand']
+        if lands:
+            ranked = sorted(((self._land_score(o, a), a) for a in lands), key=lambda x: (-x[0], x[1]['semanticId']))
+            return self._action(ranked[0][1], 'lathril-develop-colored-mana', objective='mana-before-engines',
+                                candidates=[{'semanticId': a['semanticId'], 'score': score} for score, a in ranked])
         if removal and removal[0][0] >= 10:
             return self._interaction(o, removal, passed)
         ranked = []
@@ -153,6 +169,7 @@ class LathrilDeckSubsystem(DefaultPolicySubsystem):
 
     def _search_score(self, o, pending, card):
         name = card.get('name'); role = self.document['roles'].get(name)
+        if name == 'Quirion Ranger' and any(c.get('name') == self.document['commander'] and c.get('isTapped') for c in self._own(o)) and len(self._elves(o,True)) >= 10 and any('Forest' in c.get('subtypes',[]) for c in self._own(o)): return 500
         if role == 'finisher': return 200 if self._overrun_is_lethal(o, name) else -1
         if role == 'removal':
             own_power = sum(max(0, c.get('power') or 0) for c in self._own(o))
@@ -200,7 +217,7 @@ class LathrilDeckSubsystem(DefaultPolicySubsystem):
             options = p.get('options', [])
             ready = set(self._elves(o, True)) - {context.get('sourceId')}
             if len(set(options) & ready) >= 10 and not any(p.get(k) for k in ['selectionLimits', 'nonSelectableOptions', 'conditionalMinimums']):
-                return self._decision(p, rt, 'lathril-pay-ten-other-elves', selectedCards=sorted(set(options) & ready)[:10])
+                return self._decision(p, rt, 'lathril-pay-ten-other-elves', selectedCards=self._drain_payment(o,set(options) & ready))
         if p.get('kind') == 'ChooseOptionDecision' and source in self.document['tribal_sources'] and 'Elf' in p.get('options', []):
             return self._decision(p, rt, 'lathril-tribe-is-elf', optionIndex=p['options'].index('Elf'))
         if p.get('kind') == 'ChooseColorDecision':
@@ -290,7 +307,7 @@ class LathrilDeckSubsystem(DefaultPolicySubsystem):
             if len(group)<required or len(selected)+required>cap:
                 continue
             powers = sum(max(0,self._card(o,i).get('power') or 0) for i in group)
-            survives = any((self._card(o,i).get('toughness') or 0) > (enemy.get('power') or 0) for i in group)
+            survives = any('INDESTRUCTIBLE' in self._card(o,i).get('keywords',[]) or (self._card(o,i).get('toughness') or 0) > (enemy.get('power') or 0) for i in group)
             if incoming >= life or survives or powers >= (enemy.get('toughness') or 0):
                 selected.update({i:[target] for i in group});incoming -= max(0,enemy.get('power') or 0)
         return self._action(offer, 'lathril-native-pair-blocks', {'blockers':selected}, objective='preserve-life-and-engines')
@@ -307,12 +324,31 @@ class LathrilDeckSubsystem(DefaultPolicySubsystem):
         attackers = offer.get('validAttackers')
         if not isinstance(targets, list) or not isinstance(attackers, list):
             raise PilotContractError('lathril-incomplete-combat-menu')
+        if offer.get('additionalCostInfo') or any(p.get('activeEffects') for p in o['state'].get('players',[])):
+            raise PolicyNotApplicable('lathril-unsupported-combat-effects')
         selected = {}; ready = self._elves(o, True)
+        commander = next((i for i in ready if self._card(o,i).get('name') == self.document['commander']),None)
+        reserved = set(self._drain_payment(o,set(ready)-{commander})+[commander]) if commander and not self._card(o,commander).get('hasSummoningSickness') and len(ready)>=11 else set()
+        # Take a visible unblocked elimination before preserving a future drain.
+        for player in sorted(o['state'].get('players',[]),key=lambda p:p.get('life',40)):
+            target = player['playerId']
+            if target not in targets or player.get('hasLost'): continue
+            if any('CREATURE' in self._card(o,b).get('cardTypes',[]) and not self._card(o,b).get('isTapped') for b in ids_in(o['state'],'Battlefield',target)): continue
+            pairs = offer.get('attackTargetsByAttacker')
+            lethal = [i for i in attackers if not self._card(o,i).get('isTapped') and (not self._card(o,i).get('hasSummoningSickness') or 'HASTE' in self._card(o,i).get('keywords',[])) and (self._card(o,i).get('power') or 0)>0 and (not isinstance(pairs,dict) or target in pairs.get(i,[]))]
+            if sum(self._card(o,i)['power'] for i in lethal) >= player.get('life',float('inf')):
+                lethal.sort(key=lambda i:(-self._card(o,i)['power'],i))
+                chosen = []; damage = 0
+                for i in lethal:
+                    chosen.append(i); damage += self._card(o,i)['power']
+                    if damage >= player['life']: break
+                return self._action(offer,'lathril-visible-unblocked-lethal',{'attackers':{i:target for i in chosen}})
+
         for i in attackers:
             c = self._card(o, i)
-            if c.get('hasSummoningSickness') or c.get('isTapped') or (c.get('power') or 0) <= 0:
+            if c.get('hasSummoningSickness') and 'HASTE' not in c.get('keywords',[]) or c.get('isTapped') or (c.get('power') or 0) <= 0:
                 continue
-            if len(ready) >= 11 and i in ready:
+            if i in reserved:
                 continue  # Preserve the preferred drain plan rather than emptying it.
             pairs = offer.get('attackTargetsByAttacker')
             allowed = pairs.get(i, []) if isinstance(pairs, dict) else targets

@@ -96,12 +96,14 @@ class EnginePolicyTests(unittest.TestCase):
         mana(o,6);p=EngineDeckPolicy(self.f,'talrand')
         self.assertEqual(p.try_choose(o).choice.action_id,1)
         o['state']['zones'][2]['cardIds']=o['state']['zones'][2]['cardIds'][:4]
-        self.assertEqual(p.try_choose(o).choice.action_id,0)
+        self.assertEqual(p.try_choose(o).choice.action_id,1)
 
     def test_unknown_utility_is_not_suppressed_when_reserving_mana(self):
         o=observation(offer('PassPriority',0),offer('CastSpell',1,card='commander'),offer('ActivateAbility',2))
         zone(o,'Command','me',commander={'name':'Talrand, Sky Summoner','manaCost':'{2}{U}{U}'})
         mana(o,4)
+        self.assertEqual(EngineDeckPolicy(self.f,'talrand').try_choose(o).choice.action_id,1)
+        o['legalActions'] = [a for a in o['legalActions'] if a['kind'] != 'CastSpell']
         self.assertIsNone(EngineDeckPolicy(self.f,'talrand').try_choose(o).choice)
 
     def test_sythis_sequences_mana_aura_and_spreads_land_risk(self):
@@ -190,7 +192,7 @@ class CompactPromptTests(unittest.TestCase):
         models=discovery();models['models'][0]['loaded_instances'][0]['config']['context_length']=131072
         t=FakeTransport(completion(json.dumps({'option':0})),models=models)
         f=BoundedPolicyFallback(config(context_window=131072,max_prompt_bytes=32768),t)
-        f.choose(o);req=t.calls[1][1]
+        f.choose_with_policy_context(o,[{'metadata':{'policyLayers':{'status':'deferred'}}}]);req=t.calls[1][1]
         self.assertLessEqual(len(json.dumps(req,ensure_ascii=False).encode()),32768)
         view=expand(json.loads(req['messages'][1]['content']))
         self.assertEqual(len(view['choices']),16)

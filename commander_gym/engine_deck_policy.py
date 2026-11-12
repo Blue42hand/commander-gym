@@ -73,6 +73,7 @@ class EngineDeckPolicy(ProfiledDeckPolicy):
             elif self.key == 'sythis': score += 45
             elif engines: score += 40
             else: score -= 45
+        if self.key == 'sythis' and role == 'commander': score += 35
         if self.key == 'sythis' and role == 'ramp' and 'ENCHANTMENT' in self.facts.get(card.get('name')).get('types',[]): score += 25
         if self.key == 'alela' and role == 'payoff':
             score += min(35,7*sum('Faerie' in c.get('subtypes',[]) for c in own))
@@ -82,11 +83,22 @@ class EngineDeckPolicy(ProfiledDeckPolicy):
         return score
 
     def _mana_sources(self, o):
+        # Use the native payment view when present; it includes dynamic rocks
+        # such as Fellwar Stone and separates mana modes from utility abilities.
+        native = {}
+        for a in o.get('legalActions',[]):
+            for source in a.get('availableManaSources') or []:
+                if source.get('requiresSacrifice') or source.get('requiresTappingAnotherPermanent'): continue
+                if source.get('manaAmount') != 1: continue
+                colors = set(source.get('producesColors') or [])
+                if source.get('producesColorless'): colors.add('C')
+                if colors: native[source['entityId']] = colors
+        if native: return list(native.values())
         sources = []
         for c in self._own(o):
             f = self.facts.get(c.get('name'))
             if c.get('isTapped') or c.get('hasSummoningSickness') or c.get('activeEffects'): continue
-            if not (f.get('simpleMana') or 'LAND' in c.get('cardTypes',[])): continue
+            if not (f.get('manaColors') or f.get('commanderColorMana') or 'LAND' in c.get('cardTypes',[])): continue
             if f.get('variableMana'): continue
             colors = self._land_colors(c,o)
             if colors: sources.append(colors)
@@ -99,11 +111,13 @@ class EngineDeckPolicy(ProfiledDeckPolicy):
                     for c in hand if self._role(c) == 'interaction' or 'COUNTERSPELL' in self.facts.get(c.get('name')).get('tags',[])]
         counters = [cost for cost in counters if cost]
         reserve = min(counters,key=lambda cost:cost[0]) if counters else None
-        floor = self.document['reserve_mana'] if self._role(card) == 'commander' else 0
-        if reserve is None and not floor: return True
+        # Reserve an actual held interaction spell, never idle generic mana.
+        if reserve is None: return True
         cost = mana_cost(card.get('manaCost',self.facts.get(card.get('name')).get('manaCost','')))
         if cost is None: return False
-        reserve_total = max(reserve[0] if reserve else 0,floor)
+        # Establish the commander/first engine before reserving interaction.
+        if self._role(card) == 'commander' or self._role(card) == 'draw_engine' and not self._engines(o): return True
+        reserve_total = reserve[0]
         pips = cost[1] + (reserve[1] if reserve else Counter())
         return self._payable((cost[0]+reserve_total,pips),self._mana_sources(o))
 
@@ -152,7 +166,6 @@ class EngineDeckPolicy(ProfiledDeckPolicy):
             if card.get('name') in {'Coastal Piracy','Bident of Thassa','Reconnaissance Mission'} and not any('CREATURE' in c.get('cardTypes',[]) for c in own): continue
             if role == 'payoff' and not (commander or engines): continue
             if role == 'aura_payoff' and (card.get('name') == 'Tempest Technique' or len(own)<5): continue
-            if role == 'cantrip' and self.key == 'talrand' and not commander and sum('LAND' in c.get('cardTypes',[]) for c in own)>=3: continue
             if set(fact.get('tags',[])) & UNSAFE_TAGS and role != 'aura_payoff': continue
             params = self._cast_params(o,a,card,role)
             if params is None: continue
@@ -174,7 +187,7 @@ class EngineDeckPolicy(ProfiledDeckPolicy):
         if p.get('kind') != 'ChooseOptionDecision' or p.get('responseSpec',{}).get('responseType') != 'OptionChosenResponse': return None
         source = p.get('context',{}).get('sourceName')
         desired = ('Enchantment' if source == 'Cloud Key' and self.key == 'alela' else
-                   'Faerie' if source in {'Kindred Discovery','Patchwork Banner','Etchings of the Chosen'} and self.key == 'alela' else None)
+                   self.document.get('preferred_tribe') if self.document.get('preferred_tribe') and ('creature type' in p.get('prompt','').casefold() or source in {'Kindred Discovery','Patchwork Banner','Etchings of the Chosen','Renewed Solidarity'}) else None)
         if desired is None: return None
         options = p.get('options',[])
         indexes = [i for i,label in enumerate(options) if isinstance(label,str) and label.casefold() == desired.casefold()]
@@ -209,7 +222,7 @@ class EngineDeckPolicy(ProfiledDeckPolicy):
             for entity in attackers:
                 c = self._card(o,entity)
                 allowed = pairs.get(entity,[]) if isinstance(pairs,dict) else targets
-                if target not in allowed or c.get('isTapped') or c.get('hasSummoningSickness') or (c.get('power') or 0)<=0: continue
+                if target not in allowed or c.get('isTapped') or c.get('hasSummoningSickness') and 'HASTE' not in c.get('keywords',[]) or (c.get('power') or 0)<=0: continue
                 flying = 'FLYING' in c.get('keywords',[])
                 if not (c.get('isToken') and flying or c.get('attachments') and (c.get('power') or 0)>=3): continue
                 if any(not flying or set(b.get('keywords',[])) & {'FLYING','REACH'} for b in blockers): continue

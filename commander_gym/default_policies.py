@@ -72,6 +72,8 @@ class DefaultPolicySubsystem(SharedCardPolicies, MaskedHeuristicSubsystem):
         if not isinstance(o.get('state'), dict): return SubsystemDecision(reason='default-missing-masked-state')
         if 'mulligan' in o.get('state', {}): return self._opening(o)
         if o.get('pendingDecision') is not None: return self._pending(o, o['pendingDecision'])
+        shared = self._card_actions(o)
+        if shared is not None: return shared
         return self._choose_actions(o)
 
     def _combat(self, o, offer):
@@ -214,9 +216,11 @@ class DefaultPolicySubsystem(SharedCardPolicies, MaskedHeuristicSubsystem):
         hand = ids_in(o.get('state', {}), 'Hand', o['agentToAct'])
         if (p.get('kind') == 'SelectCardsDecision' and rt == 'CardsSelectedResponse'
             and type(count) is int and count > 0 and p.get('maxSelections') == count
-            and p.get('prompt') == f'Discard down to 7 cards (choose {count} to discard)'
-            and context.get('phase') == 'STATE_BASED' and o['state'].get('currentStep') == 'CLEANUP'
-            and len(hand) - 7 == count and len(options) == len(hand) and set(options) == set(hand)
+            and (p.get('prompt') == f'Discard down to 7 cards (choose {count} to discard)'
+                 and context.get('phase') == 'STATE_BASED' and o['state'].get('currentStep') == 'CLEANUP' and len(hand)-7 == count
+                 or context.get('sourceName') == 'Flow of Knowledge' and context.get('phase') == 'RESOLUTION'
+                 and p.get('prompt') == 'Choose two cards to discard' and count == 2)
+            and len(options) == len(hand) and set(options) == set(hand)
             and not p.get('librarySearch') and not any(p.get(k) for k in [
                 'nonSelectableOptions', 'selectionLimits', 'conditionalMinimums', 'onePerCardType',
                 'onePerColor', 'onePerCardName', 'onePerBasicLandType', 'onePerPower',
@@ -228,7 +232,7 @@ class DefaultPolicySubsystem(SharedCardPolicies, MaskedHeuristicSubsystem):
             def discard_value(entity):
                 card = self._card(o, entity)
                 if 'Land' in card.get('typeLine', '') or 'LAND' in card.get('cardTypes', []):
-                    return 150 if lands < 3 else (60 if lands + hand_lands <= 5 else 0)
+                    return 180 if lands < 5 and hand_lands <= 2 else (60 if lands + hand_lands <= 6 else 0)
                 role = self.document['roles'].get(card.get('name'))
                 if role == 'finisher' and self._overrun_is_lethal(o, card.get('name')):
                     return 200

@@ -179,7 +179,7 @@ class BoundedFallbackTests(unittest.TestCase):
         t=rank_transport();t.models=models
         c=BoundedPolicyFallback(cfg,t,facts=facts()).choose(o)
         self.assertEqual(c.metadata['boundedFallback']['mode'],'frozen-choices')
-        self.assertEqual(c.metadata['boundedFallback']['candidateCount'],6)
+        self.assertEqual(c.metadata['boundedFallback']['candidateCount'],2)
         self.assertLess(len(json.dumps(t.calls[1][1],ensure_ascii=False).encode()),20000)
 
     def test_history_primer_and_administrative_fields_never_reach_model(self):

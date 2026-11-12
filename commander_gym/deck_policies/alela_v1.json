@@ -76,5 +76,6 @@
     "W",
     "U"
   ],
-  "reserve_mana": 1
+  "reserve_mana": 1,
+  "preferred_tribe": "Faerie"
 }
