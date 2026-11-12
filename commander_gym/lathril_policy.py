@@ -251,6 +251,16 @@ class LathrilDeckSubsystem(MaskedHeuristicSubsystem):
             for color in ['GREEN', 'BLACK', 'COLORLESS']:
                 if color in choices:
                     return self._decision(p, rt, 'lathril-mana-color', color=color)
+        free_tokens = {
+            'Wirewood Hivemaster': 'You may create a 1/1 green Insect creature token',
+            'Lys Alana Huntmaster': 'You may create a 1/1 green Elf Warrior creature token',
+        }
+        if (p.get('kind') == 'YesNoDecision' and rt == 'YesNoResponse' and source in free_tokens
+            and (context.get('abilityIdentity') or {}).get('abilityId') == source + ':1'
+            and context.get('phase') == 'RESOLUTION'
+            and p.get('prompt', '').rstrip('.').casefold() == free_tokens[source].casefold()
+            and not any(p.get(k) for k in ['peerOptions', 'yesDetail', 'noDetail'])):
+            return self._decision(p, rt, 'lathril-accept-free-token', choice=p.get('yesAvailable') is True)
         if (p.get('kind') == 'YesNoDecision' and rt == 'YesNoResponse' and source == 'Overgrown Tomb'
             and p.get('prompt') == 'Pay 2 life to have Overgrown Tomb enter untapped?'):
             board = [self._card(o, i) for i in ids_in(o['state'], 'Battlefield', o['agentToAct']) if i != context.get('sourceId')]
@@ -278,8 +288,10 @@ class LathrilDeckSubsystem(MaskedHeuristicSubsystem):
             if p.get('canDecline') is True:
                 return self._decision(p, rt, 'lathril-decline-unfunded-draw', autoPay=False, declined=True, selectedSources=[], waterbendPermanents=[])
         if (p.get('kind') == 'SelectCardsDecision' and rt == 'CardsSelectedResponse'
-            and source == 'Growing Rites of Itlimoc'
-            and p.get('prompt') == 'You may reveal a creature card and put it into your hand'
+            and ((source == 'Growing Rites of Itlimoc'
+                  and p.get('prompt') == 'You may reveal a creature card and put it into your hand')
+                 or (source == "Herald's Horn" and p.get('selectedLabel') == 'Reveal and put into your hand'
+                     and p.get('remainderLabel') == 'Leave on top of your library'))
             and p.get('minSelections') == 0 and p.get('maxSelections') == 1
             and not any(p.get(k) for k in ['selectionLimits', 'conditionalMinimums', 'onePerCardType',
                 'onePerColor', 'onePerCardName', 'onePerBasicLandType', 'onePerPower',

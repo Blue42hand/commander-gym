@@ -116,3 +116,8 @@ visible zones, avoiding an accidental entity-ID ranking.
 Library searches accept native zero-or-one selection bounds (including fail to
 find), choose an offered eligible card when available, and exclude any explicit
 nonselectable IDs. The actual Demonic Tutor callback is a regression fixture.
+
+Free token triggers from Wirewood Hivemaster and Lys Alana Huntmaster accept the
+native yes/no offer only for the exact reviewed source ability and token prompt.
+Herald's Horn takes its offered creature using the native reveal/leave-on-top
+labels. These avoid using a model for routine optional deck benefits.

@@ -111,6 +111,25 @@ class LathrilPolicyTests(unittest.TestCase):
         o['pendingDecision']['options'] = []
         self.assertEqual(policy().try_choose(o).choice.response['selectedCards'], [])
 
+    def test_recorded_free_tokens_require_exact_source_and_ability(self):
+        o = json.loads((Path(__file__).parent / 'fixtures/lathril_mirror_regressions.json').read_text())['token']
+        self.assertTrue(policy().try_choose(o).choice.response['choice'])
+        p = o['pendingDecision']
+        p['context']['sourceName'] = 'Lys Alana Huntmaster'
+        p['context']['abilityIdentity']['abilityId'] = 'Lys Alana Huntmaster:1'
+        p['prompt'] = 'you may create a 1/1 green Elf Warrior creature token.'
+        self.assertTrue(policy().try_choose(o).choice.response['choice'])
+        p['context']['abilityIdentity']['abilityId'] = 'other:1'
+        with self.assertRaises(PilotContractError):
+            policy().try_choose(o)
+
+    def test_horn_native_reveal_contract_takes_offered_elf(self):
+        o = decision('SelectCardsDecision','CardsSelectedResponse',{'selectedCards':'ENTITY_ID_ARRAY'},
+                     context={'sourceName':"Herald's Horn"},minSelections=0,maxSelections=1,options=['elf'],
+                     selectedLabel='Reveal and put into your hand',remainderLabel='Leave on top of your library',
+                     cardInfo={'elf':{'name':'Llanowar Elves','typeLine':'Creature — Elf Druid','manaCost':'{G}'}})
+        self.assertEqual(policy().try_choose(o).choice.response['selectedCards'], ['elf'])
+
     def test_cemetery_untaps_after_basic_and_tutor_has_execution_path(self):
         p = policy()
         self.assertTrue(p._enters_tapped({'name':'Woodland Cemetery'}, []))
