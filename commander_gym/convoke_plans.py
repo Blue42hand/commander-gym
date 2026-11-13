@@ -19,9 +19,9 @@ def convoke_plans(o,a,*,require_complete=True):
     """
     candidates=native_convoke_offer(a)
     if not candidates or a.get('kind')!='CastSpell' or a.get('additionalCostInfo'):return None
-    if any(a.get(k) for k in ['hasDelve','hasHarmonize','hasTapForGeneric','modalEnumeration']):return None
+    if any(a.get(k) for k in ['hasDelve','hasHarmonize','hasTapForGeneric','modalEnumeration','manaCostByTargetCount','manaCostPerExtraTarget','optionalManaCostString']):return None
     raw=a.get('action',{})
-    if any(raw.get(k) for k in ['alternativePayment','chosenModes','useAlternativeCost','castFaceDown','declaredCostSlot']):return None
+    if any(raw.get(k) for k in ['alternativePayment','chosenModes','useAlternativeCost','castFaceDown','declaredCostSlot','optionalCostPayments','additionalManaForCounters']):return None
     text=a.get('manaCostString')
     if not isinstance(text,str):return None
     if a.get('hasXCost'):

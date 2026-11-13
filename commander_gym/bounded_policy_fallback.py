@@ -748,7 +748,26 @@ class BoundedPolicyFallback:
                 ' evidenceIds must use only card instance or player IDs from the schema enum; never use dN definition references or context paths.'
                 ' Use an empty evidenceIds list if no entity reference is needed.'
                 ' Report uncertainty honestly; use empty missingInformation if none. Explanations are diagnostic only.')
+        # Small literal readiness facts stay readable even when the full board
+        # needs table/default/reference compression. Never infer creatures from
+        # a deck list or confuse floating mana with native payment resources.
+        readiness=[]
+        from .convoke_plans import convoke_plans
+        for action in o.get('legalActions',[]):
+            if not affordable(action) or not action.get('hasConvoke'):continue
+            plans=convoke_plans(o,action,require_complete=False)
+            if not plans:continue
+            source=o.get('state',{}).get('cards',{}).get(action.get('action',{}).get('cardId'),{})
+            readiness.append({'spell':source.get('name'),'semanticId':action['semanticId'],
+                'nativeOfferBasePayable':True,
+                'eligibleUntappedConvokeCreatures':[{'id':row['entityId'],'name':row.get('name')}
+                    for row in action.get('validConvokeCreatures') or []],
+                'harnessPlannedXValues':[plan.get('xValue') for plan in plans],
+                'paymentRule':'Choose X; the harness supplies its listed creature taps. Zero floating mana does not mean zero available mana.'})
         view = compact_decision_context(view)
+        if readiness:
+            view['convokeReadiness']=readiness
+            instructions += ' convokeReadiness is literal current native readiness data; it requires no table or shared-value expansion.'
         instructions += (' Card instances inherit cardDefinitions[definition]; instance fields override definitions.'
                          ' Each legalActions entry inherits actionDefaults; its action inherits rawActionDefaults.'
                          ' Tables contain columns and rows keyed by entity or row ID; zip columns with each row and omit null cells. Missing trailing cells are absent fields.'
