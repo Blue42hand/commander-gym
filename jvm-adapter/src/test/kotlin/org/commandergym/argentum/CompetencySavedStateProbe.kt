@@ -350,6 +350,21 @@ object CompetencySavedStateProbe {
                                 val target=(action.targets.single() as ChosenTarget.Player).playerId
                                 check(target==(if(branch=="baseline")original else action.playerId))
                                 check(action.cardId in result.state.stack)
+                                if(playerDraw["drawCount"]!=null) {
+                                    val count=playerDraw.getValue("drawCount").jsonPrimitive.int
+                                    var steps=0
+                                    while(result.state.stack.isNotEmpty()) {
+                                        check(++steps<=128 && result.state.pendingDecision==null)
+                                        result=processor.process(result.state,PassPriority(requireNotNull(result.state.priorityPlayerId))).result
+                                        check(result.outcome !is Outcome.Rejected)
+                                    }
+                                    for(player in listOf(original,action.playerId)) {
+                                        val before=initial.getZone(ZoneKey(player,Zone.HAND)).size
+                                        val after=result.state.getZone(ZoneKey(player,Zone.HAND)).size
+                                        val spent=if(player==action.playerId)1 else 0
+                                        check(after-before==(if(player==target)count else 0)-spent)
+                                    }
+                                }
                             }
                             val strandedBoost=entry["strandedBoostComparison"]?.jsonObject
                             if(strandedBoost!=null) {
@@ -586,7 +601,12 @@ object CompetencySavedStateProbe {
                                     put("resolvedWithOpponentsPassing",true)
                                     put("continuationChoices",JsonArray(resolutionChoices))
                                 }
-                                if(playerDraw!=null)put("beneficialDrawTargetsCaster",branch=="replacement")
+                                if(playerDraw!=null) {
+                                    put("beneficialDrawTargetsCaster",branch=="replacement")
+                                    if(playerDraw["drawCount"]!=null) {
+                                        put("drawCountVerified",playerDraw.getValue("drawCount"));put("resolvedWithOpponentsPassing",true)
+                                    }
+                                }
                                 if(strandedBoost!=null) {
                                     put("noManaGenerated",true);put("cardAndLandPreserved",branch=="replacement");put("resolvedWithOpponentsPassing",true)
                                 }

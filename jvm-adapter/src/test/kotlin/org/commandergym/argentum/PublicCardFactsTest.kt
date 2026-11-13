@@ -75,6 +75,18 @@ class PublicCardFactsTest {
         for(name in negative)assertFalse(cards[name]!!.jsonObject["selfResourceDrawSpell"]!!.jsonPrimitive.boolean,name)
     }
 
+    @Test fun variablePlayerDrawRequiresTheWholeNativeTargetedEffect() {
+        val names=listOf("Blue Sun's Zenith","Compulsive Research","Finale of Revelation","Pull from Tomorrow")
+        val cards=PublicCardFacts.export(registry,names,revision)["cards"]!!.jsonObject
+        assertTrue(cards["Blue Sun's Zenith"]!!.jsonObject["beneficialPlayerDrawX"]!!.jsonPrimitive.boolean)
+        for(name in names.drop(1))assertFalse(cards[name]!!.jsonObject.containsKey("beneficialPlayerDrawX"))
+        val original=registry.getCard("Blue Sun's Zenith")!!
+        val changed=original.copy(script=original.script.copy(spellEffect=com.wingedsheep.sdk.scripting.effects.CompositeEffect(
+            listOf(original.script.spellEffect!!,com.wingedsheep.sdk.dsl.Effects.GainLife(1)))))
+        val overlay=com.wingedsheep.engine.registry.CardRegistry(registry);overlay.register(changed)
+        assertFalse(PublicCardFacts.export(overlay,listOf(changed.name),revision)["cards"]!!.jsonObject[changed.name]!!.jsonObject.containsKey("beneficialPlayerDrawX"))
+    }
+
     @Test fun beneficialPlayerDrawContractsMatchWholeNetPositiveEffects() {
         val cards=PublicCardFacts.export(registry,listOf("Compulsive Research","High Tide","Brainstorm"),revision)["cards"]!!.jsonObject
         assertEquals(3,cards["Compulsive Research"]!!.jsonObject["beneficialPlayerDrawCount"]!!.jsonPrimitive.int)

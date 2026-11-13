@@ -308,6 +308,14 @@ object PublicCardFacts {
                 }
                 if(ordinaryPositive)put("beneficialPlayerDrawCount",drawCount)
             }
+            // Exact variable player draw only. Resolution destinations (including
+            // self shuffle) are separate from this whole spell effect.
+            if (playerTarget?.id!=null && playerTarget==TargetPlayer(id=playerTarget.id) &&
+                targetedDraw?.target==EffectTarget.BoundVariable(playerTarget.id!!) &&
+                targetedDraw.count==DynamicAmounts.xValue() && card.script.spellEffect==targetedDraw &&
+                (card.typeLine.isInstant || card.typeLine.isSorcery) && noStatic && noTriggers && noReplacement && activated.isEmpty()) {
+                put("beneficialPlayerDrawX",true)
+            }
             putJsonArray("manaOnlySelfUntapAbilities") {
                 activated.filter {
                     val effect = it.effect as? TapUntapEffect

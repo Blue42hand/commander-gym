@@ -372,8 +372,14 @@ def pump_has_power_mana_payoff(o,entity,facts):
                and a.get('action',{}).get('abilityId') in f['powerManaAbilities'] for a in o.get('legalActions',[]))
 
 
-def safe_ordinary_player_draw(o,source,facts):
+def safe_ordinary_player_draw(o,source,facts,action=None):
     count=facts.get(source).get('beneficialPlayerDrawCount')
+    if action is not None and action.get('hasXCost'):
+        high=action.get('maxAffordableX');low=action.get('minX')
+        if (facts.get(source).get('beneficialPlayerDrawX') is not True
+            or type(high) is not int or not 1<=high<=100 or type(low) is not int or not 0<=low<=high
+            or action.get('action',{}).get('xValue') is not None):return False
+        count=high
     if not count:return False
     state=o['state']
     if any(type(p.get('librarySize')) is not int or p['librarySize']<=count+2 or p.get('activeEffects') for p in state.get('players',[])):return False
@@ -733,10 +739,11 @@ def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=()
             and a.get('targetRequirements') is None and a.get('minTargets')==a.get('targetCount')==1
             and isinstance(a.get('validTargets'),list) and all(isinstance(t,str) for t in a['validTargets']) and me in a['validTargets']
             and all(t in {p.get('playerId') for p in state.get('players',[])} for t in a['validTargets'])
-            and not cards.get(raw.get('cardId'),{}).get('activeEffects') and not a.get('hasXCost')
-            and safe_ordinary_player_draw(o,name,facts)):
+            and not cards.get(raw.get('cardId'),{}).get('activeEffects')
+            and safe_ordinary_player_draw(o,name,facts,a)):
             if a['validTargets']!=[me]:restrictions.append({'action':a['semanticId'],'rule':'ordinary-player-card-advantage-for-self'})
             a['validTargets']=[me]
+            if a.get('hasXCost'):a['minX']=max(1,a['minX'])
         if name not in allow_self_targets and (casting and (name in {'Flickering Ward','Curiosity','Keen Sense','Sixth Sense'} or facts.get(name).get('spellPolarity')==['BENEFICIAL'] and all(t in ids_in(state,'Battlefield') for t in a.get('validTargets') or [])) or raw.get('abilityId') == 'Timberwatch Elf:1' or raw.get('abilityId') in facts.get(name).get('positiveStatBoostAbilities',[])) and a.get('targetRequirements') is None and isinstance(a.get('validTargets'),list):
             a['validTargets'] = [t for t in a['validTargets'] if cards.get(t,{}).get('controllerId') == me]
             restrictions.append({'action':a['semanticId'],'rule':'beneficial-effect-own-creatures'})

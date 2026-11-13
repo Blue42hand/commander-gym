@@ -34,7 +34,7 @@ class CardFacts:
                   'staticValue', 'repeatable', 'affectsOpponent', 'feeds', 'rewards', 'tribesRewarded'}
         fields |= {'freeOptionalDraws', 'drawSensitive'}
         for name, fact in document['cards'].items():
-            if not isinstance(name, str) or not name or not isinstance(fact, dict) or not fields <= set(fact) or set(fact) - fields - {'selfTappedLandRampAbilities', 'grantedFreeOptionalDraws', 'emptySelfDrawAtZeroX', 'selfResourceDrawSpell', 'protectionEquipmentKeywords', 'plainPermanentCast', 'beneficialPlayerDrawCount', 'powerManaAbilities', 'positiveStatBoostAbilities', 'entryStatReduction', 'selfReturnToHandAbilities', 'evasionSensitive', 'opponentEvasionRemovalAbilities', 'opponentAttackRequirementAbilities', 'positiveCounterTriggers', 'activatedAbilityCounts', 'attachedCombatLock', 'bounceTargetUntapAbilities', 'equipAbilities', 'selfDrawAbilities', 'simpleLifeGainTriggers', 'temporaryLandManaBoost', 'freeOptionalLibraryReorders', 'conditionalTappedEntry', 'simpleTargetUntapAbilities', 'friendlyStaticPermanent', 'developmentMana', 'manaOnlySelfUntapAbilities', 'fixedStatReductions', 'removesAttachedAbilities', 'untappedIfLandSubtypes', 'variableMana', 'commanderColorMana', 'painManaColors', 'colorIdentity', 'untappedPayLife'}:
+            if not isinstance(name, str) or not name or not isinstance(fact, dict) or not fields <= set(fact) or set(fact) - fields - {'beneficialPlayerDrawX', 'selfTappedLandRampAbilities', 'grantedFreeOptionalDraws', 'emptySelfDrawAtZeroX', 'selfResourceDrawSpell', 'protectionEquipmentKeywords', 'plainPermanentCast', 'beneficialPlayerDrawCount', 'powerManaAbilities', 'positiveStatBoostAbilities', 'entryStatReduction', 'selfReturnToHandAbilities', 'evasionSensitive', 'opponentEvasionRemovalAbilities', 'opponentAttackRequirementAbilities', 'positiveCounterTriggers', 'activatedAbilityCounts', 'attachedCombatLock', 'bounceTargetUntapAbilities', 'equipAbilities', 'selfDrawAbilities', 'simpleLifeGainTriggers', 'temporaryLandManaBoost', 'freeOptionalLibraryReorders', 'conditionalTappedEntry', 'simpleTargetUntapAbilities', 'friendlyStaticPermanent', 'developmentMana', 'manaOnlySelfUntapAbilities', 'fixedStatReductions', 'removesAttachedAbilities', 'untappedIfLandSubtypes', 'variableMana', 'commanderColorMana', 'painManaColors', 'colorIdentity', 'untappedPayLife'}:
                 raise ValueError('invalid native card fact fields')
             protection=fact.get('protectionEquipmentKeywords')
             if 'protectionEquipmentKeywords' in fact and (not isinstance(protection,list)
@@ -47,6 +47,8 @@ class CardFacts:
                 raise ValueError('invalid self resource draw spell contract')
             if 'plainPermanentCast' in fact and type(fact['plainPermanentCast']) is not bool:
                 raise ValueError('invalid plain permanent cast contract')
+            if 'beneficialPlayerDrawX' in fact and type(fact['beneficialPlayerDrawX']) is not bool:
+                raise ValueError('invalid native variable player draw contract')
             if 'beneficialPlayerDrawCount' in fact and (type(fact['beneficialPlayerDrawCount']) is not int or not 1<=fact['beneficialPlayerDrawCount']<=100):
                 raise ValueError('invalid native beneficial player draw count')
             if 'entryStatReduction' in fact:

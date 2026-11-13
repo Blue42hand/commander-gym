@@ -38,6 +38,40 @@ class ResourceIntentPolicyTests(unittest.TestCase):
                 v,r=bounded_observation(o,CardFacts(d),**kwargs)
                 self.assertEqual(v['legalActions'][1]['validTargets'],['enemy','me'])
 
+    def test_certified_variable_draw_prefers_self_without_zero_card_cast(self):
+        o,f=self.draw_board();d=f.document();d['cards']['Resource Spell'].pop('beneficialPlayerDrawCount');d['cards']['Resource Spell']['beneficialPlayerDrawX']=True
+        a=o['legalActions'][1];a.update(hasXCost=True,minX=0,maxAffordableX=4)
+        before=deepcopy(o);v,_=bounded_observation(o,CardFacts(d))
+        self.assertEqual(v['legalActions'][1]['validTargets'],['me']);self.assertEqual(v['legalActions'][1]['minX'],1);self.assertEqual(o,before)
+
+    def test_variable_draw_uncertainty_and_possible_decking_preserve_domain(self):
+        for mode in ['own-low','enemy-low','unknown-library','punisher','player-modifier','card-modifier','unknown-board','override','unknown-max','huge-max','zero-max','unknown-min','fixed-x','uncertified']:
+            with self.subTest(mode=mode):
+                o,f=self.draw_board();d=f.document();d['cards']['Resource Spell'].pop('beneficialPlayerDrawCount');d['cards']['Resource Spell']['beneficialPlayerDrawX']=True
+                a=o['legalActions'][1];a.update(hasXCost=True,minX=0,maxAffordableX=4);kw={}
+                if mode=='own-low':o['state']['players'][0]['librarySize']=5
+                elif mode=='enemy-low':o['state']['players'][1]['librarySize']=4
+                elif mode=='unknown-library':o['state']['players'][1].pop('librarySize')
+                elif mode=='punisher':d['cards']['Punisher']=fact(drawSensitive=True);zone(o,'Battlefield','enemy',p={'name':'Punisher'})
+                elif mode=='player-modifier':o['state']['players'][0]['activeEffects']=['unknown']
+                elif mode=='card-modifier':o['state']['cards']['spell']['activeEffects']=['unknown']
+                elif mode=='unknown-board':zone(o,'Battlefield','enemy',p={'name':'Unknown'})
+                elif mode=='override':kw['allow_self_targets']={'Resource Spell'}
+                elif mode=='unknown-max':a.pop('maxAffordableX')
+                elif mode=='huge-max':a['maxAffordableX']=200
+                elif mode=='zero-max':a['maxAffordableX']=0
+                elif mode=='unknown-min':a.pop('minX')
+                elif mode=='fixed-x':a['action']['xValue']=1
+                elif mode=='uncertified':d['cards']['Resource Spell'].pop('beneficialPlayerDrawX')
+                v,_=bounded_observation(o,CardFacts(d),**kw)
+                self.assertEqual(v['legalActions'][1]['validTargets'],['enemy','me'])
+                self.assertEqual(v['legalActions'][1].get('minX'),a.get('minX'))
+
+    def test_variable_draw_contract_is_a_strict_boolean(self):
+        for value in [None,[],{},1,'true']:
+            o,f=self.draw_board();d=f.document();d['cards']['Resource Spell']['beneficialPlayerDrawX']=value
+            with self.assertRaises(ValueError):CardFacts(d)
+
     def pump_board(self):
         d=deepcopy(facts()._document)
         d['cards']['Booster']=fact(simplePermanent=False,positiveStatBoostAbilities=['Booster:1'],powerManaAbilities=[])
@@ -85,3 +119,20 @@ class ResourceIntentPolicyTests(unittest.TestCase):
                 if row['sequence']==8792:self.assertEqual(a['validTargets'],[o['agentToAct']])
                 else:self.assertIsNone(a)
                 self.assertEqual(o,before)
+
+class SavedVariablePlayerDrawTests(unittest.TestCase):
+    def test_actual_opponent_draw_is_excluded_but_cast_amount_and_other_spells_remain(self):
+        root=Path(__file__).parent/'fixtures'
+        f=CardFacts(json.load(gzip.open(root/'cycle-28-native-facts.json.gz','rt')))
+        row=json.load(gzip.open(root/'cycle-28-targeted-draw-mistake.json.gz','rt'))['rows'][0]
+        o=row['observation'];before=deepcopy(o);v,r=bounded_observation(o,f)
+        self.assertTrue(row['evidence']['nativeMaskedMatch']);self.assertEqual(row['evidence']['nativeBaselineStatus'],'accepted')
+        original=next(a for a in o['legalActions'] if a['actionId']==row['choice']['actionId'])
+        bounded=next(a for a in v['legalActions'] if a['actionId']==original['actionId'])
+        self.assertNotEqual(row['choice']['params']['targets'],[o['agentToAct']])
+        self.assertEqual(bounded['validTargets'],[o['agentToAct']])
+        self.assertGreaterEqual(row['choice']['params']['xValue'],bounded['minX'])
+        self.assertLessEqual(row['choice']['params']['xValue'],bounded['maxAffordableX'])
+        self.assertEqual({a['actionId'] for a in v['legalActions'] if a['kind']=='CastSpell'},
+                         {a['actionId'] for a in o['legalActions'] if a['kind']=='CastSpell'})
+        self.assertEqual(o,before)

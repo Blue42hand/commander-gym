@@ -38,7 +38,7 @@ No new game rule is implemented here.
 The native `selfTappedLandRampAbilities` list certifies whole activated effects
 matching a basic-land search into the controller's battlefield tapped, with one
 to three cards and no additional effect. Timing defaults hold these activations
-until the acting player's main phase or an opponent's end step. Known library
+until the acting player's main phase or an opponent's end step. Known whole optional draw and library
 reorder-only triggers may finish first. Unknown stacks, payment corrections,
 unknown combat data, creature-sacrifice combat responses, and explicit deck
 reaction-timing overrides keep their native decision domain. Noncreature sources
@@ -50,3 +50,25 @@ current states, without table or shared-value references. The summary is optiona
 its complete request is checked against the existing admission budget, and an
 otherwise fitting request proceeds without it when needed. Native choices are
 never truncated or removed to fit this diagnostic context.
+
+## Variable player draw targets
+
+`beneficialPlayerDrawX` certifies a whole native instant or sorcery effect that
+makes exactly one unconstrained targeted player draw X cards. It requires the
+same bound variable as the native target and excludes additional effects,
+triggers, static abilities, replacement effects and activated abilities. A
+spell's self-shuffle resolution destination is separate from its draw effect.
+
+The default policy narrows these spells to the caster only when the entire
+native affordable X range is safely below every player's library size and no
+unknown or draw-sensitive battlefield effects are present. It requires positive
+X; actual decking opportunities, unclear X bounds, prebound amounts, modifiers,
+payment corrections and explicit deck target overrides retain inference. The
+model still chooses between the remaining spells and decides how many cards to
+draw. No spell name is part of this policy.
+
+The saved game30 callback5456 reproduces the mistaken opponent draw. Both
+branches cast the same native spell for X=1; the corrected branch changes only
+the player target. Native probes separately verify masked state equality,
+acceptance and actual hand changes after resolution. This does not establish
+whole-game strength or guarantee model reasoning quality.
