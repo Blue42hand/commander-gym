@@ -51,6 +51,26 @@ class LandRampTimingTests(unittest.TestCase):
                 self.assertTrue(any(a['actionId']==1 for a in v['legalActions']))
                 self.assertEqual(o,before)
 
+    def test_pure_draw_and_mixed_reorder_stack_wait_but_unknown_effects_defer(self):
+        for mode in ['direct','granted','mixed','unknown','modified','hidden','incomplete','creature-combat','override']:
+            with self.subTest(mode=mode):
+                o,f=self.board();doc=f.document()
+                doc['cards']['Draw']=fact(types=['ENCHANTMENT'],freeOptionalDraws={'native-draw':1},grantedFreeOptionalDraws={'native-granted-draw':1})
+                f=CardFacts(doc);o['state'].update(currentStep='COMBAT_DAMAGE',combat={'attackers':[{'creatureId':'attacker'}]})
+                zone(o,'Stack','me',trigger={'name':'Draw trigger','controllerId':'me','abilityIdentity':{'abilityId':'native-granted-draw' if mode=='granted' else 'native-draw'}})
+                if mode=='mixed':
+                    o['state']['cards']['reorder']={'abilityIdentity':{'abilityId':'native-reorder'}}
+                    o['state']['zones'][-1]['cardIds'].append('reorder');o['state']['zones'][-1]['size']=2
+                elif mode=='unknown':o['state']['cards']['trigger']['abilityIdentity']['abilityId']='unknown'
+                elif mode=='modified':o['state']['cards']['trigger']['activeEffects']=['unknown']
+                elif mode=='hidden':o['state']['zones'][-1]['isVisible']=False
+                elif mode=='incomplete':o['state']['zones'][-1]['size']=2
+                elif mode=='creature-combat':o['state']['cards']['ramp']['cardTypes']=['CREATURE']
+                before=deepcopy(o);kw={'reaction_timing_exceptions':{'Land engine'}} if mode=='override' else {}
+                v,_=bounded_observation(o,f,**kw)
+                self.assertEqual(any(a['actionId']==1 for a in v['legalActions']),mode not in {'direct','granted','mixed'})
+                self.assertEqual(o,before)
+
     def test_native_contract_requires_a_list_of_ability_ids(self):
         for value in [None,{},True,[1],['']]:
             o,f=self.board();doc=deepcopy(f._document);doc['cards']['Land engine']['selfTappedLandRampAbilities']=value
@@ -75,3 +95,22 @@ class SavedLandRampTimingTests(unittest.TestCase):
                 self.assertIsNotNone(c,row['sequence']);self.assertEqual(c.action_id,row['choice']['actionId']);self.assertEqual(dict(c.params),row['choice']['params']);seen.append(row['sequence'])
             self.assertEqual(o,before)
         self.assertEqual(len(seen),10)
+
+class SavedDrawStackTimingTests(unittest.TestCase):
+    def test_authentic_accepted_passes_and_own_main_boundary(self):
+        from commander_gym.engine_deck_policy import EngineDeckPolicy
+        root=Path(__file__).with_name('fixtures')
+        f=CardFacts(json.load(gzip.open(root/'cycle-26-native-facts.json.gz','rt')))
+        rows=json.load(gzip.open(root/'cycle-27-draw-stack-windows.json.gz','rt'))['rows']
+        self.assertEqual({r['sequence'] for r in rows},{3937,4042,4077})
+        for row in rows:
+            o=row['observation'];before=deepcopy(o)
+            self.assertTrue(row['evidence']['nativeMaskedMatch'])
+            self.assertEqual(row['evidence']['nativeBaselineStatus'],'accepted')
+            c=EngineDeckPolicy(f,'talrand').try_choose(o).choice
+            if row['sequence']==3937:self.assertIsNone(c)
+            else:
+                self.assertIsNotNone(c)
+                self.assertEqual(c.action_id,row['choice']['actionId'])
+                self.assertEqual(dict(c.params),row['choice']['params'])
+            self.assertEqual(o,before)

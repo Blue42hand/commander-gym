@@ -20,14 +20,15 @@ NEUTRALIZING_AURAS=frozenset({'Arrest','Pacifism','Darksteel Mutation','Imprison
 ABILITY_REMOVING_AURAS=frozenset({'Darksteel Mutation','Imprisoned in the Moon','Lignify','Noggle the Mind','Amphibian Downpour'})
 
 
-def library_reorder_only_stack(o,facts):
+def draw_or_library_reorder_only_stack(o,facts):
     state=o.get('state',{});cards=state.get('cards',{});stack=ids_in(state,'Stack')
     if not stack:return False
     for zone in state.get('zones',[]):
         if zone.get('zoneId',{}).get('zoneType')=='Stack' and (
             zone.get('isVisible') is not True or zone.get('size',len(zone.get('cardIds',[])))!=len(zone.get('cardIds',[]))):return False
     return all(not cards.get(i,{}).get('activeEffects') and isinstance(cards.get(i,{}).get('abilityIdentity'),dict)
-               and facts.is_library_reorder_ability(cards[i]['abilityIdentity'].get('abilityId')) for i in stack)
+               and (facts.is_library_reorder_ability(cards[i]['abilityIdentity'].get('abilityId'))
+                    or facts.is_free_optional_draw_ability(cards[i]['abilityIdentity'].get('abilityId'))) for i in stack)
 
 
 def abilities_removed(o,card,facts=None):
@@ -642,7 +643,7 @@ def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=()
             and not source.get('activeEffects') and name not in reaction_timing_exceptions
             and (quiet and all(z.get('isVisible') is True and z.get('size',len(z.get('cardIds',[])))==0
                                for z in state.get('zones',[]) if z.get('zoneId',{}).get('zoneType')=='Stack')
-                 or library_reorder_only_stack(o,facts))
+                 or draw_or_library_reorder_only_stack(o,facts))
             and not (state.get('activePlayerId')==me and state.get('currentStep') in {'PRECOMBAT_MAIN','POSTCOMBAT_MAIN'}
                      or state.get('activePlayerId')!=me and state.get('currentStep') in {'END','END_STEP'})):
             restrictions.append({'action':a['semanticId'],'rule':'tapped-land-ramp-in-main-or-opponent-end-step'})

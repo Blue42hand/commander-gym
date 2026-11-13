@@ -143,6 +143,7 @@ class CardFacts:
             for contract in ['freeOptionalDraws','grantedFreeOptionalDraws']:
                 for ability,count in fact.get(contract,{}).items():granted.setdefault(ability,set()).add(count)
         self._granted_draw_counts={ability:next(iter(counts)) for ability,counts in granted.items() if ability in granted_ids and len(counts)==1}
+        self._free_draw_ids=frozenset(ability for ability,counts in granted.items() if len(counts)==1)
         self._library_reorder_ids=frozenset(ability for f in document['cards'].values() for ability in f.get('freeOptionalLibraryReorders',{}))
 
     @classmethod
@@ -154,6 +155,9 @@ class CardFacts:
 
     def is_library_reorder_ability(self, ability):
         return ability in self._library_reorder_ids
+
+    def is_free_optional_draw_ability(self, ability):
+        return ability in self._free_draw_ids
 
     def granted_free_draw_count(self, ability):
         return self._granted_draw_counts.get(ability)
