@@ -760,7 +760,8 @@ def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=()
         cost=a.get('additionalCostInfo') or {}
         if (a.get('kind')=='ActivateAbility' and raw.get('abilityId') in facts.get(name).get('bounceTargetUntapAbilities',[])
             and quiet and can_pass and not o.get('pendingDecision') and o.get('nativePaymentError') is None
-            and state.get('currentStep') in {'UNTAP','UPKEEP','DRAW','PRECOMBAT_MAIN','POSTCOMBAT_MAIN','END','END_STEP','CLEANUP'}
+            and (state.get('currentStep') in {'UNTAP','UPKEEP','DRAW','PRECOMBAT_MAIN','POSTCOMBAT_MAIN','END','END_STEP','CLEANUP'}
+                 or state.get('currentStep')=='BEGIN_COMBAT' and 'combat' in state and state['combat'] is None)
             and not state.get('combat')
             and name not in allow_self_targets and name not in reaction_timing_exceptions
             and not cards.get(raw.get('sourceId'),{}).get('activeEffects') and not raw.get('costPayment')
