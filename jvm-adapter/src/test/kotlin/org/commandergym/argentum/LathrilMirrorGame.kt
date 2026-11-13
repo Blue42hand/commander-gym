@@ -82,7 +82,7 @@ fun runLathrilMirrorGame() {
         }
     }
     val budgetSeconds = config["gameBudgetSeconds"]?.jsonPrimitive?.int ?: 300
-    require(budgetSeconds in 60..3600) { "Game budget must be 60..3600 seconds" }
+    require(budgetSeconds in 60..7200) { "Game budget must be 60..7200 seconds" }
     val started = System.nanoTime()
     val deadline = started + Duration.ofSeconds(budgetSeconds.toLong()).toNanos()
     var actions = 0
