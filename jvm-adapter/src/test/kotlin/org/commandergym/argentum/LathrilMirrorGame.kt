@@ -89,12 +89,29 @@ fun runLathrilMirrorGame() {
     var lastTurn = 0
     var sameTurnActions = 0
     var restoreVerified = false
+    val phaseNanos=linkedMapOf<String,Long>()
+    val phaseCounts=linkedMapOf<String,Int>()
+    fun <T> timed(phase:String, block:()->T):T {
+        val began=System.nanoTime()
+        try { return block() }
+        finally {
+            phaseNanos[phase]=(phaseNanos[phase] ?: 0L)+(System.nanoTime()-began)
+            phaseCounts[phase]=(phaseCounts[phase] ?: 0)+1
+        }
+    }
+
     fun summary(status: String) {
         val state = session.getStateSnapshot()
         val value = buildJsonObject {
             put("status", status); put("gameId", gameId); put("actions", actions)
             put("gameBudgetSeconds", budgetSeconds)
             put("elapsedSeconds", (System.nanoTime() - started) / 1_000_000_000.0)
+            putJsonObject("measuredPhases") {
+                put("scope","Disjoint main-loop wall clocks; callbackRoundTrip includes provider wait; engine execution includes native recording")
+                for((phase,nanos) in phaseNanos) putJsonObject(phase) {
+                    put("seconds",nanos/1_000_000_000.0);put("calls",phaseCounts.getValue(phase))
+                }
+            }
             put("turn", state?.turnNumber ?: 0); put("nativeTerminal", state?.gameOver == true)
             put("winnerId", state?.winnerId?.value?.let(::JsonPrimitive) ?: JsonNull)
             put("terminalSnapshotRestoreVerified", restoreVerified)
@@ -142,18 +159,26 @@ fun runLathrilMirrorGame() {
             val actor = state.pendingDecision?.let { state.actorFor(it.playerId) }
                 ?: requireNotNull(state.priorityPlayerId)
             session.clearLastSentState(actor) // fixture consumes full masked views, not transport deltas
-            val update = session.createStateUpdate(actor, emptyList(), useEngineDecisionIds=true) as ServerMessage.StateUpdate
+            val update = timed("stateViewAndLegalOffers") {
+                session.createStateUpdate(actor, emptyList(), useEngineDecisionIds=true) as ServerMessage.StateUpdate
+            }
             val result = run {
                 val remote = controllers.getValue(actor)
-                val evidence = requireNotNull(session.beginAiCallbackEvidence(actor, update.state,
-                    update.legalActions, update.pendingDecision, update.interactionEpoch, emptyList()))
-                val choice = remote.chooseRecordedCallback(update.state, update.legalActions,
-                    update.pendingDecision, emptyList(), evidence)
+                val evidence = timed("callbackEvidence") {
+                    requireNotNull(session.beginAiCallbackEvidence(actor, update.state,
+                        update.legalActions, update.pendingDecision, update.interactionEpoch, emptyList()))
+                }
+                val choice = timed("callbackRoundTrip") {
+                    remote.chooseRecordedCallback(update.state, update.legalActions,
+                        update.pendingDecision, emptyList(), evidence)
+                }
                 val action: GameAction = when (val response=choice.response) {
                     is ActionResponse.SubmitAction -> response.action
                     is ActionResponse.SubmitDecision -> SubmitDecision(response.playerId, response.response)
                 }
-                session.executeRecordedAiCallback(actor, action, update.interactionEpoch, evidence, choice)
+                timed("nativeActionAndRecording") {
+                    session.executeRecordedAiCallback(actor, action, update.interactionEpoch, evidence, choice)
+                }
             }
             check(result != null && result !is GameSession.ActionResult.Failure) {
                 "Native action rejected: ${(result as? GameSession.ActionResult.Failure)?.reason ?: "missing result"}"

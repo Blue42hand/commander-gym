@@ -13,6 +13,21 @@ class PublicCardFactsTest {
     private val registry = GameBeansConfig(GameProperties()).cardRegistry()
     private val revision = "12ab2f0ed5bd018334521dc52497e6444f26f5a9"
 
+    @Test fun zeroXDrawContractChecksTheActualBaseEffect() {
+        val cards=PublicCardFacts.export(registry,listOf("Finale of Revelation","Blue Sun's Zenith","Chord of Calling","Pull from Tomorrow"),revision)["cards"]!!.jsonObject
+        assertTrue(cards["Finale of Revelation"]!!.jsonObject["emptySelfDrawAtZeroX"]!!.jsonPrimitive.boolean)
+        for(name in listOf("Blue Sun's Zenith","Chord of Calling","Pull from Tomorrow"))
+            assertFalse(cards[name]!!.jsonObject["emptySelfDrawAtZeroX"]!!.jsonPrimitive.boolean,name)
+    }
+
+    @Test fun resourceDrawSpellContractExcludesCombatTricksTargetsAndUnreviewedSelection() {
+        val positive=listOf("Flow of Knowledge","Thirst for Knowledge","Thirst for Discovery","Divination","Concentrate")
+        val negative=listOf("Brainstorm","Opt","Compulsive Research","Inspiring Call","High Tide","Fact or Fiction")
+        val cards=PublicCardFacts.export(registry,positive+negative,revision)["cards"]!!.jsonObject
+        for(name in positive)assertTrue(cards[name]!!.jsonObject["selfResourceDrawSpell"]!!.jsonPrimitive.boolean,name)
+        for(name in negative)assertFalse(cards[name]!!.jsonObject["selfResourceDrawSpell"]!!.jsonPrimitive.boolean,name)
+    }
+
     @Test fun beneficialPlayerDrawContractsMatchWholeNetPositiveEffects() {
         val cards=PublicCardFacts.export(registry,listOf("Compulsive Research","High Tide","Brainstorm"),revision)["cards"]!!.jsonObject
         assertEquals(3,cards["Compulsive Research"]!!.jsonObject["beneficialPlayerDrawCount"]!!.jsonPrimitive.int)

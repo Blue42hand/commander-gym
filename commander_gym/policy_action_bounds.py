@@ -492,6 +492,18 @@ def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=()
         raw = a.get('action', {}); name = cards.get(raw.get('cardId', raw.get('sourceId')), {}).get('name')
         state = o.get('state',{})
         quiet=not ids_in(state,'Stack')
+        if (a.get('kind')=='CastSpell' and a.get('hasXCost') is True and can_pass and quiet
+            and not o.get('pendingDecision') and o.get('nativePaymentError') is None
+            and state.get('activePlayerId')==me and state.get('currentStep') in {'PRECOMBAT_MAIN','POSTCOMBAT_MAIN'}
+            and facts.get(name).get('emptySelfDrawAtZeroX') is True and name not in reaction_timing_exceptions
+            and raw.get('xValue') is None and a.get('parameterSpec',{}).get('allowedFields',{}).get('xValue')=='INTEGER'
+            and not cards.get(raw.get('cardId'),{}).get('activeEffects') and not raw.get('alternativePayment')
+            and type(a.get('minX')) is int and type(a.get('maxAffordableX')) is int):
+            if a['maxAffordableX']<1:
+                restrictions.append({'action':a['semanticId'],'rule':'hold-zero-X-empty-self-draw'});continue
+            if a['minX']<1:
+                a['minX']=1
+                restrictions.append({'action':a['semanticId'],'rule':'self-draw-X-needs-positive-base-benefit'})
         if a.get('kind')=='DeclareAttackers' and isinstance(a.get('validAttackTargets'),list) and not a.get('mandatoryAttackers'):
             taxed=attack_tax_defenders(o,facts);free=[t for t in a['validAttackTargets'] if t not in taxed]
             if free and len(free)!=len(a['validAttackTargets']):
@@ -573,8 +585,11 @@ def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=()
             and a.get('parameterSpec',{}).get('allowedFields',{}).get('targets')=='ENTITY_ID_ARRAY')
         combat_step=state.get('currentStep') in {'BEGIN_COMBAT','DECLARE_ATTACKERS','DECLARE_BLOCKERS','FIRST_STRIKE_COMBAT_DAMAGE','COMBAT_DAMAGE','END_COMBAT'}
         if (not o.get('pendingDecision') and o.get('nativePaymentError') is None and quiet and combat_step
-            and can_pass and not cards.get(raw.get('sourceId'),{}).get('activeEffects')
-            and a.get('kind')=='ActivateAbility' and raw.get('abilityId') in facts.get(name).get('selfDrawAbilities',[])
+            and can_pass and not cards.get(raw.get('sourceId',raw.get('cardId')),{}).get('activeEffects')
+            and (a.get('kind')=='ActivateAbility' and raw.get('abilityId') in facts.get(name).get('selfDrawAbilities',[])
+                 or a.get('kind')=='CastSpell' and facts.get(name).get('selfResourceDrawSpell') is True
+                 and a.get('hasXCost') is False and not a.get('additionalCostInfo')
+                 and not raw.get('targets') and not raw.get('alternativePayment') and not raw.get('optionalCostPayments'))
             and a.get('requiresTargets') is False and name not in reaction_timing_exceptions
             and not live_combat_draw_decision(o)):
             restrictions.append({'action':a['semanticId'],'rule':'draw-waits-for-development-or-relevant-combat'})
@@ -612,7 +627,7 @@ def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=()
             and state.get('currentStep') in {'UNTAP','UPKEEP','DRAW'}
             and (casting or a.get('kind')=='ActivateAbility' and a.get('isManaAbility') is not True and raw.get('abilityId') not in {'Lathril, Blade of the Elves:2','Sterling Grove:1'})):
             restrictions.append({'action':a['semanticId'],'rule':'development-waits-for-main'});held_autopay |= raw.get('paymentStrategy',{}).get('type')=='AutoPay';continue
-        if (not o.get('pendingDecision') and o.get('nativePaymentError') is None and quiet and can_pass and not state.get('combat')
+        if (not o.get('pendingDecision') and o.get('nativePaymentError') is None and quiet and can_pass and 'combat' in state and state['combat'] is None
             and (casting and 'DRAW' in facts.get(name).get('tags',[]) or
                  a.get('kind')=='ActivateAbility' and raw.get('abilityId') in facts.get(name).get('selfDrawAbilities',[]))
             and name not in reaction_timing_exceptions

@@ -37,6 +37,23 @@ object CompetencySavedStateProbe {
                     add(buildJsonObject {
                         put("callbackSequence",entry.getValue("sequence"))
                         entry["replacementLabel"]?.let { put("replacementLabel",it) }
+                        if(entry["exportInitialObservation"]?.jsonPrimitive?.boolean==true) {
+                            val actor=json.decodeFromJsonElement<GameAction>(entry.getValue("replacement").jsonObject.getValue("action")).playerId
+                            val offers=services.legalActionEnumerator.enumerate(initial,actor)
+                            val expectedUnaffordable=entry["nativeUnaffordableSpell"]?.let { json.decodeFromJsonElement<EntityId>(it) }
+                            if(expectedUnaffordable!=null) {
+                                val offered=offers.filter { (it.action as? CastSpell)?.cardId==expectedUnaffordable }
+                                check(offered.none { it.affordable })
+                                put("unaffordableCastConfirmed",true)
+                                put("unaffordableOfferRetained",offered.isNotEmpty())
+                            }
+                            val view=com.wingedsheep.engine.view.ClientStateTransformer(services.cardRegistry,
+                                predicateEvaluator=services.predicateEvaluator).transform(initial,actor)
+                            val presented=com.wingedsheep.engine.view.LegalActionEnricher(services.manaSolver,services.cardRegistry).enrich(offers,initial,actor)
+                            val evidence=com.wingedsheep.gameserver.recording.actionCallbackEvidence(view,presented,initial.pendingDecision,actor.value,emptyList())
+                            put("recomputedNativeObservation",Json.parseToJsonElement(evidence.observationBody))
+                        }
+
                         if(entry["diagnoseSelected"]?.jsonPrimitive?.boolean==true) {
                             val frame=(initial.continuationStack.last() as Suspension).answer as ManaActionPaymentContinuation
                             val actor=frame.action.playerId
@@ -126,6 +143,31 @@ object CompetencySavedStateProbe {
                                 check(spentSource !in result.state.getBattlefield())
                                 check(preservedSource in result.state.getBattlefield())
                                 put("completedManualPayment",true)
+                            }
+                            val emptyDraw=entry["emptyDrawComparison"]?.jsonObject
+                            if(emptyDraw!=null) {
+                                val source=json.decodeFromJsonElement<EntityId>(emptyDraw.getValue("source"))
+                                val beforeLibrary=initial.getZone(ZoneKey(action.playerId,Zone.LIBRARY)).size
+                                val beforeHand=initial.getZone(ZoneKey(action.playerId,Zone.HAND)).size
+                                if(branch=="baseline") {
+                                    var passes=0
+                                    while(result.state.stack.isNotEmpty()) {
+                                        check(++passes<=64 && result.state.pendingDecision==null)
+                                        result=processor.process(result.state,PassPriority(requireNotNull(result.state.priorityPlayerId))).result
+                                        check(result.outcome !is Outcome.Rejected)
+                                    }
+                                    check(source in result.state.getZone(ZoneKey(action.playerId,Zone.EXILE)))
+                                    check(result.state.getZone(ZoneKey(action.playerId,Zone.HAND)).size==beforeHand-1)
+                                } else {
+                                    check(action is PassPriority && source in result.state.getZone(ZoneKey(action.playerId,Zone.HAND)))
+                                    check(initial.getBattlefield().all { id ->
+                                        initial.getEntity(id)?.has<TappedComponent>()==result.state.getEntity(id)?.has<TappedComponent>() })
+                                }
+                                check(result.state.pendingDecision==null)
+                                check(result.state.getZone(ZoneKey(action.playerId,Zone.LIBRARY)).size==beforeLibrary)
+                                if(branch=="baseline")put("zeroDrawBaselineFullyResolved",true)
+                                if(branch=="replacement")put("replacementCardAndManaPreserved",true)
+                                put("zeroCardsDrawn",true)
                             }
                             val directManaBeforeSacrifice=entry["expectDirectManaBeforeSacrifice"]?.jsonPrimitive?.boolean==true
                             if(directManaBeforeSacrifice) {

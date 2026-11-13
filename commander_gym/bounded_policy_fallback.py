@@ -213,6 +213,17 @@ def validate_selection_bounds(wire, o):
     if wire.get('channel') == 'action':
         choice=wire.get('choice',{})
         action=next((a for a in o.get('legalActions',[]) if a.get('semanticId')==choice.get('semanticId')),None)
+        if action and action.get('hasConvoke'):
+            from .convoke_plans import convoke_plans
+            plans=convoke_plans(o,action,require_complete=False)
+            params=choice.get('params',{})
+            if plans is not None:
+                x=params.get('xValue')
+                if action.get('hasXCost') and (type(x) is not int or not action.get('minX',0)<=x<=action.get('maxAffordableX',-1)):
+                    raise PilotContractError('bounded-fallback-convoke-requires-complete-payment-plan')
+                plan=next((p for p in plans if not action.get('hasXCost') or x==p.get('xValue')),None)
+                if plan is not None and params.get('convokedCreatures',{})!=plan.get('convokedCreatures',{}):
+                    raise PilotContractError('bounded-fallback-convoke-requires-complete-payment-plan')
         bounds=_delve_bounds(action) if action else None
         if bounds is not None:
             candidates,low,high=bounds;selected=choice.get('params',{}).get('delvedCards',[])
@@ -406,6 +417,10 @@ def decision_context(o, *, frozen, policy_context, facts):
         view['decision'] = clean({k:v for k,v in p.items() if k != 'cardInfo' and (k != 'cards' or not isinstance(v,dict)) and (not frozen or k not in {'options','hand','semanticId','responseSpec','id'})})
     if not frozen:
         view['legalActions'] = clean([a for a in o.get('legalActions', []) if affordable(a)])
+        from .convoke_plans import convoke_plans
+        planned={a['semanticId']:plans for a in o.get('legalActions',[]) if affordable(a) and a.get('hasConvoke')
+                 and (plans:=convoke_plans(o,a,require_complete=False)) is not None}
+        if planned:view['convokePaymentPlans']=planned
     summary={}
     for z in zones:
         if z.get('zoneId',{}).get('zoneType')!='Battlefield':continue
@@ -552,6 +567,13 @@ def constrain_native_format(o):
             if 'xValue' in fields and type(action.get('maxAffordableX')) is int:
                 fields['xValue']['minimum'] = action['minX'] if type(action.get('minX')) is int else 0
                 fields['xValue']['maximum'] = action['maxAffordableX']
+            if action.get('hasConvoke'):
+                from .convoke_plans import convoke_plans
+                plans=convoke_plans(o,action)
+                if plans is not None:
+                    fields.pop('convokedCreatures',None)
+                    required=props['params'].get('required',[])
+                    if 'convokedCreatures' in required:required.remove('convokedCreatures')
         if props.get('type', {}).get('const') == p.get('responseSpec', {}).get('responseType'):
             if 'optionIndex' in props and isinstance(p.get('options'), list):
                 props['optionIndex'] = {'type':'integer','minimum':0,'maximum':len(p['options'])-1}
@@ -674,6 +696,21 @@ class BoundedPolicyFallback:
                 _constrain_untargeted_actions(fmt['schema'], o)
                 fmt = compact_action_schema(fmt)
             def decode(parsed):
+                # The model selects the native action and X. Resource-preserving
+                # convoke allocations are supplied by the harness, as in frozen choices.
+                if parsed.get('channel')=='action':
+                    selected=parsed.get('choice',{})
+                    action=next((a for a in o.get('legalActions',[]) if a.get('semanticId')==selected.get('semanticId')),None)
+                    if action and action.get('hasConvoke'):
+                        from .convoke_plans import convoke_plans
+                        plans=convoke_plans(o,action,require_complete=False)
+                        if plans is not None:
+                            params=selected.setdefault('params',{})
+                            plan=next((p for p in plans if not action.get('hasXCost') or p.get('xValue')==params.get('xValue')),None)
+                            if plan is not None:
+                                params['convokedCreatures']=deepcopy(plan.get('convokedCreatures',{}))
+                                selection['convokeCompletion']={'source':'harness-payment-plan','xValue':plan.get('xValue'),
+                                    'convokedCreatures':deepcopy(params['convokedCreatures'])}
                 validate_selection_bounds(parsed, o)
                 return json.dumps(parsed)
             if fmt is None: raise LMStudioPilotError('bounded_fallback_unsupported_native_response_schema')
@@ -720,7 +757,7 @@ class BoundedPolicyFallback:
                          ' actorZones identifies your cards by zone; cards in Command are not creatures on the battlefield.'
                          ' actingCommander identifies your commander; other commanders belong to opponents.'
                          ' battlefieldSummary counts live creatures, while deckSubtypeCounts counts printed cards in the registered deck. Never substitute deck counts for battlefield counts.'
-                         ' Convoke affordability can include creature taps. For native-schema casts, supply xValue and convokedCreatures when mana alone cannot cover the cost.'
+                         ' Convoke can make a cast payable. With convokePaymentPlans, choose X; the harness supplies taps. Otherwise supply convokedCreatures when needed.'
                          ' Every supplied frozen choice is currently native-affordable. An empty mana pool does not prevent native AutoPay from tapping sources.'
                          " printedAbilitiesRemoved marks a reviewed Aura suppressing the creature's printed abilities; printed cardDefinitions do not restore those abilities."
                          ' Source and target facts identify the exact live entities. Current types, stats, keywords and ability flags take precedence over printed rules after transformations.'
@@ -741,7 +778,7 @@ class BoundedPolicyFallback:
         request_sizes = [len(json.dumps(a['request'],ensure_ascii=False).encode())
                          for a in choice.metadata.get('modelIo',{}).get('attempts',[]) if isinstance(a.get('request'),dict)]
         return replace(choice, metadata={**choice.metadata, 'boundedFallback':{
-            'utilityPlans':o.get('policyUtilityPlans',[]), 'decisionExplanation':selection.get('explanation'), 'explanationIsModelReport':bool(selection.get('explanation')),
+            'utilityPlans':o.get('policyUtilityPlans',[]), 'convokePaymentCompletion':selection.get('convokeCompletion'), 'decisionExplanation':selection.get('explanation'), 'explanationIsModelReport':bool(selection.get('explanation')),
             'decisionExplanationNormalization':selection.get('explanationNormalization'),
             'explanationAddedToFuturePrompts':False, 'policyRestrictions':restrictions, 'mode':'frozen-choices' if wires else 'native-schema', 'selectedOption':selection.get('option'), 'candidateCount':len(wires) if wires else None,
             'promptTargetBytes':PROMPT_TARGET_BYTES, 'promptBytes':max(request_sizes,default=None),

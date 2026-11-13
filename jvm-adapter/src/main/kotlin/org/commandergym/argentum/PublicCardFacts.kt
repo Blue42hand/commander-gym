@@ -41,6 +41,8 @@ import com.wingedsheep.sdk.scripting.effects.TapUntapEffect
 import com.wingedsheep.sdk.scripting.filters.unified.GroupFilter
 import com.wingedsheep.sdk.scripting.EntersTapped
 import com.wingedsheep.sdk.scripting.GameObjectFilter
+import com.wingedsheep.sdk.scripting.conditions.Compare
+import com.wingedsheep.sdk.scripting.conditions.ComparisonOperator
 import com.wingedsheep.sdk.scripting.conditions.AnyCondition
 import com.wingedsheep.sdk.scripting.conditions.Exists
 import com.wingedsheep.sdk.scripting.references.Player
@@ -56,6 +58,8 @@ import com.wingedsheep.sdk.scripting.effects.AddManaEffect
 import com.wingedsheep.sdk.scripting.effects.AddColorlessManaEffect
 import com.wingedsheep.sdk.scripting.effects.GatedEffect
 import com.wingedsheep.sdk.scripting.effects.Gate
+import com.wingedsheep.sdk.scripting.effects.CardSource
+import com.wingedsheep.sdk.scripting.effects.SelectFromCollectionEffect
 import com.wingedsheep.sdk.scripting.effects.DrawCardsEffect
 import com.wingedsheep.sdk.scripting.effects.ManaExpiry
 import com.wingedsheep.sdk.scripting.targets.EffectTarget
@@ -238,6 +242,39 @@ object PublicCardFacts {
             val drawParts=(card.script.spellEffect as? CompositeEffect)?.effects
             val targetedDraw=(card.script.spellEffect as? DrawCardsEffect) ?: drawParts?.firstOrNull() as? DrawCardsEffect
             val drawCount=(targetedDraw?.count as? DynamicAmount.Fixed)?.amount
+            // Certify the whole effect, including a hand-discard pipeline. A
+            // generic DRAW tag can also belong to a combat trick or targeted spell.
+            val selfDraw=targetedDraw?.takeIf { draw ->
+                draw.target==EffectTarget.Controller &&
+                    ((draw.count as? DynamicAmount.Fixed)?.amount?.let { it>0 }==true ||
+                        basicColors.keys.any { draw.count==DynamicAmounts.landsWithSubtype(Subtype(it)) })
+            }
+            val resourceDrawSpell=selfDraw!=null && (card.typeLine.isInstant || card.typeLine.isSorcery) &&
+                noStatic && noTriggers && noReplacement && activated.isEmpty() && card.targetRequirements.isEmpty() &&
+                (card.script.spellEffect==selfDraw || (1..8).any { discarded ->
+                    val prompt=drawParts?.filterIsInstance<SelectFromCollectionEffect>()?.singleOrNull()?.prompt
+                    card.script.spellEffect==(selfDraw then Effects.Discard(discarded)) ||
+                    card.script.spellEffect==(selfDraw then Effects.DiscardUnlessMatching(discarded,GameObjectFilter.Artifact)) ||
+                    card.script.spellEffect==(selfDraw then Effects.DiscardUnlessMatching(discarded,GameObjectFilter.Land)) ||
+                    card.script.spellEffect==(selfDraw then Effects.DiscardUnlessMatching(discarded,GameObjectFilter.BasicLand)) ||
+                    card.script.spellEffect==Effects.Pipeline {
+                        run(selfDraw)
+                        val hand=gather(CardSource.FromZone(Zone.HAND,Player.You))
+                        val selected=chooseExactly(discarded,from=hand,prompt=prompt)
+                        discard(selected)
+                    }
+                })
+            put("selfResourceDrawSpell",resourceDrawSpell)
+            val gatedDraw=card.script.spellEffect as? GatedEffect
+            val threshold=(gatedDraw?.gate as? Gate.WhenCondition)?.condition as? Compare
+            val drawX=Effects.DrawCards(DynamicAmounts.xValue())
+            val zeroDraw=card.script.spellEffect==drawX ||
+                (gatedDraw?.otherwise==drawX && threshold!=null && threshold.left==DynamicAmounts.xValue() &&
+                    threshold.operator==ComparisonOperator.GTE &&
+                    ((threshold.right as? DynamicAmount.Fixed)?.amount ?: 0)>0)
+            put("emptySelfDrawAtZeroX",zeroDraw && (card.typeLine.isInstant || card.typeLine.isSorcery) &&
+                noStatic && noTriggers && noReplacement && activated.isEmpty() && card.targetRequirements.isEmpty())
+
             val playerTarget=card.targetRequirements.singleOrNull() as? TargetPlayer
             if(targetedDraw!=null && targetedDraw.target is EffectTarget.BoundVariable && drawCount!=null && drawCount in 1..100 &&
                 playerTarget==TargetPlayer(id=playerTarget?.id)) {

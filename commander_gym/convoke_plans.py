@@ -11,7 +11,12 @@ COLORS={'WHITE':'W','BLUE':'U','BLACK':'B','RED':'R','GREEN':'G'}
 PIPS='WUBRGC'
 
 
-def convoke_plans(o,a):
+def convoke_plans(o,a,*,require_complete=True):
+    """Return canonical allocations; partial mode never narrows the native X menu.
+
+    Frozen choices require complete coverage. Native-schema decoding may bind a
+    proved selected X while leaving uncovered X values to the native contract.
+    """
     candidates=native_convoke_offer(a)
     if not candidates or a.get('kind')!='CastSpell' or a.get('additionalCostInfo'):return None
     if any(a.get(k) for k in ['hasDelve','hasHarmonize','hasTapForGeneric','modalEnumeration']):return None
@@ -34,11 +39,12 @@ def convoke_plans(o,a):
         if src.get('producesColorless'):colors.add('C')
         if src.get('requiresSacrifice') or src.get('requiresTappingAnotherPermanent'):continue
         if not entity or not colors or type(amount) is not int or amount<1:return None
-        if amount>1 and colors!={'C'}:return None
+        if amount>1 and len(colors)!=1:return None
         sources.append((entity,[colors]*amount))
     # Sources and convokers may overlap: one creature cannot tap twice.
     source_ids={entity:index for index,(entity,_) in enumerate(sources)}
     pool=next((p.get('manaPool',{}) for p in o['state'].get('players',[]) if p.get('playerId')==o['agentToAct']),{})
+    if pool.get('restrictedMana'):return None
     floating=[]
     for name,color in [('white','W'),('blue','U'),('black','B'),('red','R'),('green','G'),('colorless','C')]:
         amount=pool.get(name,0)
@@ -71,6 +77,8 @@ def convoke_plans(o,a):
             if not MaskedHeuristicSubsystem._payable((amount,rest),units):continue
             rank=(score+amount*10,len(paid),tuple(sorted(paid)))
             if best is None or rank<best[0]:best=(rank,paid)
-        if best is None:return None
+        if best is None:
+            if require_complete:return None
+            continue
         result.append({**({'xValue':x} if x is not None else {}),**({'convokedCreatures':best[1]} if best[1] else {})})
-    return result
+    return result or None
