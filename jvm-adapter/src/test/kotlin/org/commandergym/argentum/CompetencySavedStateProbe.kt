@@ -36,6 +36,7 @@ object CompetencySavedStateProbe {
                     val initial=json.decodeFromJsonElement<GameState>(entry.getValue("state"))
                     add(buildJsonObject {
                         put("callbackSequence",entry.getValue("sequence"))
+                        entry["replacementLabel"]?.let { put("replacementLabel",it) }
                         entry["baselineIsOfferedComparison"]?.let { put("baselineIsOfferedComparison",it) }
                         for (branch in if(entry["replacementOnly"]?.jsonPrimitive?.boolean==true) listOf("replacement") else listOf("baseline","replacement")) {
                             val choice=entry.getValue(branch).jsonObject

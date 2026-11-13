@@ -284,6 +284,21 @@ class DefaultPolicySubsystem(SharedCardPolicies, MaskedHeuristicSubsystem):
     def _pending(self, o, p):
         override = self._deck_pending(o, p)
         if override is not None: return override
+        # Exact native MoveCollectionExecutor bottom-placement prompt, not
+        # Oracle-text inference. Preserve its complete permutation; near the
+        # end of the library, ordering can matter and stays with the model.
+        options=p.get('cards')
+        library=next((player.get('librarySize') for player in o.get('state',{}).get('players',[])
+                      if player.get('playerId')==o['agentToAct']),None)
+        if (p.get('kind')=='ReorderLibraryDecision' and p.get('playerId')==o['agentToAct']
+            and p.get('prompt')=='Put the revealed cards on the bottom of your library in any order.'
+            and p.get('context',{}).get('phase')=='RESOLUTION'
+            and p.get('responseSpec',{}).get('responseType')=='OrderedResponse'
+            and p.get('responseSpec',{}).get('requiredFields')=={'orderedObjects':'ENTITY_ID_ARRAY'}
+            and p.get('responseSpec',{}).get('cancelAllowed') is False
+            and isinstance(options,list) and all(isinstance(i,str) for i in options) and len(options)==len(set(options))
+            and type(library) is int and library>len(options)+8):
+            return self._decision(p,'OrderedResponse','default-native-bottom-library-order',orderedObjects=list(options))
         context = p.get('context',{}); source = context.get('sourceId'); card = self._card(o,source)
         if (p.get('kind')=='YesNoDecision' and p.get('responseSpec',{}).get('responseType')=='YesNoResponse'
             and p.get('yesAvailable') is True and p.get('yesText')=='Command zone'

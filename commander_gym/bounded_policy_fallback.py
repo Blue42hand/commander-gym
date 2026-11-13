@@ -27,6 +27,28 @@ _CARD_FIELDS = {'name', 'manaCost', 'typeLine', 'cardTypes', 'subtypes', 'oracle
                 'targets', 'stackText', 'abilityIdentity', 'chosenModeDescriptions', 'perModeTargets', 'chosenX', 'linkedExile'}
 
 
+def bounded_diagnostic_explanation(explanation):
+    """Bound diagnostic storage without rejecting an otherwise valid decision.
+
+    The exact provider text remains in modelIo. Only this displayed summary is
+    shortened; native choice fields and their validators are untouched.
+    """
+    result=deepcopy(explanation)
+    original=sum(len(t) for t in [result['goal'],*result['keyFacts'],*result['missingInformation']])
+    remaining=720;truncated=False
+    def shorten(text):
+        nonlocal remaining,truncated
+        kept=text[:min(180,remaining)]
+        truncated |= kept!=text
+        remaining-=len(kept)
+        return kept
+    result['goal']=shorten(result['goal'])
+    for key in ['keyFacts','missingInformation']:
+        result[key]=[kept for text in result[key] if (kept:=shorten(text))]
+    return result,{'truncated':truncated,'originalTextChars':original,'retainedTextChars':720-remaining,
+                   'maxFieldChars':180,'maxTextChars':720}
+
+
 def _pending_card_map(p):
     return {**(p['cards'] if isinstance(p.get('cards'),dict) else {}),
             **(p['cardInfo'] if isinstance(p.get('cardInfo'),dict) else {})}
@@ -677,12 +699,9 @@ class BoundedPolicyFallback:
             base_decode = decode
             def decode(parsed):
                 explanation = parsed['explanation']
-                texts = [explanation['goal'], *explanation['keyFacts'], *explanation['missingInformation']]
-                if any(len(t)>180 for t in texts) or sum(map(len,texts))>720:
-                    raise PilotContractError('decision-explanation-too-long')
                 if not set(explanation['evidenceIds']) <= known_ids:
                     raise PilotContractError('decision-explanation-unknown-evidence')
-                selection['explanation'] = deepcopy(explanation)
+                selection['explanation'],selection['explanationNormalization'] = bounded_diagnostic_explanation(explanation)
                 return base_decode(parsed['decision'])
             instructions += (' Wrap the requested decision in {"decision":...,"explanation":...}.'
                 ' Supply a brief decision summary: goal, up to three keyFacts, visible evidenceIds, uncertainty, and missingInformation.'
@@ -715,6 +734,7 @@ class BoundedPolicyFallback:
                          for a in choice.metadata.get('modelIo',{}).get('attempts',[]) if isinstance(a.get('request'),dict)]
         return replace(choice, metadata={**choice.metadata, 'boundedFallback':{
             'utilityPlans':o.get('policyUtilityPlans',[]), 'decisionExplanation':selection.get('explanation'), 'explanationIsModelReport':bool(selection.get('explanation')),
+            'decisionExplanationNormalization':selection.get('explanationNormalization'),
             'explanationAddedToFuturePrompts':False, 'policyRestrictions':restrictions, 'mode':'frozen-choices' if wires else 'native-schema', 'selectedOption':selection.get('option'), 'candidateCount':len(wires) if wires else None,
             'promptTargetBytes':PROMPT_TARGET_BYTES, 'promptBytes':max(request_sizes,default=None),
             'promptTargetExceeded':any(size > PROMPT_TARGET_BYTES for size in request_sizes),

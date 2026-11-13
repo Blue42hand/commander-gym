@@ -122,7 +122,10 @@ class CompetenceBoundsTests(unittest.TestCase):
         self.assertNotIn('Develop a resource',t.calls[-1][1]['messages'][1]['content'])
         summary['goal']='x'*181
         t=FakeTransport(completion(json.dumps({'decision':{'option':0},'explanation':summary})))
-        with self.assertRaises(LMStudioPilotError):BoundedPolicyFallback(config(decision_explanations=True,max_attempts=1),t,facts=facts()).choose_with_policy_context(o,[{'metadata':{'policyLayers':{'status':'deferred'}}}])
+        result=BoundedPolicyFallback(config(decision_explanations=True,max_attempts=1),t,facts=facts()).choose_with_policy_context(o,[{'metadata':{'policyLayers':{'status':'deferred'}}}])
+        self.assertEqual(result.action_id,1)
+        self.assertEqual(result.metadata['boundedFallback']['decisionExplanation']['goal'],'x'*180)
+        self.assertTrue(result.metadata['boundedFallback']['decisionExplanationNormalization']['truncated'])
 
 
 class RecordedCompetenceTests(unittest.TestCase):
