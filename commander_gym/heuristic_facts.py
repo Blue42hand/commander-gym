@@ -34,7 +34,7 @@ class CardFacts:
                   'staticValue', 'repeatable', 'affectsOpponent', 'feeds', 'rewards', 'tribesRewarded'}
         fields |= {'freeOptionalDraws', 'drawSensitive'}
         for name, fact in document['cards'].items():
-            if not isinstance(name, str) or not name or not isinstance(fact, dict) or not fields <= set(fact) or set(fact) - fields - {'conditionalTappedEntry', 'simpleTargetUntapAbilities', 'friendlyStaticPermanent', 'developmentMana', 'manaOnlySelfUntapAbilities', 'fixedStatReductions', 'removesAttachedAbilities', 'untappedIfLandSubtypes', 'variableMana', 'commanderColorMana', 'painManaColors', 'colorIdentity', 'untappedPayLife'}:
+            if not isinstance(name, str) or not name or not isinstance(fact, dict) or not fields <= set(fact) or set(fact) - fields - {'freeOptionalLibraryReorders', 'conditionalTappedEntry', 'simpleTargetUntapAbilities', 'friendlyStaticPermanent', 'developmentMana', 'manaOnlySelfUntapAbilities', 'fixedStatReductions', 'removesAttachedAbilities', 'untappedIfLandSubtypes', 'variableMana', 'commanderColorMana', 'painManaColors', 'colorIdentity', 'untappedPayLife'}:
                 raise ValueError('invalid native card fact fields')
             if 'conditionalTappedEntry' in fact and type(fact['conditionalTappedEntry']) is not bool:
                 raise ValueError('invalid conditional land entry contract')
@@ -76,6 +76,11 @@ class CardFacts:
                 or set(fact['spellPolarity']) - {'HARMFUL', 'BENEFICIAL', 'FLEXIBLE', 'UNKNOWN'}
                 or set(fact['manaColors']) - set('WUBRGC')):
                 raise ValueError('invalid native card fact value')
+            reorders=fact.get('freeOptionalLibraryReorders',{})
+            if not isinstance(reorders,dict) or any(
+                not isinstance(ability,str) or not ability or type(count) is not int or not 1<=count<=10
+                for ability,count in reorders.items()):
+                raise ValueError('invalid free optional library reorder contract')
             if (not isinstance(fact['freeOptionalDraws'], dict) or any(
                 not isinstance(ability, str) or not ability or type(count) is not int or not 1 <= count <= 10
                 for ability, count in fact['freeOptionalDraws'].items())):

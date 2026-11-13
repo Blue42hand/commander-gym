@@ -178,6 +178,23 @@ def removal_reaction(name,facts,casting=True):
         and tags & removal)
 
 
+# These reviewed Auras disable exactly the enchanted permanent. A deck may
+# explicitly approve a political counter with counter_target_exceptions.
+SINGLE_TARGET_DISABLE_AURAS=frozenset({'Pacifism','Arrest','Darksteel Mutation',
+    'Imprisoned in the Moon','Lignify','Noggle the Mind'})
+
+
+def disables_only_opposing_permanent(o, spell_id):
+    state=o.get('state',{});cards=state.get('cards',{});me=o['agentToAct']
+    spell=cards.get(spell_id,{})
+    if (spell_id not in ids_in(state,'Stack') or spell.get('name') not in SINGLE_TARGET_DISABLE_AURAS
+            or spell.get('controllerId') in (None,me) or spell.get('perModeTargets')): return False
+    targets=spell.get('targets')
+    if not isinstance(targets,list) or len(targets)!=1 or not isinstance(targets[0],dict) or targets[0].get('type')!='Permanent': return False
+    target=targets[0].get('entityId');controller=cards.get(target,{}).get('controllerId')
+    return target in ids_in(state,'Battlefield') and controller not in (None,me)
+
+
 def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=(), reaction_timing_exceptions=(), counter_target_exceptions=()):
     view = deepcopy(o); cards = view.get('state', {}).get('cards', {}); me = view['agentToAct']
     restrictions = []; retained = []; plans = []
@@ -241,6 +258,28 @@ def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=()
             and not (state.get('activePlayerId')==me and state.get('currentStep') in {'PRECOMBAT_MAIN','POSTCOMBAT_MAIN'}
                      or state.get('activePlayerId')!=me and state.get('currentStep') in {'END','END_STEP'})):
             restrictions.append({'action':a['semanticId'],'rule':'draw-in-main-or-opponent-end-step'});held_autopay |= raw.get('paymentStrategy',{}).get('type')=='AutoPay';continue
+        if (casting and name=='Heroic Intervention' and quiet
+            and not o.get('pendingDecision') and o.get('nativePaymentError') is None
+            and name not in reaction_timing_exceptions
+            and state.get('currentStep') in {'UNTAP','UPKEEP','DRAW','PRECOMBAT_MAIN','POSTCOMBAT_MAIN','BEGIN_COMBAT','END_COMBAT','END','END_STEP','CLEANUP'}):
+            restrictions.append({'action':a['semanticId'],'rule':'save-instant-protection-for-stack-or-combat'})
+            held_autopay |= raw.get('paymentStrategy',{}).get('type')=='AutoPay';continue
+        if (casting and not o.get('pendingDecision') and o.get('nativePaymentError') is None
+            and 'COUNTERSPELL' in facts.get(name).get('tags',[]) and name not in counter_target_exceptions
+            and a.get('minTargets')==a.get('targetCount')==1 and a.get('targetRequirements') is None
+            and isinstance(a.get('validTargets'),list)):
+            targets=[t for t in a['validTargets'] if not disables_only_opposing_permanent(o,t)]
+            if targets!=a['validTargets']:
+                restrictions.append({'action':a['semanticId'],'rule':'preserve-counter-while-opponents-disable-each-other'})
+                a['validTargets']=targets
+                if not targets:continue
+        if (casting and name=='Syncopate' and a.get('hasXCost') and name not in counter_target_exceptions
+            and type(a.get('minX')) is int and type(a.get('maxAffordableX')) is int):
+            if a['maxAffordableX']<1:
+                restrictions.append({'action':a['semanticId'],'rule':'preserve-zero-X-conditional-counter'});continue
+            if a['minX']<1:
+                a['minX']=1
+                restrictions.append({'action':a['semanticId'],'rule':'conditional-counter-needs-positive-X'})
         # Counters with a card cost or Treasure refund are saved for material threats.
         # Unknown spells and engines keep their native choices for the model.
         exile_cost=a.get('additionalCostInfo') or {}

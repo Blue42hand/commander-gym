@@ -223,6 +223,8 @@ class MaskedHeuristicSubsystem:
             if kind == 'YesNoDecision' and p.get('yesAvailable') is False:
                 return self._decision(p, rt, 'forced-no', choice=False)
             if kind == 'YesNoDecision':
+                reorder=self._free_library_reorder(o,p)
+                if reorder is not None:return reorder
                 draw = self._free_draw(o, p)
                 if draw is not None:
                     return draw
@@ -256,6 +258,18 @@ class MaskedHeuristicSubsystem:
         if kind == 'ChooseColorDecision':
             return self._mana_color(o, p)
         return SubsystemDecision(reason='heuristic-unsupported-or-strategic-decision')
+
+    def _free_library_reorder(self,o,p):
+        context=p.get('context',{});identity=context.get('abilityIdentity') or {}
+        fact=self.facts.get(context.get('sourceName'))
+        count=fact.get('freeOptionalLibraryReorders',{}).get(identity.get('abilityId'))
+        source=o.get('state',{}).get('cards',{}).get(context.get('sourceId'),{})
+        if (not count or context.get('phase')!='RESOLUTION' or p.get('yesAvailable') is not True
+            or p.get('peerOptions') or p.get('yesDetail') or p.get('noDetail')
+            or source.get('controllerId')!=o['agentToAct'] or source.get('name')!=context.get('sourceName')): return None
+        # This exact native pattern only inspects and reorders our library.
+        # Accepting it neither draws a card nor commits to a particular order.
+        return self._decision(p,p['responseSpec']['responseType'],'free-optional-library-reorder',choice=True)
 
     def _free_draw(self, o, p):
         context = p.get('context', {})

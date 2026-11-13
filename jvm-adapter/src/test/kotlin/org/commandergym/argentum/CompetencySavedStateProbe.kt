@@ -19,13 +19,14 @@ object CompetencySavedStateProbe {
         val services=EngineServices(GameBeansConfig(GameProperties()).cardRegistry())
         val processor=ActionProcessor(services)
         val report=buildJsonObject {
-            put("scope","Both recorded and bounded replacement choices executed from the same authenticated native checkpoints; no provider calls or new game")
+            put("scope","Offline branches executed from authenticated native checkpoints; offered comparisons are explicitly labelled; no provider calls or new game")
             putJsonArray("cases") {
                 for (element in fixture.getValue("cases").jsonArray) {
                     val entry=element.jsonObject
                     val initial=json.decodeFromJsonElement<GameState>(entry.getValue("state"))
                     add(buildJsonObject {
                         put("callbackSequence",entry.getValue("sequence"))
+                        entry["baselineIsOfferedComparison"]?.let { put("baselineIsOfferedComparison",it) }
                         for (branch in listOf("baseline","replacement")) {
                             val choice=entry.getValue(branch).jsonObject
                             val template=json.decodeFromJsonElement<GameAction>(choice.getValue("action"))
@@ -58,6 +59,19 @@ object CompetencySavedStateProbe {
                                 check(action.cardId in initial.getZone(ZoneKey(action.playerId,Zone.HAND)))
                                 check(action.cardId in result.state.getZone(ZoneKey(action.playerId,Zone.BATTLEFIELD)))
                                 check(action.cardId !in result.state.getZone(ZoneKey(action.playerId,Zone.HAND)))
+                            }
+                            if(entry["freeLibraryReorder"]?.jsonPrimitive?.boolean==true) {
+                                check(action is SubmitDecision && action.response is YesNoResponse)
+                                if(branch=="replacement") {
+                                    check(result.state.pendingDecision is ReorderLibraryDecision)
+                                } else {
+                                    check(result.state.pendingDecision==null)
+                                }
+                            }
+                            if(branch=="replacement" && entry["announcedXCast"]?.jsonPrimitive?.boolean==true) {
+                                check(action is CastSpell && action.xValue==1)
+                                check(result.outcome is Outcome.Done && result.state.pendingDecision==null)
+                                check(action.cardId in result.state.stack)
                             }
                             putJsonObject(branch) {
                                 put("accepted",result.outcome !is Outcome.Rejected)

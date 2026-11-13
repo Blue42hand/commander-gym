@@ -4,6 +4,7 @@ import com.wingedsheep.ai.engine.knowledge.CardIntentAnalyzer
 import com.wingedsheep.ai.engine.knowledge.SynergyAxes
 import com.wingedsheep.ai.engine.knowledge.TargetPolarityAnalyzer
 import com.wingedsheep.engine.registry.CardRegistry
+import com.wingedsheep.sdk.dsl.Patterns
 import com.wingedsheep.sdk.core.Zone
 import com.wingedsheep.sdk.scripting.LoseAllAbilities
 import com.wingedsheep.sdk.scripting.ModifyStats
@@ -251,6 +252,15 @@ object PublicCardFacts {
                         draw.target == EffectTarget.Controller && count.amount in 1..10) {
                         put(ability.id.value, count.amount)
                     }
+                }
+            }
+            putJsonObject("freeOptionalLibraryReorders") {
+                for (ability in card.script.triggeredAbilities) {
+                    val gate=ability.effect as? GatedEffect ?: continue
+                    if (gate.gate !is Gate.MayDecide || gate.otherwise!=null ||
+                        gate.decisionMaker!=null && gate.decisionMaker!=EffectTarget.Controller) continue
+                    val count=(1..10).firstOrNull { gate.then==Patterns.Library.lookAtTopAndReorder(it) } ?: continue
+                    put(ability.id.value,count)
                 }
             }
             put("removesAttachedAbilities", card.script.staticAbilities.any {

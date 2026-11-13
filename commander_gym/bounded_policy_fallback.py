@@ -100,6 +100,13 @@ def enumerate_choices(o):
             if not affordable(a): continue
             if a['kind'] in {'DeclareAttackers', 'DeclareBlockers'}: return None
             payments=[{}];plain=a
+            if a.get('hasXCost') and not a.get('hasConvoke'):
+                low,high=a.get('minX'),a.get('maxAffordableX')
+                if (a.get('kind')!='CastSpell' or a.get('parameterSpec',{}).get('allowedFields',{}).get('xValue')!='INTEGER'
+                    or type(low) is not int or type(high) is not int or not 0<=low<=high
+                    or high-low>=MAX_CHOICES or a.get('hasDelve') or a.get('additionalCostInfo')):return None
+                payments=[{'xValue':x} for x in range(low,high+1)]
+                plain={**a,'hasXCost':False}
             if a.get('hasConvoke'):
                 from .convoke_plans import convoke_plans
                 payments=convoke_plans(o,a)
@@ -251,6 +258,8 @@ def _candidate_description(wire, o, facts=None):
     elif a.get('kind')=='PlayLand':
         result['costBasis']='land drop, no mana'
     source=cards.get(a.get('action',{}).get('cardId'),{})
+    if source.get('name')=='Syncopate' and type(choice['params'].get('xValue')) is int:
+        result['reviewedEffects']={'counterTargetUnlessControllerPays':choice['params']['xValue'],'exileIfCountered':True}
     if source.get('name')=='Into the Roil' and a.get('action',{}).get('declaredCostSlot') in (None,'KICKED'):
         result['reviewedEffects']={'returnTargetNonlandPermanentToOwnersHand':True,
                                   'drawCards':1 if a.get('action',{}).get('declaredCostSlot')=='KICKED' else 0}

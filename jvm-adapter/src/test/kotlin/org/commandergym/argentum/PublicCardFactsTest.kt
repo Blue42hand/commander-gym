@@ -74,6 +74,15 @@ class PublicCardFactsTest {
         assertTrue(ids("Wirewood Symbiote").isEmpty());assertTrue(ids("Timberwatch Elf").isEmpty())
     }
 
+    @Test fun freeLibraryReorderContractExcludesDrawAndMaterialSideEffects() {
+        val cards=PublicCardFacts.export(registry,listOf("Mirri's Guile","Sylvan Library","Sensei's Divining Top","Curiosity","Forest"),revision)["cards"]!!.jsonObject
+        val guile=cards["Mirri's Guile"]!!.jsonObject["freeOptionalLibraryReorders"]!!.jsonObject
+        assertEquals(3,guile["Mirri's Guile:1"]!!.jsonPrimitive.int)
+        for(name in listOf("Sylvan Library","Sensei's Divining Top","Curiosity","Forest")) {
+            assertTrue(cards[name]!!.jsonObject["freeOptionalLibraryReorders"]!!.jsonObject.isEmpty(),name)
+        }
+    }
+
     @Test fun ordinaryConditionalTappedLandsExposeAConservativeEntryContract() {
         val cards=PublicCardFacts.export(registry,listOf("Shattered Sanctum","Canopy Vista","Sunpetal Grove","Forest","Overgrown Tomb"),revision)["cards"]!!.jsonObject
         for(name in listOf("Shattered Sanctum","Canopy Vista","Sunpetal Grove")) assertTrue(cards[name]!!.jsonObject["conditionalTappedEntry"]!!.jsonPrimitive.boolean,name)
