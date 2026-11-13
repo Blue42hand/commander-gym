@@ -88,6 +88,23 @@ object PublicCardFacts {
         else -> false
     }
 
+    // Cycling discards, changes zones, pays mana, then draws. Inspect native
+    // event/condition families, not English text or a card's ordinary DRAW tag.
+    private fun cyclingSensitive(value: JsonElement): Boolean = when(value) {
+        is JsonObject -> (value["type"] as? JsonPrimitive)?.content?.let { type ->
+            listOf("Cycl","Discard","Draw","ZoneChange","Graveyard","ManaSpent","AbilityActivated","Madness").any(type::contains)
+        } == true || value.values.any(::cyclingSensitive)
+        is JsonArray -> value.any(::cyclingSensitive)
+        else -> false
+    }
+
+    private fun cyclingSensitiveStatic(ability: StaticAbility): Boolean {
+        val encoded=json.encodeToJsonElement(StaticAbility.serializer(),ability)
+        if(ability !is GrantTriggeredAbility)return cyclingSensitive(encoded)
+        val grant=encoded.jsonObject
+        return cyclingSensitive(JsonObject(grant + ("ability" to JsonObject(grant.getValue("ability").jsonObject - "effect"))))
+    }
+
     private fun freeOptionalDrawCount(effect: com.wingedsheep.sdk.scripting.effects.Effect): Int? {
         val gate=effect as? GatedEffect ?: return null
         val draw=gate.then as? DrawCardsEffect ?: return null
@@ -554,6 +571,20 @@ object PublicCardFacts {
                 drawSensitive(json.encodeToJsonElement(EventPattern.serializer(), it.trigger))
             } || card.script.staticAbilities.any(::drawSensitiveStatic) ||
                 drawSensitive(script["replacementEffects"] ?: JsonNull))
+            put("cyclingSensitive",card.script.triggeredAbilities.any {
+                val event=it.trigger as? EventPattern.ZoneChangeEvent
+                event?.to!=Zone.BATTLEFIELD && cyclingSensitive(JsonObject(json.encodeToJsonElement(TriggeredAbility.serializer(),it).jsonObject - "effect"))
+            } || card.script.staticAbilities.any(::cyclingSensitiveStatic) ||
+                card.script.replacementEffects.any { replacement ->
+                    val event=replacement.appliesTo as? EventPattern.ZoneChangeEvent
+                    // A replacement confined to battlefield entry cannot replace
+                    // cycling's hand-to-graveyard discard or library-to-hand draw.
+                    event?.to!=Zone.BATTLEFIELD && cyclingSensitive(json.encodeToJsonElement(
+                        com.wingedsheep.sdk.scripting.ReplacementEffect.serializer(),replacement))
+                } ||
+                card.keywordAbilities.filterNot { it is com.wingedsheep.sdk.scripting.KeywordAbility.Cycling }.any {
+                    cyclingSensitive(json.encodeToJsonElement(com.wingedsheep.sdk.scripting.KeywordAbility.serializer(),it))
+                })
             put("staticValue", intent.staticPriorValue)
             put("repeatable", intent.repeatable)
             put("affectsOpponent", intent.affectsOpponent)

@@ -75,6 +75,32 @@ class PublicCardFactsTest {
         for(name in negative)assertFalse(cards[name]!!.jsonObject["selfResourceDrawSpell"]!!.jsonPrimitive.boolean,name)
     }
 
+    @Test fun cyclingSensitivityFindsDrawDiscardAndCyclingEffectsButNotOrdinaryCombatDrawGrants() {
+        val yes=listOf("Astral Slide","Bag of Holding","Unpredictable Cyclone","Underworld Dreams","Shark Typhoon")
+        val no=listOf("Reconnaissance Mission","Coastal Piracy","Sythis, Harvest's Hand","Island","Sky Diamond","Drowned Catacomb","Growing Rites of Itlimoc")
+        val cards=PublicCardFacts.export(registry,yes+no,revision)["cards"]!!.jsonObject
+        for(name in yes)assertTrue(cards[name]!!.jsonObject["cyclingSensitive"]!!.jsonPrimitive.boolean,name)
+        for(name in no)assertFalse(cards[name]!!.jsonObject["cyclingSensitive"]!!.jsonPrimitive.boolean,name)
+    }
+
+    @Test fun entryReplacementExemptionDependsOnItsActualEvent() {
+        val original=registry.getCard("Sky Diamond")!!
+        val entry=original.script.replacementEffects.single() as com.wingedsheep.sdk.scripting.EntersTapped
+        val draw=registry.getCard("Underworld Dreams")!!.script.triggeredAbilities.single().trigger
+        val changed=original.copy(script=original.script.copy(replacementEffects=listOf(entry.copy(appliesTo=draw))))
+        val overlay=com.wingedsheep.engine.registry.CardRegistry(registry);overlay.register(changed)
+        assertTrue(PublicCardFacts.export(overlay,listOf(changed.name),revision)["cards"]!!.jsonObject[changed.name]!!.jsonObject["cyclingSensitive"]!!.jsonPrimitive.boolean)
+    }
+
+    @Test fun grantedCycleEventsRemainSensitiveEvenWhenTheirEffectIsOnlyDrawing() {
+        val original=registry.getCard("Reconnaissance Mission")!!
+        val grant=original.script.staticAbilities.single() as com.wingedsheep.sdk.scripting.GrantTriggeredAbility
+        val cycling=registry.getCard("Astral Slide")!!.script.triggeredAbilities.single().trigger
+        val changed=original.copy(script=original.script.copy(staticAbilities=listOf(grant.copy(ability=grant.ability.copy(trigger=cycling)))))
+        val overlay=com.wingedsheep.engine.registry.CardRegistry(registry);overlay.register(changed)
+        assertTrue(PublicCardFacts.export(overlay,listOf(changed.name),revision)["cards"]!!.jsonObject[changed.name]!!.jsonObject["cyclingSensitive"]!!.jsonPrimitive.boolean)
+    }
+
     @Test fun variablePlayerDrawRequiresTheWholeNativeTargetedEffect() {
         val names=listOf("Blue Sun's Zenith","Compulsive Research","Finale of Revelation","Pull from Tomorrow")
         val cards=PublicCardFacts.export(registry,names,revision)["cards"]!!.jsonObject

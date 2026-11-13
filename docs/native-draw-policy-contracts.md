@@ -72,3 +72,30 @@ branches cast the same native spell for X=1; the corrected branch changes only
 the player target. Native probes separately verify masked state equality,
 acceptance and actual hand changes after resolution. This does not establish
 whole-game strength or guarantee model reasoning quality.
+
+## Ordinary cycling timing
+
+The native `cyclingSensitive` flag scans cycling, discard, draw, zone-change,
+related mana/activation event patterns and conditions, replacements, and relevant
+keyword abilities. Printed cycling itself does not make a card sensitive. A
+replacement or trigger confined to battlefield entry cannot react to the cycled
+card's hand-to-graveyard discard or library-to-hand draw, so that event boundary
+is distinguished from general zone changes. Granted triggers are scanned by
+event/condition, independently of their eventual draw effect. Missing facts stay
+unknown to the timing policy.
+
+Ordinary, fixed-cost, non-granted `CycleCard` offers can wait until the caster's
+main phase or an opponent's end step. The native cost/offer remains authoritative.
+Defaults preserve floating or restricted mana, low or unknown libraries, relevant
+combat, hidden/incomplete stacks or battlefields, unreviewed modifiers, cycling
+or discard payoffs, draw-sensitive mechanics, and explicit deck timing overrides.
+Known wholly optional draw/reorder stacks can finish first. Typecycling and X
+cycling retain their own decision domain.
+
+A condition-progress badge is informational and now carries the native
+`drawNeutral` certificate; no policy trusts its English text or effect ID. Native
+whole-badge certification also covers the discard/draw of ordinary non-targeted
+cycling. Other badges and the card's own abilities remain independently checked.
+Unknown badges still defer. Saved-state fixtures must be regenerated from the
+matched native projection and compared against the authenticated originals;
+changing annotations by hand is not qualification.

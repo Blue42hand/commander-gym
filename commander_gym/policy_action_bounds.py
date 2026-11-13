@@ -4,7 +4,7 @@ These are policy bounds, not new legality claims. Unknown mechanics retain their
 native offer. Never mutate the recorded observation or manufacture an action.
 """
 from copy import deepcopy
-from .heuristic_policy import affordable, ids_in, mana_cost, plain_token_body
+from .heuristic_policy import affordable, ids_in, mana_cost, plain_token_body, draw_neutral_modifiers
 
 # Ordinary bounce can rescue a disabled commander or a visible hostile target.
 # Other self-target plans require a deck override; complex slots stay native.
@@ -29,6 +29,32 @@ def draw_or_library_reorder_only_stack(o,facts):
     return all(not cards.get(i,{}).get('activeEffects') and isinstance(cards.get(i,{}).get('abilityIdentity'),dict)
                and (facts.is_library_reorder_ability(cards[i]['abilityIdentity'].get('abilityId'))
                     or facts.is_free_optional_draw_ability(cards[i]['abilityIdentity'].get('abilityId'))) for i in stack)
+
+
+def ordinary_cycling_window(o,facts,action):
+    state=o['state'];me=o['agentToAct'];raw=action.get('action',{});cards=state.get('cards',{})
+    source=cards.get(raw.get('cardId'),{})
+    if (raw.get('cardId') not in ids_in(state,'Hand',me) or action.get('hasXCost') is not False
+        or raw.get('grantedBy') is not None or action.get('requiresTargets') is not False
+        or action.get('additionalCostInfo') or not draw_neutral_modifiers(source) or source.get('isFaceDown') is True
+        or facts.get(source.get('name')).get('cyclingSensitive') is not False):return False
+    if any(p.get('activeEffects') or type(p.get('librarySize')) is not int or p['librarySize']<=3 for p in state.get('players',[])):return False
+    player=next((p for p in state.get('players',[]) if p.get('playerId')==me),{})
+    pool=player.get('manaPool')
+    if (not isinstance(pool,dict) or pool.get('restrictedMana')
+        or any(type(pool.get(c)) is not int or pool[c]!=0 for c in ['white','blue','black','red','green','colorless'])):return False
+    battlefield_owners={z.get('zoneId',{}).get('ownerId') for z in state.get('zones',[]) if z.get('zoneId',{}).get('zoneType')=='Battlefield'}
+    if not {p.get('playerId') for p in state.get('players',[])}<=battlefield_owners:return False
+    if not any(z.get('zoneId',{}).get('zoneType')=='Stack' for z in state.get('zones',[])):return False
+    for zone in state.get('zones',[]):
+        if zone.get('zoneId',{}).get('zoneType') in {'Stack','Battlefield'} and (
+            zone.get('isVisible') is not True or zone.get('size',len(zone.get('cardIds',[])))!=len(zone.get('cardIds',[]))):return False
+    for i in ids_in(state,'Battlefield'):
+        card=cards.get(i,{});fact=facts.get(card.get('name'))
+        if not draw_neutral_modifiers(card) or card.get('isFaceDown') is True or (not fact and not plain_token_body({**card,'activeEffects':[]})):return False
+        if fact and (fact.get('cyclingSensitive') is not False or fact.get('drawSensitive')):return False
+    stack=ids_in(state,'Stack')
+    return not stack or draw_or_library_reorder_only_stack(o,facts)
 
 
 def abilities_removed(o,card,facts=None):
@@ -610,6 +636,16 @@ def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=()
             and a.get('requiresTargets') is False and name not in reaction_timing_exceptions
             and not live_combat_draw_decision(o)):
             restrictions.append({'action':a['semanticId'],'rule':'draw-waits-for-development-or-relevant-combat'})
+            held_autopay |= raw.get('paymentStrategy',{}).get('type')=='AutoPay';continue
+        if (a.get('kind')=='CycleCard' and not o.get('pendingDecision') and o.get('nativePaymentError') is None
+            and can_pass and name not in reaction_timing_exceptions
+            and state.get('currentStep') in {'UNTAP','UPKEEP','DRAW','PRECOMBAT_MAIN','POSTCOMBAT_MAIN','BEGIN_COMBAT','DECLARE_ATTACKERS','DECLARE_BLOCKERS','FIRST_STRIKE_COMBAT_DAMAGE','COMBAT_DAMAGE','END_COMBAT','END','END_STEP','CLEANUP'}
+            and state.get('activePlayerId') in {p.get('playerId') for p in state.get('players',[]) if p.get('playerId')}
+            and ('combat' in state and state['combat'] is None or isinstance(state.get('combat'),dict) and isinstance(state['combat'].get('attackers'),list))
+            and not (state.get('activePlayerId')==me and state.get('currentStep') in {'PRECOMBAT_MAIN','POSTCOMBAT_MAIN'}
+                     or state.get('activePlayerId')!=me and state.get('currentStep') in {'END','END_STEP'})
+            and not live_combat_draw_decision(o) and ordinary_cycling_window(o,facts,a)):
+            restrictions.append({'action':a['semanticId'],'rule':'cycle-in-main-or-opponent-end-step'})
             held_autopay |= raw.get('paymentStrategy',{}).get('type')=='AutoPay';continue
         if combat_step and state.get('activePlayerId')!=me:
             combat=state.get('combat');empty_combat=('combat' in state and combat is None or
