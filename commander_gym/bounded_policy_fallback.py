@@ -289,6 +289,10 @@ def _candidate_description(wire, o, facts=None):
     entry=facts.get(source.get('name')).get('entryStatReduction') if facts is not None else None
     if a.get('kind')=='CastSpell' and entry:
         result['reviewedEffects']={'onEntry':{'opposingCreatureStatChange':{'power':entry['power'],'toughness':entry['toughness']},'nativeTargetSelectionFollowsEntry':True}}
+    if a.get('kind')=='CastSpell' and facts is not None and facts.get(source.get('name')).get('removesAttachedAbilities') is True:
+        # A certified partial effect, not a claim that this is the whole card.
+        # Printed rules retain its other type/stat/keyword changes.
+        result['nativeEffectFacts']={'attachedCreatureLosesAllAbilities':True,'otherEffectsRemainInPrintedRules':True}
     if source.get('name')=='Syncopate' and type(choice['params'].get('xValue')) is int:
         result['reviewedEffects']={'counterTargetUnlessControllerPays':choice['params']['xValue'],'exileIfCountered':True}
     if source.get('name')=='Into the Roil' and a.get('action',{}).get('declaredCostSlot') in (None,'KICKED'):

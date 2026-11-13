@@ -14,7 +14,7 @@ OPPONENT_REMOVAL = frozenset({'Reality Shift','Seal of Primordium','Seal of Clea
 QUIET_REACTIONS = frozenset({*OPPONENT_REMOVAL,*ETB_EXILERS,'Swords to Plowshares','Generous Gift','Pongify','Rapid Hybridization','Resculpt','Beast Within',"Nature's Claim",'Arrest','Pacifism','Darksteel Mutation','Imprisoned in the Moon','Lignify','Amphibian Downpour'})
 
 
-NEUTRALIZING_AURAS=frozenset({'Arrest','Pacifism','Darksteel Mutation','Imprisoned in the Moon','Lignify','Noggle the Mind','Amphibian Downpour',"Faith's Fetters"})
+NEUTRALIZING_AURAS=frozenset({'Arrest','Pacifism','Darksteel Mutation','Imprisoned in the Moon','Lignify','Noggle the Mind','Amphibian Downpour','Witness Protection',"Faith's Fetters"})
 
 
 ABILITY_REMOVING_AURAS=frozenset({'Darksteel Mutation','Imprisoned in the Moon','Lignify','Noggle the Mind','Amphibian Downpour'})

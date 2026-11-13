@@ -170,7 +170,7 @@ object CompetencySavedStateProbe {
                                     val projected=StateProjector().project(result.state)
                                     check(result.state.getEntity(aura)!!.get<AttachedToComponent>()!!.targetId==target)
                                     check(projected.hasLostAllAbilities(target))
-                                    check(!projected.hasLostAllAbilities(other))
+                                    if(other!=target)check(!projected.hasLostAllAbilities(other))
                                 }
                             }
                             val bounceUntap=entry["bounceUntapComparison"]?.jsonObject

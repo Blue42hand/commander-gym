@@ -192,6 +192,9 @@ class CompactPromptTests(unittest.TestCase):
         f.choose_with_policy_context(o,[{'metadata':{'policyLayers':{'status':'deferred'}}}]);req=t.calls[1][1]
         self.assertLessEqual(len(json.dumps(req,ensure_ascii=False).encode()),32768)
         view=expand(json.loads(req['messages'][1]['content']))
-        self.assertEqual(len(view['choices']),16)
+        self.assertEqual(len(view['choices']),14)
+        for choice in view['choices']:
+            if (choice.get('card') or {}).get('name')=='Witness Protection':
+                self.assertTrue(all(t['relationship']=='opponent' for t in choice['targetFacts']))
         self.assertFalse(any(c.get('ability','') and 'intrinsic_mana' in c['ability'] for c in view['choices']))
         self.assertEqual(o,before)

@@ -10,7 +10,7 @@ class NeutralizingAuraTargetsTests(unittest.TestCase):
     def setUpClass(cls):
         root=Path(__file__).with_name('fixtures')
         cls.row=next(r for r in json.load(gzip.open(root/'cycle-19-equipment.json.gz','rt'))['rows'] if r['sequence']==10350)
-        cls.facts=CardFacts(json.load(gzip.open(root/'cycle-16-equip.json.gz','rt'))['cardFacts'])
+        cls.facts=CardFacts(json.load(gzip.open(root/'cycle-19-protection-facts.json.gz','rt')))
 
     def test_actual_ordinary_token_is_excluded_in_favor_of_live_engines(self):
         o=self.row['observation'];before=deepcopy(o);v,r=bounded_observation(o,self.facts)
@@ -33,3 +33,18 @@ class NeutralizingAuraTargetsTests(unittest.TestCase):
         v,_=bounded_observation(o,self.facts)
         a=next(a for a in v['legalActions'] if a['actionId']==self.row['recordedChoice']['actionId'])
         self.assertIn('e438',a['validTargets']);self.assertIn('e235',a['validTargets'])
+
+    def test_actual_witness_protection_retains_reasonable_target_and_native_effect_hint(self):
+        from commander_gym.bounded_policy_fallback import _candidate_description
+        root=Path(__file__).with_name('fixtures')
+        r=json.load(gzip.open(root/'cycle-19-witness-protection.json.gz','rt'))['row']
+        self.assertEqual(r['nativeBaselineStatus'],'accepted')
+        o=r['observation'];v,rules=bounded_observation(o,self.facts)
+        a=next(a for a in v['legalActions'] if a['actionId']==r['baseline']['actionId'])
+        self.assertIn('e116',a['validTargets'])
+        self.assertEqual(o['state']['cards']['e100']['zone']['zoneType'],'Command')
+        self.assertNotIn('e100',a['validTargets'])
+        self.assertTrue(all(o['state']['cards'][t]['controllerId']!=o['agentToAct'] for t in a['validTargets']))
+        self.assertTrue(any(x['rule']=='reviewed-removal-threat-shortlist' for x in rules))
+        description=_candidate_description({'channel':'action','choice':{'semanticId':a['semanticId'],'params':{'targets':[a['validTargets'][0]]}}},v,self.facts)
+        self.assertEqual(description['nativeEffectFacts'],{'attachedCreatureLosesAllAbilities':True,'otherEffectsRemainInPrintedRules':True})
