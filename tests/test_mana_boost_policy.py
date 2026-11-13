@@ -104,3 +104,25 @@ class ManaBoostPolicyTests(unittest.TestCase):
             doc=deepcopy(f._document);doc['cards']['Sapphire Surge']['temporaryLandManaBoost'].update(change)
             with self.assertRaisesRegex(ValueError,'invalid temporary land mana boost'):
                 CardFacts(doc)
+
+    def test_stranded_boost_is_held_in_response_to_a_certified_plain_permanent(self):
+        o,f=self.board();d=deepcopy(f._document);d['cards']['Mana Body']=fact(plainPermanentCast=True)
+        o['state']['activePlayerId']='enemy'
+        zone(o,'Stack','enemy',body={'name':'Mana Body','cardTypes':['CREATURE'],'isFaceDown':False})
+        v,r=bounded_observation(o,CardFacts(d));self.assertFalse(any(a['kind']=='CastSpell' for a in v['legalActions']))
+        self.assertIn('hold-land-mana-boost-without-remaining-source',[x['rule'] for x in r])
+
+    def test_response_boost_keeps_real_mana_plans_and_unknown_stack_effects(self):
+        for mode in ['floating','second-land','override','unknown-effect','untap-ability','changed-stack','face-down','mandatory']:
+            with self.subTest(mode=mode):
+                o,f=self.board();d=deepcopy(f._document);d['cards']['Mana Body']=fact(plainPermanentCast=True);kwargs={}
+                zone(o,'Stack','enemy',body={'name':'Mana Body','cardTypes':['CREATURE'],'isFaceDown':False})
+                if mode=='floating':o['state']['players'][0]['manaPool']['blue']=1
+                elif mode=='second-land':zone(o,'Battlefield','me',other={'name':'Island','cardTypes':['LAND'],'subtypes':['Island'],'isTapped':False})
+                elif mode=='override':kwargs['reaction_timing_exceptions']={'Sapphire Surge'}
+                elif mode=='unknown-effect':d['cards']['Mana Body']['plainPermanentCast']=False
+                elif mode=='untap-ability':o['state']['cards']['body']['abilityIdentity']={'cardDefinitionId':'Untapper#SET-1','abilityId':'Untapper:1'}
+                elif mode=='changed-stack':o['state']['cards']['body']['activeEffects']=['unknown']
+                elif mode=='face-down':o['state']['cards']['body']['isFaceDown']=True
+                elif mode=='mandatory':o['legalActions']=o['legalActions'][1:]
+                v,r=bounded_observation(o,CardFacts(d),**kwargs);self.assertTrue(any(a['kind']=='CastSpell' for a in v['legalActions']))

@@ -269,7 +269,9 @@ def _candidate_description(wire, o, facts=None):
     raw=a.get('action',{})
     if a.get('kind')=='ActivateAbility' and facts is not None:
         contract=facts.get(cards.get(raw.get('sourceId'),{}).get('name'))
-        if raw.get('abilityId') in contract.get('opponentEvasionRemovalAbilities',[]):
+        if raw.get('abilityId') in contract.get('selfReturnToHandAbilities',[]):
+            result['reviewedEffects']={'returnThisPermanentToOwnersHand':True}
+        elif raw.get('abilityId') in contract.get('opponentEvasionRemovalAbilities',[]):
             result['reviewedEffects']={'opponentCreaturesLose':['HEXPROOF','SHROUD'],'duration':'end of turn',
                                       'purpose':'Enable targeting protected opposing creatures this turn.'}
         elif raw.get('abilityId') in contract.get('opponentAttackRequirementAbilities',[]):
@@ -277,6 +279,9 @@ def _candidate_description(wire, o, facts=None):
     source=cards.get(a.get('action',{}).get('cardId'),{})
     lock=(facts.get(source.get('name')).get('attachedCombatLock') if facts is not None else None)
     if lock:result['reviewedEffects']=combat_lock_effects(lock)
+    entry=facts.get(source.get('name')).get('entryStatReduction') if facts is not None else None
+    if a.get('kind')=='CastSpell' and entry:
+        result['reviewedEffects']={'onEntry':{'opposingCreatureStatChange':{'power':entry['power'],'toughness':entry['toughness']},'nativeTargetSelectionFollowsEntry':True}}
     if source.get('name')=='Syncopate' and type(choice['params'].get('xValue')) is int:
         result['reviewedEffects']={'counterTargetUnlessControllerPays':choice['params']['xValue'],'exileIfCountered':True}
     if source.get('name')=='Into the Roil' and a.get('action',{}).get('declaredCostSlot') in (None,'KICKED'):

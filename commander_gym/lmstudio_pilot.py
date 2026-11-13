@@ -140,6 +140,18 @@ def _schema_check(schema, value=None, *, validate=False):
                "anyOf", "const", "enum", "minimum", "maximum", "minItems", "maxItems", "description"}
     if not isinstance(schema, dict) or set(schema) - allowed:
         raise LMStudioError("unsupported_json_schema")
+    kind = schema.get("type")
+    types = {"object": dict, "array": list, "string": str, "integer": int, "boolean": bool, "null": type(None)}
+    if isinstance(kind,list):
+        # JSON Schema type unions preserve every constraint. Validate the exact
+        # union as equivalent anyOf branches; leave the transmitted native
+        # grammar and current observation unchanged.
+        if (not kind or any(not isinstance(t,str) or t not in types for t in kind)
+            or len(set(kind))!=len(kind)):
+            raise LMStudioError("unsupported_json_schema")
+        return _schema_check({"anyOf":[{**schema,"type":t} for t in kind]},value,validate=validate)
+    if "type" in schema and (not isinstance(kind,str) or kind not in types):
+        raise LMStudioError("unsupported_json_schema")
     if "anyOf" in schema:
         branches = schema["anyOf"]
         if not isinstance(branches, list) or not branches:
@@ -155,10 +167,6 @@ def _schema_check(schema, value=None, *, validate=False):
                     pass
             else:
                 raise LMStudioError("output_schema_mismatch")
-    kind = schema.get("type")
-    types = {"object": dict, "array": list, "string": str, "integer": int, "boolean": bool}
-    if kind is not None and kind not in types:
-        raise LMStudioError("unsupported_json_schema")
     if validate:
         if kind is not None and type(value) is not types[kind]:
             raise LMStudioError("output_schema_mismatch")

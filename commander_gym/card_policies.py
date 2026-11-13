@@ -21,6 +21,18 @@ class SharedCardPolicies(ResourcePolicies):
                 planned=getattr(self,'_modal_plans',{}).get(raw.get('cardId'))
                 if planned and planned.get('purpose')=='restore-disabled-commander':
                     return self._action(a,'shared-modal-complete-commander-restoration-plan',{})
+                card=self._card(o,raw.get('cardId'))
+                if (a.get('kind')=='CastSpell' and a.get('requiresTargets') is False and self._plain_cast(a)
+                    and raw.get('paymentStrategy',{}).get('type')=='AutoPay'
+                    and card.get('name') not in self.reaction_timing_exceptions
+                    and not any(b.get('kind')=='PlayLand' for b in offers)):
+                    player=next((p for p in s.get('players',[]) if p['playerId']==me),{})
+                    if type(player.get('librarySize')) is int and player['librarySize']>8:
+                        from .entry_removal_policy import entry_reduction_victims
+                        victims=entry_reduction_victims(o,card,self.facts)
+                        if victims:
+                            return self._action(a,'shared-entry-removal-clear-engine',{},
+                                entryRemovalPlan={'candidateVictims':victims,'nativeTargetSelectionFollowsEntry':True})
                 from .modal_policies import commander_rescue_mode
                 rescue=commander_rescue_mode(o,a,self.facts)
                 if rescue is not None:return self._action(a,'shared-modal-restore-disabled-commander',rescue)

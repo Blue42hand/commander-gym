@@ -24,6 +24,18 @@ UNSAFE_TAGS = {'REMOVAL', 'EXILE_REMOVAL', 'SWEEPER', 'COUNTERSPELL', 'PACIFISM'
                'COMBAT_TRICK', 'PROTECTION', 'TRIGGER_LOCK', 'COUNTER_LOCK'}
 
 
+def plain_token_body(card):
+    # Native public token characteristics suffice for plain bodies. Copies,
+    # hidden faces, text-bearing tokens and unrecognized keyword mechanics defer.
+    ordinary={'FLYING','REACH','VIGILANCE','HASTE','TRAMPLE','MENACE','LIFELINK',
+              'DEATHTOUCH','FIRST_STRIKE','DOUBLE_STRIKE','DEFENDER','INDESTRUCTIBLE'}
+    return (card.get('isToken') is True and card.get('isFaceDown') is False
+            and card.get('oracleText')=='' and card.get('abilityFlags')==[]
+            and card.get('cardFaces')==[] and card.get('isDoubleFaced') is False
+            and card.get('copyOf') is None and not card.get('activeEffects')
+            and isinstance(card.get('keywords'),list) and set(card['keywords'])<=ordinary)
+
+
 def mana_cost(cost):
     """Only ordinary generic/colored costs are estimated; special symbols defer."""
     if not isinstance(cost, str):
@@ -290,7 +302,12 @@ class MaskedHeuristicSubsystem:
         for i in ids_in(o['state'], 'Battlefield'):
             c = o['state'].get('cards', {}).get(i, {})
             f = self.facts.get(c.get('name'))
-            if not f or f['drawSensitive'] or c.get('activeEffects'):
+            if c.get('activeEffects'):
+                return None
+            if not f:
+                if plain_token_body(c):continue
+                return None
+            if f['drawSensitive']:
                 return None
         return self._decision(p, p['responseSpec']['responseType'], 'free-optional-draw', choice=True)
 

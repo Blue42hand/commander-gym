@@ -4,7 +4,7 @@ These are policy bounds, not new legality claims. Unknown mechanics retain their
 native offer. Never mutate the recorded observation or manufacture an action.
 """
 from copy import deepcopy
-from .heuristic_policy import affordable, ids_in, mana_cost
+from .heuristic_policy import affordable, ids_in, mana_cost, plain_token_body
 
 # Ordinary bounce can rescue a disabled commander or a visible hostile target.
 # Other self-target plans require a deck override; complex slots stay native.
@@ -175,16 +175,22 @@ def bounce_commander_rescue(o, candidates, facts):
     return False
 
 
-def plain_token_has_no_evasion_grant(card):
-    # Native public token characteristics suffice for plain bodies. Copies,
-    # hidden faces, text-bearing tokens and unrecognized keyword mechanics defer.
-    ordinary={'FLYING','REACH','VIGILANCE','HASTE','TRAMPLE','MENACE','LIFELINK',
-              'DEATHTOUCH','FIRST_STRIKE','DOUBLE_STRIKE','DEFENDER','INDESTRUCTIBLE'}
-    return (card.get('isToken') is True and card.get('isFaceDown') is False
-            and card.get('oracleText')=='' and card.get('abilityFlags')==[]
-            and card.get('cardFaces')==[] and card.get('isDoubleFaced') is False
-            and card.get('copyOf') is None and not card.get('activeEffects')
-            and isinstance(card.get('keywords'),list) and set(card['keywords'])<=ordinary)
+def self_return_is_already_on_top(o,raw):
+    # Legacy native ability identities name definitions rather than instances.
+    # Apply the basic single-copy policy only to an unmodified unique owned
+    # permanent. Copies and intervening responses retain inference. A rare
+    # return/recast while an older incarnation's ability remains is a strategic
+    # exception; deck reaction_timing_exceptions can opt out.
+    state=o['state'];cards=state.get('cards',{});me=o['agentToAct']
+    source=cards.get(raw.get('sourceId'),{});name=source.get('name')
+    if not name or source.get('controllerId')!=me or source.get('activeEffects') or source.get('copyOf') or source.get('isFaceDown'):return False
+    sources=[i for i in ids_in(state,'Battlefield') if cards.get(i,{}).get('controllerId')==me and cards.get(i,{}).get('name')==name]
+    stack=ids_in(state,'Stack')
+    if sources!=[raw.get('sourceId')] or not stack:return False
+    top=cards.get(stack[-1],{});identity=top.get('abilityIdentity') or {};definition=identity.get('cardDefinitionId')
+    return (top.get('controllerId')==me and not top.get('activeEffects')
+            and isinstance(definition,str) and definition.split('#',1)[0]==name
+            and identity.get('abilityId')==raw.get('abilityId'))
 
 
 def evasion_removal_has_no_subject(o,facts):
@@ -195,7 +201,7 @@ def evasion_removal_has_no_subject(o,facts):
         card=cards.get(entity,{})
         if card.get('activeEffects'):return False
         sensitivity=facts.get(card.get('name')).get('evasionSensitive')
-        if sensitivity is not False and not (sensitivity is None and plain_token_has_no_evasion_grant(card)):return False
+        if sensitivity is not False and not (sensitivity is None and plain_token_body(card)):return False
         if 'CREATURE' not in card.get('cardTypes',[]) or card.get('controllerId')==me:continue
         if card.get('controllerId') is None or not isinstance(card.get('keywords'),list):return False
         if not isinstance(card.get('hexproofFromColors'),list):return False
@@ -323,6 +329,49 @@ def live_combat_draw_decision(o):
     return False
 
 
+def simple_permanent_stack(o,facts):
+    cards=o['state'].get('cards',{});stack=ids_in(o['state'],'Stack')
+    return bool(stack) and all(
+        not cards.get(i,{}).get('activeEffects') and not cards.get(i,{}).get('abilityIdentity') and cards.get(i,{}).get('isFaceDown') is False
+        and not cards.get(i,{}).get('targets') and facts.get(cards.get(i,{}).get('name')).get('plainPermanentCast') is True
+        and bool(set(facts.get(cards.get(i,{}).get('name')).get('types',[])) & {'CREATURE','ARTIFACT','ENCHANTMENT','PLANESWALKER','BATTLE'})
+        and not set(facts.get(cards.get(i,{}).get('name')).get('types',[])) & {'INSTANT','SORCERY'}
+        for i in stack)
+
+
+def simple_life_gain_stack(o,facts):
+    cards=o['state'].get('cards',{});stack=ids_in(o['state'],'Stack')
+    if not stack:return False
+    for i in stack:
+        c=cards.get(i,{});identity=c.get('abilityIdentity') or {};definition=identity.get('cardDefinitionId')
+        if c.get('activeEffects') or c.get('targets') or not isinstance(definition,str):return False
+        if identity.get('abilityId') not in facts.get(definition.split('#',1)[0]).get('simpleLifeGainTriggers',{}):return False
+    return True
+
+
+def pump_has_power_mana_payoff(o,entity,facts):
+    c=o['state'].get('cards',{}).get(entity,{});f=facts.get(c.get('name'))
+    # Preserve unknown or modified targets for inference. A known ordinary body
+    # has no mana benefit from a temporary power increase.
+    if c.get('activeEffects'):return True
+    if not f:return not plain_token_body(c)
+    if 'powerManaAbilities' not in f:return True
+    return any(a.get('kind')=='ActivateAbility' and a.get('isManaAbility') is True and affordable(a)
+               and a.get('action',{}).get('sourceId')==entity
+               and a.get('action',{}).get('abilityId') in f['powerManaAbilities'] for a in o.get('legalActions',[]))
+
+
+def safe_ordinary_player_draw(o,source,facts):
+    count=facts.get(source).get('beneficialPlayerDrawCount')
+    if not count:return False
+    state=o['state']
+    if any(type(p.get('librarySize')) is not int or p['librarySize']<=count+2 or p.get('activeEffects') for p in state.get('players',[])):return False
+    for i in ids_in(state,'Battlefield'):
+        c=state.get('cards',{}).get(i,{});f=facts.get(c.get('name'))
+        if c.get('activeEffects') or (not f and not plain_token_body(c)) or f.get('drawSensitive'):return False
+    return True
+
+
 def stranded_land_mana_boost(o, name, facts, action):
     """Hold a reviewed land boost when paying for it exhausts the sole useful land.
 
@@ -368,6 +417,10 @@ def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=()
             if isinstance(a.get('validBlockers'),list):a['validBlockers']=[i for i in a['validBlockers'] if i in a['validBlockTargets']]
         if (a.get('kind')=='ActivateAbility' and can_pass and not o.get('pendingDecision') and o.get('nativePaymentError') is None
             and name not in reaction_timing_exceptions and not cards.get(raw.get('sourceId'),{}).get('activeEffects')):
+            if (raw.get('abilityId') in facts.get(name).get('selfReturnToHandAbilities',[])
+                and self_return_is_already_on_top(o,raw)):
+                restrictions.append({'action':a['semanticId'],'rule':'self-return-already-on-stack'})
+                held_autopay |= raw.get('paymentStrategy',{}).get('type')=='AutoPay';continue
             if (raw.get('abilityId') in facts.get(name).get('opponentAttackRequirementAbilities',[])
                 and state.get('activePlayerId')==me
                 and not any(p.get('teamSharedTurns') or p.get('teamSharedLife') for p in state.get('players',[]))):
@@ -389,10 +442,24 @@ def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=()
                 a['validTargets']=targets
                 if not targets:
                     held_autopay |= raw.get('paymentStrategy',{}).get('type')=='AutoPay';continue
-        if (casting and quiet and not o.get('pendingDecision') and o.get('nativePaymentError') is None
+        if (casting and can_pass and (quiet or simple_permanent_stack(o,facts)) and not o.get('pendingDecision') and o.get('nativePaymentError') is None
             and name not in reaction_timing_exceptions and stranded_land_mana_boost(o,name,facts,a)):
             restrictions.append({'action':a['semanticId'],'rule':'hold-land-mana-boost-without-remaining-source'})
             held_autopay |= raw.get('paymentStrategy',{}).get('type')=='AutoPay';continue
+        if (a.get('kind')=='ActivateAbility' and can_pass and not o.get('pendingDecision') and o.get('nativePaymentError') is None
+            and name not in reaction_timing_exceptions and name not in allow_self_targets
+            and raw.get('abilityId') in facts.get(name).get('positiveStatBoostAbilities',[])
+            and not cards.get(raw.get('sourceId'),{}).get('activeEffects') and not a.get('additionalCostInfo')
+            and a.get('requiresTargets') is True and a.get('targetRequirements') is None
+            and a.get('minTargets')==a.get('targetCount')==1 and isinstance(a.get('validTargets'),list)
+            and state.get('currentStep') in {'UNTAP','UPKEEP','DRAW','PRECOMBAT_MAIN','POSTCOMBAT_MAIN','END','END_STEP','CLEANUP'}
+            and (quiet or simple_life_gain_stack(o,facts))):
+            useful=[t for t in a['validTargets'] if pump_has_power_mana_payoff(o,t,facts)]
+            if useful!=a['validTargets']:
+                restrictions.append({'action':a['semanticId'],'rule':'temporary-pump-waits-for-combat-or-power-mana'})
+                a['validTargets']=useful
+            if not useful:
+                held_autopay |= raw.get('paymentStrategy',{}).get('type')=='AutoPay';continue
         if a.get('kind')=='CastSpellModal' and name not in allow_self_targets:
             from .modal_policies import modal_plan,value_modal_contract
             plan=modal_plan(o,a,facts)
@@ -510,7 +577,16 @@ def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=()
                 restrictions.append({'action':a['semanticId'],'rule':'opponent-removal-targets'})
                 a['validTargets'] = targets
             if len(targets) < a.get('minTargets',1): continue
-        if (casting and (name in {'Flickering Ward','Curiosity','Keen Sense','Sixth Sense'} or facts.get(name).get('spellPolarity')==['BENEFICIAL'] and all(t in ids_in(state,'Battlefield') for t in a.get('validTargets') or [])) or raw.get('abilityId') == 'Timberwatch Elf:1') and a.get('targetRequirements') is None and isinstance(a.get('validTargets'),list):
+        if (casting and not o.get('pendingDecision') and o.get('nativePaymentError') is None
+            and not raw.get('targets') and name not in allow_self_targets and a.get('requiresTargets') is True
+            and a.get('targetRequirements') is None and a.get('minTargets')==a.get('targetCount')==1
+            and isinstance(a.get('validTargets'),list) and all(isinstance(t,str) for t in a['validTargets']) and me in a['validTargets']
+            and all(t in {p.get('playerId') for p in state.get('players',[])} for t in a['validTargets'])
+            and not cards.get(raw.get('cardId'),{}).get('activeEffects') and not a.get('hasXCost')
+            and safe_ordinary_player_draw(o,name,facts)):
+            if a['validTargets']!=[me]:restrictions.append({'action':a['semanticId'],'rule':'ordinary-player-card-advantage-for-self'})
+            a['validTargets']=[me]
+        if name not in allow_self_targets and (casting and (name in {'Flickering Ward','Curiosity','Keen Sense','Sixth Sense'} or facts.get(name).get('spellPolarity')==['BENEFICIAL'] and all(t in ids_in(state,'Battlefield') for t in a.get('validTargets') or [])) or raw.get('abilityId') == 'Timberwatch Elf:1' or raw.get('abilityId') in facts.get(name).get('positiveStatBoostAbilities',[])) and a.get('targetRequirements') is None and isinstance(a.get('validTargets'),list):
             a['validTargets'] = [t for t in a['validTargets'] if cards.get(t,{}).get('controllerId') == me]
             restrictions.append({'action':a['semanticId'],'rule':'beneficial-effect-own-creatures'})
             if len(a['validTargets']) < a.get('minTargets',1): continue

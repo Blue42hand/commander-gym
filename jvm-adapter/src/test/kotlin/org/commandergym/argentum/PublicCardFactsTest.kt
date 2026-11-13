@@ -13,6 +13,37 @@ class PublicCardFactsTest {
     private val registry = GameBeansConfig(GameProperties()).cardRegistry()
     private val revision = "12ab2f0ed5bd018334521dc52497e6444f26f5a9"
 
+    @Test fun beneficialPlayerDrawContractsMatchWholeNetPositiveEffects() {
+        val cards=PublicCardFacts.export(registry,listOf("Compulsive Research","High Tide","Brainstorm"),revision)["cards"]!!.jsonObject
+        assertEquals(3,cards["Compulsive Research"]!!.jsonObject["beneficialPlayerDrawCount"]!!.jsonPrimitive.int)
+        for(name in listOf("High Tide","Brainstorm"))assertFalse(cards[name]!!.jsonObject.containsKey("beneficialPlayerDrawCount"))
+    }
+
+    @Test fun temporaryPumpsAndPowerManaAreCertifiedIndependently() {
+        val cards=PublicCardFacts.export(registry,listOf("Timberwatch Elf","Marwyn, the Nurturer","Priest of Titania","Fyndhorn Elves","High Tide"),revision)["cards"]!!.jsonObject
+        assertEquals(listOf("Timberwatch Elf:1"),cards["Timberwatch Elf"]!!.jsonObject["positiveStatBoostAbilities"]!!.jsonArray.map { it.jsonPrimitive.content })
+        assertEquals(listOf("Marwyn, the Nurturer:2"),cards["Marwyn, the Nurturer"]!!.jsonObject["powerManaAbilities"]!!.jsonArray.map { it.jsonPrimitive.content })
+        for(name in listOf("Priest of Titania","Fyndhorn Elves"))assertTrue(cards[name]!!.jsonObject["powerManaAbilities"]!!.jsonArray.isEmpty())
+        assertTrue(cards["Fyndhorn Elves"]!!.jsonObject["plainPermanentCast"]!!.jsonPrimitive.boolean)
+        assertFalse(cards["High Tide"]!!.jsonObject["plainPermanentCast"]!!.jsonPrimitive.boolean)
+    }
+
+    @Test fun entryReductionCertifiesTheWholeUnconditionalNativeTrigger() {
+        val cards=PublicCardFacts.export(registry,listOf("Nowhere to Run","Arrest","Generous Visitor"),revision)["cards"]!!.jsonObject
+        val effect=cards["Nowhere to Run"]!!.jsonObject["entryStatReduction"]!!.jsonObject
+        assertEquals(-3,effect["toughness"]!!.jsonPrimitive.int)
+        assertEquals("Nowhere to Run:1",effect["abilityId"]!!.jsonPrimitive.content)
+        assertTrue(effect["suppressesHexproof"]!!.jsonPrimitive.boolean)
+        assertTrue(effect["suppressesWard"]!!.jsonPrimitive.boolean)
+        for(name in listOf("Arrest","Generous Visitor"))assertFalse(cards[name]!!.jsonObject.containsKey("entryStatReduction"))
+    }
+
+    @Test fun selfReturnContractsRequireThePureNativeSelfEffect() {
+        val cards=PublicCardFacts.export(registry,listOf("Flickering Ward","Wirewood Symbiote","Bident of Thassa"),revision)["cards"]!!.jsonObject
+        assertEquals(listOf("Flickering Ward:1"),cards["Flickering Ward"]!!.jsonObject["selfReturnToHandAbilities"]!!.jsonArray.map { it.jsonPrimitive.content })
+        for(name in listOf("Wirewood Symbiote","Bident of Thassa"))assertTrue(cards[name]!!.jsonObject["selfReturnToHandAbilities"]!!.jsonArray.isEmpty())
+    }
+
     @Test fun utilityEffectsMatchNativeScopeAndKeepConditionalEvasionUncertain() {
         val cards=PublicCardFacts.export(registry,listOf("Arcane Lighthouse","Bident of Thassa","Swiftfoot Boots","Wirewood Symbiote"),revision)["cards"]!!.jsonObject
         assertEquals(listOf("Arcane Lighthouse:2"),cards["Arcane Lighthouse"]!!.jsonObject["opponentEvasionRemovalAbilities"]!!.jsonArray.map { it.jsonPrimitive.content })

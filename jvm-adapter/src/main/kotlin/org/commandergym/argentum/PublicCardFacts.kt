@@ -4,6 +4,14 @@ import com.wingedsheep.ai.engine.knowledge.CardIntentAnalyzer
 import com.wingedsheep.ai.engine.knowledge.SynergyAxes
 import com.wingedsheep.ai.engine.knowledge.TargetPolarityAnalyzer
 import com.wingedsheep.engine.registry.CardRegistry
+import com.wingedsheep.sdk.dsl.Triggers
+import com.wingedsheep.sdk.scripting.TriggeredAbility
+import com.wingedsheep.sdk.scripting.SuppressHexproofForGroup
+import com.wingedsheep.sdk.scripting.SuppressWardForGroup
+import com.wingedsheep.sdk.scripting.targets.TargetPlayer
+import com.wingedsheep.sdk.scripting.values.Aggregation
+import com.wingedsheep.sdk.scripting.targets.TargetObject
+import com.wingedsheep.sdk.scripting.filters.unified.TargetFilter
 import com.wingedsheep.sdk.dsl.Patterns
 import com.wingedsheep.sdk.dsl.Effects
 import com.wingedsheep.sdk.dsl.DynamicAmounts
@@ -202,6 +210,42 @@ object PublicCardFacts {
         }.takeIf { it.size == branches.size } ?: emptyList() else emptyList()
         return buildJsonObject {
             put("developmentMana", developmentMana)
+            putJsonArray("powerManaAbilities") {
+                activated.filter { ability ->
+                    if(!ability.isManaAbility || ability.activateFromZone!=Zone.BATTLEFIELD) false
+                    else when(val effect=ability.effect) {
+                        is AddManaEffect -> effect.amount==DynamicAmounts.sourcePower()
+                        is AddColorlessManaEffect -> effect.amount==DynamicAmounts.sourcePower()
+                        is AddManaOfChoiceEffect -> effect.amount==DynamicAmounts.sourcePower() && effect.recipient==EffectTarget.Controller
+                        else -> false
+                    }
+                }.forEach { add(it.id.value) }
+            }
+            putJsonArray("positiveStatBoostAbilities") {
+                activated.filter { ability ->
+                    val effect=ability.effect as? ModifyStatsEffect ?: return@filter false
+                    val target=ability.targetRequirements.singleOrNull() as? TargetObject ?: return@filter false
+                    val amount=effect.powerModifier
+                    val nonnegative=amount is DynamicAmount.Fixed && amount.amount>0 || amount is DynamicAmount.Count ||
+                        amount is DynamicAmount.AggregateBattlefield && amount.aggregation==Aggregation.COUNT
+                    !ability.isManaAbility && ability.timing==TimingRule.InstantSpeed && ability.activateFromZone==Zone.BATTLEFIELD && ability.restrictions.isEmpty() &&
+                        manaAndTapOnly(ability.cost) && effect.target is EffectTarget.BoundVariable &&
+                        effect.duration==Duration.EndOfTurn && amount==effect.toughnessModifier && nonnegative &&
+                        target==TargetObject(filter=TargetFilter.Creature,id=target.id)
+                }.forEach { add(it.id.value) }
+            }
+            val drawParts=(card.script.spellEffect as? CompositeEffect)?.effects
+            val targetedDraw=(card.script.spellEffect as? DrawCardsEffect) ?: drawParts?.firstOrNull() as? DrawCardsEffect
+            val drawCount=(targetedDraw?.count as? DynamicAmount.Fixed)?.amount
+            val playerTarget=card.targetRequirements.singleOrNull() as? TargetPlayer
+            if(targetedDraw!=null && targetedDraw.target is EffectTarget.BoundVariable && drawCount!=null && drawCount in 1..100 &&
+                playerTarget==TargetPlayer(id=playerTarget?.id)) {
+                val ordinaryPositive=card.script.spellEffect==targetedDraw || (1 until drawCount).any { discard ->
+                    card.script.spellEffect==(targetedDraw then Effects.Discard(discard,targetedDraw.target)) ||
+                        card.script.spellEffect==(targetedDraw then Effects.DiscardUnlessMatching(discard,GameObjectFilter.Land,target=targetedDraw.target))
+                }
+                if(ordinaryPositive)put("beneficialPlayerDrawCount",drawCount)
+            }
             putJsonArray("manaOnlySelfUntapAbilities") {
                 activated.filter {
                     val effect = it.effect as? TapUntapEffect
@@ -227,6 +271,27 @@ object PublicCardFacts {
             }
             // Match exact SDK descriptions at the native target-selection seam;
             // no Oracle text parsing or guesses from a generic REMOVAL tag.
+            val entry = card.script.triggeredAbilities.singleOrNull()
+            val entryEffect = entry?.effect as? ModifyStatsEffect
+            val entryTarget = entry?.targetRequirement as? TargetObject
+            val entryPower = entryEffect?.powerModifier as? DynamicAmount.Fixed
+            val entryToughness = entryEffect?.toughnessModifier as? DynamicAmount.Fixed
+            val entrySpec = Triggers.self.enters()
+            val hexSuppression = SuppressHexproofForGroup(GroupFilter.AllCreaturesOpponentsControl)
+            val wardSuppression = SuppressWardForGroup(GroupFilter.AllCreaturesOpponentsControl)
+            if(entry!=null && entryEffect!=null && entryTarget!=null && entryPower!=null && entryToughness!=null &&
+                entryPower.amount<=0 && entryToughness.amount<0 && entryEffect.duration==Duration.EndOfTurn &&
+                entryEffect.target is EffectTarget.BoundVariable &&
+                entryTarget==TargetObject(filter=TargetFilter.CreatureOpponentControls,id=entryTarget.id) &&
+                entry.copy(descriptionOverride=null)==TriggeredAbility(entry.id,entrySpec.event,entrySpec.binding,entryEffect,targetRequirement=entryTarget) &&
+                noReplacement && activated.isEmpty() && card.script.spellEffect==null &&
+                card.script.staticAbilities.all { it==hexSuppression || it==wardSuppression }) {
+                putJsonObject("entryStatReduction") {
+                    put("abilityId",entry.id.value);put("power",entryPower.amount);put("toughness",entryToughness.amount)
+                    put("suppressesHexproof",hexSuppression in card.script.staticAbilities)
+                    put("suppressesWard",wardSuppression in card.script.staticAbilities)
+                }
+            }
             putJsonObject("fixedStatReductions") {
                 card.script.triggeredAbilities.forEach {
                     val effect = it.effect as? ModifyStatsEffect ?: return@forEach
@@ -276,6 +341,7 @@ object PublicCardFacts {
             putJsonArray("manaColors") { manaColors.sorted().forEach { add(it) } }
             put("simpleMana", simpleMana)
             put("simplePermanent", noStatic && noTriggers && noReplacement && (activated.isEmpty() || simpleMana))
+            put("plainPermanentCast", card.typeLine.isPermanent && card.script.spellEffect==null && noStatic && noTriggers && noReplacement && (activated.isEmpty() || simpleMana))
             val opponentCreatures = GroupFilter(GameObjectFilter.Creature.opponentControls())
             val removeEvasion = Effects.ForEachInGroup(opponentCreatures,
                 Effects.CantHaveKeywords(setOf(Keyword.HEXPROOF,Keyword.SHROUD),EffectTarget.IterationEntity))
@@ -284,6 +350,7 @@ object PublicCardFacts {
                 !it.isManaAbility && manaAndTapOnly(it.cost) && it.restrictions.isEmpty() &&
                     it.activateFromZone == Zone.BATTLEFIELD && it.targetRequirements.isEmpty() && it.effect == effect
             }.map { it.id.value }
+            putJsonArray("selfReturnToHandAbilities") { utilityIds(Effects.ReturnToHand(EffectTarget.Self)).forEach { add(it) } }
             val evasionRemovalIds = utilityIds(removeEvasion)
             putJsonArray("opponentEvasionRemovalAbilities") { evasionRemovalIds.forEach { add(it) } }
             putJsonArray("opponentAttackRequirementAbilities") { utilityIds(requireAttacks).forEach { add(it) } }

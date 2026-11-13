@@ -3,6 +3,9 @@ package org.commandergym.argentum
 import com.wingedsheep.engine.core.*
 import com.wingedsheep.engine.state.GameState
 import com.wingedsheep.engine.state.ZoneKey
+import com.wingedsheep.engine.state.components.stack.ChosenTarget
+import com.wingedsheep.engine.state.components.identity.CardComponent
+import com.wingedsheep.engine.state.components.identity.ControllerComponent
 import com.wingedsheep.engine.state.components.identity.LifeTotalComponent
 import com.wingedsheep.engine.state.components.battlefield.TappedComponent
 import com.wingedsheep.engine.state.components.battlefield.AttachedToComponent
@@ -34,7 +37,7 @@ object CompetencySavedStateProbe {
                     add(buildJsonObject {
                         put("callbackSequence",entry.getValue("sequence"))
                         entry["baselineIsOfferedComparison"]?.let { put("baselineIsOfferedComparison",it) }
-                        for (branch in listOf("baseline","replacement")) {
+                        for (branch in if(entry["replacementOnly"]?.jsonPrimitive?.boolean==true) listOf("replacement") else listOf("baseline","replacement")) {
                             val choice=entry.getValue(branch).jsonObject
                             val template=json.decodeFromJsonElement<GameAction>(choice.getValue("action"))
                             val params=choice["params"]
@@ -203,6 +206,112 @@ object CompetencySavedStateProbe {
                                     check(material in result.state.getBattlefield())
                                 }
                             }
+                            val playerDraw=entry["beneficialPlayerDrawComparison"]?.jsonObject
+                            if(playerDraw!=null) {
+                                check(action is CastSpell && result.outcome is Outcome.Done && result.state.pendingDecision==null)
+                                val original=json.decodeFromJsonElement<EntityId>(playerDraw.getValue("originalTarget"))
+                                val target=(action.targets.single() as ChosenTarget.Player).playerId
+                                check(target==(if(branch=="baseline")original else action.playerId))
+                                check(action.cardId in result.state.stack)
+                            }
+                            val strandedBoost=entry["strandedBoostComparison"]?.jsonObject
+                            if(strandedBoost!=null) {
+                                val land=json.decodeFromJsonElement<EntityId>(strandedBoost.getValue("land"))
+                                val spell=json.decodeFromJsonElement<EntityId>(strandedBoost.getValue("spell"))
+                                check(!initial.getEntity(land)!!.has<TappedComponent>())
+                                var steps=0
+                                while(result.state.stack.isNotEmpty()) {
+                                    check(++steps<=128 && result.state.pendingDecision==null)
+                                    result=processor.process(result.state,PassPriority(requireNotNull(result.state.priorityPlayerId))).result
+                                    check(result.outcome !is Outcome.Rejected)
+                                }
+                                check((result.state.getEntity(action.playerId)?.get<ManaPoolComponent>()?.total ?: 0)==0)
+                                check(result.state.getEntity(land)!!.has<TappedComponent>()==(branch=="baseline"))
+                                check((spell in result.state.getZone(ZoneKey(action.playerId,Zone.HAND)))==(branch=="replacement"))
+                            }
+                            val modelCounter=entry["modelCounterComparison"]?.jsonObject
+                            var modelCounterElfIncrease:Int?=null
+                            var modelCounterTreasureIncrease:Int?=null
+                            if(modelCounter!=null) {
+                                val opponent=json.decodeFromJsonElement<EntityId>(modelCounter.getValue("opponent"))
+                                check(initial.stack.isNotEmpty() && opponent!=action.playerId)
+                                fun countSubtype(state:GameState,subtype:String)=state.getBattlefield().count {
+                                    val entity=state.getEntity(it)!!
+                                    entity.get<ControllerComponent>()?.playerId==opponent &&
+                                        entity.get<CardComponent>()?.typeLine?.subtypes?.any { it.value==subtype }==true
+                                }
+                                var steps=0
+                                while(result.state.stack.isNotEmpty() || result.state.pendingDecision!=null) {
+                                    check(++steps<=256)
+                                    val next=when(val q=result.state.pendingDecision) {
+                                        null -> PassPriority(requireNotNull(result.state.priorityPlayerId))
+                                        is YesNoDecision -> SubmitDecision(q.playerId,YesNoResponse(q.id,false))
+                                        else -> error("Unexpected counter-comparison continuation: $q")
+                                    }
+                                    result=processor.process(result.state,next).result
+                                    check(result.outcome !is Outcome.Rejected)
+                                }
+                                modelCounterElfIncrease=countSubtype(result.state,"Elf")-countSubtype(initial,"Elf")
+                                modelCounterTreasureIncrease=countSubtype(result.state,"Treasure")-countSubtype(initial,"Treasure")
+                                if(branch=="baseline") {
+                                    check(action is CastSpell && modelCounterElfIncrease==0 && modelCounterTreasureIncrease==2)
+                                } else {
+                                    check(action is PassPriority && modelCounterElfIncrease>=4 && modelCounterTreasureIncrease==0)
+                                }
+                            }
+                            val entryReduction=entry["entryReductionProof"]?.jsonObject
+                            if(entryReduction!=null) {
+                                val spell=json.decodeFromJsonElement<EntityId>(entryReduction.getValue("spell"))
+                                val target=json.decodeFromJsonElement<EntityId>(entryReduction.getValue("target"))
+                                check(initial.stack.isEmpty() && target in initial.getBattlefield())
+                                if(branch=="replacement") {
+                                    check(action is CastSpell)
+                                    var steps=0
+                                    while(result.state.stack.isNotEmpty() || result.state.pendingDecision!=null) {
+                                        check(++steps<=128)
+                                        val next=when(val q=result.state.pendingDecision) {
+                                            null -> PassPriority(requireNotNull(result.state.priorityPlayerId))
+                                            is ChooseTargetsDecision -> {
+                                                check(q.context.sourceName=="Nowhere to Run")
+                                                val slot=q.targetRequirements.single()
+                                                check(slot.minTargets==1 && slot.maxTargets==1 && target in q.legalTargets.getValue(slot.index))
+                                                val response=TargetsResponse(q.id,mapOf(slot.index to listOf(target)))
+                                                resolutionChoices.add(json.encodeToJsonElement(DecisionResponse.serializer(),response))
+                                                SubmitDecision(q.playerId,response)
+                                            }
+                                            is YesNoDecision -> SubmitDecision(q.playerId,YesNoResponse(q.id,false))
+                                            else -> error("Unexpected entry removal continuation: $q")
+                                        }
+                                        result=processor.process(result.state,next).result
+                                        check(result.outcome !is Outcome.Rejected)
+                                    }
+                                    check(spell in result.state.getBattlefield() && target !in result.state.getBattlefield())
+                                } else {
+                                    check(action is PassPriority && target in result.state.getBattlefield())
+                                    check(spell in result.state.getZone(ZoneKey(action.playerId,Zone.HAND)))
+                                }
+                            }
+                            val duplicateReturn=entry["heldDuplicateSelfReturn"]
+                            if(duplicateReturn!=null) {
+                                val source=json.decodeFromJsonElement<EntityId>(duplicateReturn)
+                                check(source in initial.getBattlefield() && initial.stack.isNotEmpty())
+                                var steps=0
+                                while(result.state.stack.isNotEmpty() || result.state.pendingDecision!=null) {
+                                    check(++steps<=128)
+                                    val next=when(val q=result.state.pendingDecision) {
+                                        null -> PassPriority(requireNotNull(result.state.priorityPlayerId))
+                                        is YesNoDecision -> SubmitDecision(q.playerId,YesNoResponse(q.id,false))
+                                        else -> error("Unexpected self-return continuation: $q")
+                                    }
+                                    result=processor.process(result.state,next).result
+                                    check(result.outcome !is Outcome.Rejected)
+                                }
+                                check(source in result.state.getZone(ZoneKey(action.playerId,Zone.HAND)))
+                                fun tapped(state:GameState)=state.getBattlefield().count {
+                                    state.getEntity(it)!!.get<ControllerComponent>()?.playerId==action.playerId && state.getEntity(it)!!.has<TappedComponent>()
+                                }
+                                check(tapped(result.state)-tapped(initial)==if(branch=="baseline")1 else 0)
+                            }
                             val heldUtility=entry["heldUtilitySource"]
                             if(heldUtility!=null) {
                                 val source=json.decodeFromJsonElement<EntityId>(heldUtility)
@@ -339,6 +448,19 @@ object CompetencySavedStateProbe {
                                 if(auraScope!=null || positiveCounter!=null) {
                                     put("resolvedWithOpponentsPassing",true)
                                     put("continuationChoices",JsonArray(resolutionChoices))
+                                }
+                                if(playerDraw!=null)put("beneficialDrawTargetsCaster",branch=="replacement")
+                                if(strandedBoost!=null) {
+                                    put("noManaGenerated",true);put("cardAndLandPreserved",branch=="replacement");put("resolvedWithOpponentsPassing",true)
+                                }
+                                if(modelCounter!=null) {
+                                    put("opposingElfIncrease",requireNotNull(modelCounterElfIncrease));put("opposingTreasureIncrease",requireNotNull(modelCounterTreasureIncrease));put("resolvedWithOpponentsPassing",true)
+                                }
+                                if(entryReduction!=null) {
+                                    put("opposingEngineRemoved",branch=="replacement");put("resolvedWithOpponentsPassing",branch=="replacement");put("continuationChoices",JsonArray(resolutionChoices))
+                                }
+                                if(duplicateReturn!=null) {
+                                    put("samePermanentReturnedToHand",true);put("additionalManaSourceSpent",branch=="baseline");put("resolvedWithOpponentsPassing",true)
                                 }
                                 if(heldUtility!=null)put("utilitySourceUntapped",branch=="replacement")
                                 if(heldBounce!=null) {

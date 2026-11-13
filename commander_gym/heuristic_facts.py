@@ -34,8 +34,20 @@ class CardFacts:
                   'staticValue', 'repeatable', 'affectsOpponent', 'feeds', 'rewards', 'tribesRewarded'}
         fields |= {'freeOptionalDraws', 'drawSensitive'}
         for name, fact in document['cards'].items():
-            if not isinstance(name, str) or not name or not isinstance(fact, dict) or not fields <= set(fact) or set(fact) - fields - {'evasionSensitive', 'opponentEvasionRemovalAbilities', 'opponentAttackRequirementAbilities', 'positiveCounterTriggers', 'activatedAbilityCounts', 'attachedCombatLock', 'bounceTargetUntapAbilities', 'equipAbilities', 'selfDrawAbilities', 'simpleLifeGainTriggers', 'temporaryLandManaBoost', 'freeOptionalLibraryReorders', 'conditionalTappedEntry', 'simpleTargetUntapAbilities', 'friendlyStaticPermanent', 'developmentMana', 'manaOnlySelfUntapAbilities', 'fixedStatReductions', 'removesAttachedAbilities', 'untappedIfLandSubtypes', 'variableMana', 'commanderColorMana', 'painManaColors', 'colorIdentity', 'untappedPayLife'}:
+            if not isinstance(name, str) or not name or not isinstance(fact, dict) or not fields <= set(fact) or set(fact) - fields - {'plainPermanentCast', 'beneficialPlayerDrawCount', 'powerManaAbilities', 'positiveStatBoostAbilities', 'entryStatReduction', 'selfReturnToHandAbilities', 'evasionSensitive', 'opponentEvasionRemovalAbilities', 'opponentAttackRequirementAbilities', 'positiveCounterTriggers', 'activatedAbilityCounts', 'attachedCombatLock', 'bounceTargetUntapAbilities', 'equipAbilities', 'selfDrawAbilities', 'simpleLifeGainTriggers', 'temporaryLandManaBoost', 'freeOptionalLibraryReorders', 'conditionalTappedEntry', 'simpleTargetUntapAbilities', 'friendlyStaticPermanent', 'developmentMana', 'manaOnlySelfUntapAbilities', 'fixedStatReductions', 'removesAttachedAbilities', 'untappedIfLandSubtypes', 'variableMana', 'commanderColorMana', 'painManaColors', 'colorIdentity', 'untappedPayLife'}:
                 raise ValueError('invalid native card fact fields')
+            if 'plainPermanentCast' in fact and type(fact['plainPermanentCast']) is not bool:
+                raise ValueError('invalid plain permanent cast contract')
+            if 'beneficialPlayerDrawCount' in fact and (type(fact['beneficialPlayerDrawCount']) is not int or not 1<=fact['beneficialPlayerDrawCount']<=100):
+                raise ValueError('invalid native beneficial player draw count')
+            if 'entryStatReduction' in fact:
+                effect=fact['entryStatReduction']
+                if (not isinstance(effect,dict) or set(effect)!={'abilityId','power','toughness','suppressesHexproof','suppressesWard'}
+                    or not isinstance(effect['abilityId'],str) or not effect['abilityId']
+                    or type(effect['power']) is not int or effect['power']>0
+                    or type(effect['toughness']) is not int or effect['toughness']>=0
+                    or any(type(effect[k]) is not bool for k in ['suppressesHexproof','suppressesWard'])):
+                    raise ValueError('invalid native entry stat reduction')
             if 'evasionSensitive' in fact and type(fact['evasionSensitive']) is not bool:
                 raise ValueError('invalid native evasion sensitivity')
             if 'activatedAbilityCounts' in fact:
@@ -62,7 +74,7 @@ class CardFacts:
                 raise ValueError('invalid friendly static permanent contract')
             if 'developmentMana' in fact and (type(fact['developmentMana']) is not int or not 0<=fact['developmentMana']<=20):
                 raise ValueError('invalid native development mana')
-            for key in ['opponentEvasionRemovalAbilities','opponentAttackRequirementAbilities','bounceTargetUntapAbilities','manaOnlySelfUntapAbilities','simpleTargetUntapAbilities','selfDrawAbilities','equipAbilities']:
+            for key in ['powerManaAbilities','positiveStatBoostAbilities','selfReturnToHandAbilities','opponentEvasionRemovalAbilities','opponentAttackRequirementAbilities','bounceTargetUntapAbilities','manaOnlySelfUntapAbilities','simpleTargetUntapAbilities','selfDrawAbilities','equipAbilities']:
                 untaps=fact.get(key,[])
                 if not isinstance(untaps,list) or any(not isinstance(v,str) or not v for v in untaps):
                     label={'selfDrawAbilities':'self draw','equipAbilities':'equip'}.get(key,'untap')
@@ -128,7 +140,7 @@ class CardFacts:
 
 def heuristic_component_ref(facts=None):
     """Identity of defaults and reusable card mechanics, including optional public facts."""
-    names = ['heuristic_facts.py', 'heuristic_policy.py', 'default_policies.py', 'card_policies.py',
+    names = ['heuristic_facts.py', 'heuristic_policy.py', 'default_policies.py', 'card_policies.py', 'entry_removal_policy.py',
              'resource_policies.py', 'combat_policies.py', 'modal_policies.py', 'bounded_policy_fallback.py', 'lmstudio_pilot.py', 'pilot_composition.py', 'action_contracts.py', 'selection_contracts.py', 'records.py', 'convoke_plans.py', 'openai_responses_pilot.py', 'policy_action_bounds.py']
     payload = {'version': 2, 'factsSha256': facts.digest if facts else 'unavailable',
                'sources': {name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest() for name in names}}
