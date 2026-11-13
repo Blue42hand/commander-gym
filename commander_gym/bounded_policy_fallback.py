@@ -100,6 +100,11 @@ def enumerate_choices(o):
             if not affordable(a): continue
             if a['kind'] in {'DeclareAttackers', 'DeclareBlockers'}: return None
             payments=[{}];plain=a
+            if a.get('kind')=='CastSpellModal':
+                from .modal_policies import modal_plan_matches
+                plan=next((p for p in o.get('policyModalPlans',[]) if p.get('source')==a.get('action',{}).get('cardId')),None)
+                if plan is None or not modal_plan_matches(a,plan):return None
+                plain={**a,'modalEnumeration':None}
             if a.get('hasXCost') and not a.get('hasConvoke'):
                 low,high=a.get('minX'),a.get('maxAffordableX')
                 if (a.get('kind')!='CastSpell' or a.get('parameterSpec',{}).get('allowedFields',{}).get('xValue')!='INTEGER'
@@ -253,6 +258,9 @@ def _candidate_description(wire, o, facts=None):
             'paymentFacts':{k:[describe(t) for t in choice['params'][k]] for k in ['exiledCards','sacrificedPermanents','discardedCards','bouncedPermanents'] if k in choice['params']}, 'nativeAffordable':True,
             'manaCost':a.get('manaCostString'), 'costSlot':a.get('action',{}).get('declaredCostSlot')}
     if not result['paymentFacts']:result.pop('paymentFacts')
+    plan=next((p for p in o.get('policyModalPlans',[]) if p.get('source')==a.get('action',{}).get('cardId')),None)
+    if plan:
+        result['modePlan']=[{'effect':m['description'],**({'target':describe(m['target'])} if m.get('target') else {})} for m in plan['modes']]
     if a.get('kind','').startswith('Cast'):
         result['costBasis']='alternative cost' if a.get('action',{}).get('useAlternativeCost') or a.get('kind')=='CastWithAlternativeCost' else 'mana cost'
     elif a.get('kind')=='PlayLand':
@@ -360,6 +368,7 @@ def decision_context(o, *, frozen, policy_context, facts):
     view['battlefieldSummary']=summary
     if summarized: view['summarizedInactiveCards'] = summarized
     if o.get('policyUtilityPlans'): view['utilityPlans'] = o['policyUtilityPlans']
+    if o.get('policyModalPlans') and not frozen:view['modalPlans']=o['policyModalPlans']
     if o.get('nativePaymentError') is not None: view['nativePaymentError'] = clean(o['nativePaymentError'])
     return view
 

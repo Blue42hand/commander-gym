@@ -18,6 +18,9 @@ class SharedCardPolicies(ResourcePolicies):
         for a in offers:
             raw=a.get('action',{});ability=raw.get('abilityId');source=self._card(o,raw.get('sourceId'))
             if main and quiet and self._card(o,raw.get('cardId')).get('name') not in self.self_target_exceptions:
+                planned=getattr(self,'_modal_plans',{}).get(raw.get('cardId'))
+                if planned and planned.get('purpose')=='restore-disabled-commander':
+                    return self._action(a,'shared-modal-complete-commander-restoration-plan',{})
                 from .modal_policies import commander_rescue_mode
                 rescue=commander_rescue_mode(o,a,self.facts)
                 if rescue is not None:return self._action(a,'shared-modal-restore-disabled-commander',rescue)

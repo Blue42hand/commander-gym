@@ -196,6 +196,55 @@ def _schema_check(schema, value=None, *, validate=False):
                 _schema_check(schema["items"], item, validate=True)
 
 
+def _missing_required_paths(schema, value):
+    """Bounded diagnostics from the supplied schema, never echoed model text.
+
+    For unions, follow only a uniquely identified literal/enum branch. This is
+    advice for another model attempt; the existing validators remain authoritative.
+    """
+    missing=[];visited=0
+    def walk(node, item, path):
+        nonlocal visited
+        visited+=1
+        if visited>256 or len(missing)>=8 or not isinstance(node,dict):return
+        branches=node.get('anyOf')
+        if isinstance(branches,list):
+            selected=[]
+            for branch in branches:
+                literals={k:v for k,v in branch.get('properties',{}).items() if 'const' in v or 'enum' in v}
+                if not isinstance(item,dict) or not literals:continue
+                matches=True;seen=False
+                for key,rule in literals.items():
+                    if key not in item:continue
+                    seen=True;actual=item[key]
+                    options=[rule['const']] if 'const' in rule else rule['enum']
+                    if not any(type(actual) is type(option) and actual==option for option in options):matches=False
+                if seen and matches:selected.append(branch)
+            if len(selected)==1:walk(selected[0],item,path)
+        if node.get('type')=='object' and isinstance(item,dict):
+            for key in node.get('required',[]):
+                field=path+'.'+key if path else key
+                if key not in item and len(field)<=160 and len(missing)<8:missing.append(field)
+            for key,child in node.get('properties',{}).items():
+                if key in item:walk(child,item[key],path+'.'+key if path else key)
+        elif node.get('type')=='array' and isinstance(item,list):
+            for i,child in enumerate(item[:32]):walk(node.get('items',{}),child,f'{path}[{i}]')
+    walk(schema,value,'')
+    return missing
+
+
+def _retry_input(request, base_input, schema, parsed, max_prompt_bytes):
+    """Replace one ephemeral retry note; preserve all current context and bounds."""
+    generic='\nPrevious output was invalid. Return JSON matching the schema and current native offer.'
+    missing=_missing_required_paths(schema,parsed)
+    detail=(' Missing required fields: '+', '.join(missing)+'.') if missing else ''
+    # A diagnostic must never turn an otherwise valid request into a budget
+    # failure. Native context/choices are retained even at the configured ceiling.
+    for suffix in [generic+detail,generic,'']:
+        request['messages'][1]['content']=base_input+suffix
+        if len(json.dumps(request,ensure_ascii=False).encode())<=max_prompt_bytes:return
+
+
 def _unique_object(pairs):
     result = {}
     for key, value in pairs:
@@ -398,6 +447,7 @@ class LMStudioPilot:
                     for source, target in (("content", "outputText"), ("reasoning_content", "reasoningContent")):
                         if isinstance(message.get(source), str):
                             snapshot[target] = message[source]
+            parsed = None
             try:
                 remaining()  # Discard late or cancelled results before selection.
                 usage = response.get("usage")
@@ -421,7 +471,7 @@ class LMStudioPilot:
                 snapshot["validationError"] = str(exc)
                 if str(exc) in {"cancelled", "deadline_exceeded", "invalid_usage", "provider_context_budget_exceeded"}:
                     fail(str(exc))
-                request["messages"][1]["content"] = base_input + "\nPrevious output was invalid. Return JSON matching the schema and current native offer."
+                _retry_input(request, base_input, schema_format["schema"], parsed, self.config.max_prompt_bytes)
                 continue
             metadata = {**dict(choice.metadata), "provider": "lmstudio", "model": self.config.model,
                         "choiceWallTimeMs": round((monotonic() - started) * 1000, 3),

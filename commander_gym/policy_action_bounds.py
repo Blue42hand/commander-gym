@@ -214,6 +214,12 @@ def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=()
             a['validBlockTargets']={i:ts for i,ts in pairs.items() if ts}
             if isinstance(a.get('validBlockers'),list):a['validBlockers']=[i for i in a['validBlockers'] if i in a['validBlockTargets']]
         casting=a.get('kind','').startswith('Cast')
+        if a.get('kind')=='CastSpellModal' and name not in allow_self_targets:
+            from .modal_policies import modal_plan,value_modal_contract
+            plan=modal_plan(o,a,facts)
+            if plan:view.setdefault('policyModalPlans',[]).append(plan)
+            elif value_modal_contract(o,a) is not None:
+                restrictions.append({'action':a['semanticId'],'rule':'hold-reviewed-modal-without-useful-complete-plan'});continue
         simple_untap=(a.get('kind')=='ActivateAbility' and raw.get('abilityId') in facts.get(name).get('simpleTargetUntapAbilities',[])
             and a.get('requiresTargets') is True and a.get('minTargets')==a.get('targetCount')==1
             and isinstance(a.get('validTargets'),list)
