@@ -728,6 +728,14 @@ class BoundedPolicyFallback:
                          ' Stack cards retain chosen targets and current effect text. Check whether a pending response already answers a threat before spending another card on it.'
                          ' Verify the selected option matches the action described in your explanation.'
                          ' Apply these defaults before evaluating choices. All current offers and constraints are retained.')
+        # Include reminders only where the current native menu needs them.
+        descriptions=' '.join(a.get('description') or '' for a in o.get('legalActions',[])).lower()
+        if 'untap' in descriptions:
+            instructions += ' Untapping grants no extra attack and does not remove an attacker from combat. Spend it for a concrete mana, ability, attack or defense benefit.'
+        if 'hexproof' in descriptions or 'shroud' in descriptions:
+            instructions += ' Removing hexproof or shroud needs a follow-up that targets the affected creature.'
+        if (o.get('pendingDecision') or {}).get('prompt')=='You may draw a card':
+            instructions += ' Hand-size limits apply during cleanup, not while drawing cards.'
         choice = self.model._choose(o, response_format=fmt, model_view=view,
                                    instructions_override=instructions, output_decoder=decode)
         request_sizes = [len(json.dumps(a['request'],ensure_ascii=False).encode())

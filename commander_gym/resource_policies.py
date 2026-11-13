@@ -70,11 +70,55 @@ class ResourcePolicies:
                     ids=sorted(x[0] for x in selected)
                     plans.append(((sum(x[3] for x in selected),size,len(supplied)-cost[0],ids),ids))
         if not plans:return None
+        selected_ids=min(plans)[1]
+        # Native selected-sacrifice planning deliberately cannot prove a hidden
+        # battlefield. Activate an offered source explicitly instead; never
+        # inspect the hidden identity or weaken that native proof boundary.
+        hidden_board=any(self._card(o,i).get('isFaceDown') is True for i in ids_in(o['state'],'Battlefield'))
+        selected=[row for row in sources if row[0] in selected_ids]
+        if hidden_board and any(row[3] for row in selected):
+            namespace=tuple(v.get('playerId') for v in o['state'].get('players',[]))
+            if not namespace or any(not isinstance(v,str) for v in namespace):return None
+            for entity,choices,amount,_ in selected:
+                source_actions=[a for a in o.get('legalActions',[]) if a.get('kind')=='ActivateAbility'
+                    and a.get('isManaAbility') is True and affordable(a) and a.get('action',{}).get('sourceId')==entity]
+                if len(source_actions)!=1:continue
+                others=units+[cs for e,cs,n,_ in selected if e!=entity for _ in range(n)]
+                for color in sorted(choices):
+                    if not self._payable(cost,others+[{color}]*amount):continue
+                    native_color={v:k for k,v in colors.items()}.get(color)
+                    for offer in source_actions:
+                        raw=offer.get('action',{})
+                        if (offer.get('kind')!='ActivateAbility' or offer.get('isManaAbility') is not True
+                            or not affordable(offer) or raw.get('sourceId')!=entity
+                            or offer.get('requiresTargets') is not False or offer.get('hasXCost') is not False
+                            or offer.get('additionalCostInfo') is not None):continue
+                        if offer.get('requiresManaColorChoice') is True:
+                            if native_color is None:continue
+                            offered_colors=offer.get('availableManaColors')
+                            if offered_colors is not None and native_color not in offered_colors:continue
+                            self._manual_mana_color=(namespace,o['agentToAct'],o['state'].get('turnNumber'),
+                                o['state'].get('currentStep'),entity,native_color,dict(pool))
+                        elif len(choices)!=1:continue
+                        return self._action(offer,'default-manual-offered-mana-payment')
+            return None
         return self._decision(p,'ManaSourcesSelectedResponse','default-complete-offered-mana-payment',
-            autoPay=False,declined=False,selectedSources=min(plans)[1],waterbendPermanents=[])
+            autoPay=False,declined=False,selectedSources=selected_ids,waterbendPermanents=[])
 
     def _resource_pending(self,o,p):
         rt=p.get('responseSpec',{}).get('responseType');ctx=p.get('context',{});source=ctx.get('sourceName')
+        intent=getattr(self,'_manual_mana_color',None)
+        self._manual_mana_color=None
+        if intent is not None:
+            namespace,actor,turn,step,entity,color,pool=intent
+            current_pool=next((v.get('manaPool',{}) for v in o['state'].get('players',[]) if v['playerId']==o['agentToAct']),{})
+            if (rt=='ColorChosenResponse' and p.get('kind')=='ChooseColorDecision'
+                and p.get('playerId')==actor==o['agentToAct'] and tuple(v.get('playerId') for v in o['state'].get('players',[]))==namespace
+                and o['state'].get('turnNumber')==turn and o['state'].get('currentStep')==step
+                and p.get('prompt')=='Choose a color of mana to add' and p.get('maxColors')==1
+                and ctx.get('phase')=='RESOLUTION' and ctx.get('sourceId')==entity
+                and color in (p.get('availableColors') or []) and current_pool==pool):
+                return self._decision(p,rt,'default-complete-manual-mana-color',color=color)
         if rt=='ManaSourcesSelectedResponse' and (p.get('canAutoPayNow') is True or self._floating_payable(o,p.get('requiredCost',''))):
             return self._decision(p,rt,'default-fund-native-mana-request',autoPay=p.get('canAutoPayNow') is not False,declined=False,selectedSources=[],waterbendPermanents=[])
         if rt=='ManaSourcesSelectedResponse':

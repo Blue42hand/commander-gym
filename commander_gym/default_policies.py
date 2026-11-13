@@ -82,6 +82,7 @@ class DefaultPolicySubsystem(SharedCardPolicies, MaskedHeuristicSubsystem):
                 return self._action(declaration,'default-cancel-unfunded-attack',{'attackers':{}})
         from .modal_policies import remember_modal_plans
         remember_modal_plans(self,o)
+        if o.get('pendingDecision') is None:self._manual_mana_color=None
         if 'mulligan' in o.get('state', {}): return self._opening(o)
         if o.get('pendingDecision') is not None: return self._pending(o, o['pendingDecision'])
         shared = self._card_actions(o)

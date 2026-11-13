@@ -37,6 +37,16 @@ object CompetencySavedStateProbe {
                     add(buildJsonObject {
                         put("callbackSequence",entry.getValue("sequence"))
                         entry["replacementLabel"]?.let { put("replacementLabel",it) }
+                        if(entry["diagnoseSelected"]?.jsonPrimitive?.boolean==true) {
+                            val frame=(initial.continuationStack.last() as Suspension).answer as ManaActionPaymentContinuation
+                            val actor=frame.action.playerId
+                            val plan=services.manaSolver.planSelectedActivations(initial,actor,frame.cost,
+                                frame.paymentContext,setOf(EntityId("e482")))
+                            put("plannerResult",plan.javaClass.simpleName)
+                            if(plan is com.wingedsheep.engine.mechanics.mana.ScopedManaPlanResult.Unknown)
+                                put("plannerLimits",plan.reasons.toString())
+                        }
+
                         entry["baselineIsOfferedComparison"]?.let { put("baselineIsOfferedComparison",it) }
                         for (branch in if(entry["replacementOnly"]?.jsonPrimitive?.boolean==true) listOf("replacement") else listOf("baseline","replacement")) {
                             val choice=entry.getValue(branch).jsonObject
@@ -79,6 +89,43 @@ object CompetencySavedStateProbe {
                                 result=processor.process(result.state,following).result
                                 check(result.outcome is Outcome.Done && result.state.pendingDecision==null)
                                 check(following.cardId in result.state.stack)
+                            }
+                            if(branch=="replacement" && entry["completeManualPayment"]?.jsonPrimitive?.boolean==true) {
+                                val payment=entry.getValue("manualPayment").jsonObject
+                                val expectedColor=json.decodeFromJsonElement<com.wingedsheep.sdk.core.Color>(payment.getValue("color"))
+                                val expectedSpell=json.decodeFromJsonElement<EntityId>(payment.getValue("spell"))
+                                val spentSource=json.decodeFromJsonElement<EntityId>(payment.getValue("spentSource"))
+                                val preservedSource=json.decodeFromJsonElement<EntityId>(payment.getValue("preservedSource"))
+                                check(result.outcome is Outcome.Paused)
+                                fun maskedObservation():JsonElement {
+                                    val view=com.wingedsheep.engine.view.ClientStateTransformer(services.cardRegistry,
+                                        predicateEvaluator=services.predicateEvaluator).transform(result.state,action.playerId)
+                                    val offers=if(com.wingedsheep.engine.mechanics.mana.ManaPaymentWindow.openFor(result.state,action.playerId)!=null)
+                                        services.legalActionEnumerator.enumerateManaAbilities(result.state,action.playerId)
+                                        else if(result.state.priorityPlayerId==action.playerId)services.legalActionEnumerator.enumerate(result.state,action.playerId)
+                                        else emptyList()
+                                    val legal=com.wingedsheep.engine.view.LegalActionEnricher(services.manaSolver,services.cardRegistry).enrich(offers,result.state,action.playerId)
+                                    val evidence=com.wingedsheep.gameserver.recording.actionCallbackEvidence(view,legal,
+                                        result.state.pendingDecision,action.playerId.value,emptyList())
+                                    return Json.parseToJsonElement(evidence.observationBody)
+                                }
+                                if(result.state.pendingDecision is ChooseColorDecision) {
+                                    put("manualColorObservation",maskedObservation())
+                                    val colorQuestion=result.state.pendingDecision as ChooseColorDecision
+                                    check(colorQuestion.availableColors.contains(expectedColor))
+                                    result=processor.process(result.state,SubmitDecision(action.playerId,
+                                        json.decodeFromJsonElement<DecisionResponse>(payment.getValue("colorResponse")))).result
+                                }
+                                put("fundedPaymentObservation",maskedObservation())
+                                val question=result.state.pendingDecision as SelectManaSourcesDecision
+                                check(question.canAutoPayNow==true)
+                                result=processor.process(result.state,SubmitDecision(action.playerId,
+                                    json.decodeFromJsonElement<DecisionResponse>(payment.getValue("fundedResponse")))).result
+                                check(result.outcome is Outcome.Done && result.state.pendingDecision==null)
+                                check(expectedSpell in result.state.stack)
+                                check(spentSource !in result.state.getBattlefield())
+                                check(preservedSource in result.state.getBattlefield())
+                                put("completedManualPayment",true)
                             }
                             val directManaBeforeSacrifice=entry["expectDirectManaBeforeSacrifice"]?.jsonPrimitive?.boolean==true
                             if(directManaBeforeSacrifice) {
