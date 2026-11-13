@@ -34,8 +34,23 @@ class CardFacts:
                   'staticValue', 'repeatable', 'affectsOpponent', 'feeds', 'rewards', 'tribesRewarded'}
         fields |= {'freeOptionalDraws', 'drawSensitive'}
         for name, fact in document['cards'].items():
-            if not isinstance(name, str) or not name or not isinstance(fact, dict) or not fields <= set(fact) or set(fact) - fields - {'equipAbilities', 'selfDrawAbilities', 'simpleLifeGainTriggers', 'temporaryLandManaBoost', 'freeOptionalLibraryReorders', 'conditionalTappedEntry', 'simpleTargetUntapAbilities', 'friendlyStaticPermanent', 'developmentMana', 'manaOnlySelfUntapAbilities', 'fixedStatReductions', 'removesAttachedAbilities', 'untappedIfLandSubtypes', 'variableMana', 'commanderColorMana', 'painManaColors', 'colorIdentity', 'untappedPayLife'}:
+            if not isinstance(name, str) or not name or not isinstance(fact, dict) or not fields <= set(fact) or set(fact) - fields - {'evasionSensitive', 'opponentEvasionRemovalAbilities', 'opponentAttackRequirementAbilities', 'positiveCounterTriggers', 'activatedAbilityCounts', 'attachedCombatLock', 'bounceTargetUntapAbilities', 'equipAbilities', 'selfDrawAbilities', 'simpleLifeGainTriggers', 'temporaryLandManaBoost', 'freeOptionalLibraryReorders', 'conditionalTappedEntry', 'simpleTargetUntapAbilities', 'friendlyStaticPermanent', 'developmentMana', 'manaOnlySelfUntapAbilities', 'fixedStatReductions', 'removesAttachedAbilities', 'untappedIfLandSubtypes', 'variableMana', 'commanderColorMana', 'painManaColors', 'colorIdentity', 'untappedPayLife'}:
                 raise ValueError('invalid native card fact fields')
+            if 'evasionSensitive' in fact and type(fact['evasionSensitive']) is not bool:
+                raise ValueError('invalid native evasion sensitivity')
+            if 'activatedAbilityCounts' in fact:
+                counts=fact['activatedAbilityCounts']
+                if (not isinstance(counts,dict) or set(counts)!={'mana','nonMana'}
+                    or any(type(v) is not int or not 0<=v<=100 for v in counts.values())):
+                    raise ValueError('invalid native activated ability counts')
+            if 'attachedCombatLock' in fact:
+                lock=fact['attachedCombatLock']
+                if (not isinstance(lock,dict) or set(lock)!={'activatedAbilities'} or not isinstance(lock['activatedAbilities'],str)
+                    or lock['activatedAbilities'] not in {'none','all','nonMana'}):
+                    raise ValueError('invalid native attached combat lock')
+            counters=fact.get('positiveCounterTriggers',{})
+            if not isinstance(counters,dict) or any(not isinstance(k,str) or not k or type(v) is not int or not 1<=v<=10 for k,v in counters.items()):
+                raise ValueError('invalid native positive counter contract')
             boost=fact.get('temporaryLandManaBoost')
             if boost is not None and (not isinstance(boost,dict) or set(boost)!={'subtype','color','amount'}
                 or boost['subtype'] not in {'Plains','Island','Swamp','Mountain','Forest'}
@@ -47,7 +62,7 @@ class CardFacts:
                 raise ValueError('invalid friendly static permanent contract')
             if 'developmentMana' in fact and (type(fact['developmentMana']) is not int or not 0<=fact['developmentMana']<=20):
                 raise ValueError('invalid native development mana')
-            for key in ['manaOnlySelfUntapAbilities','simpleTargetUntapAbilities','selfDrawAbilities','equipAbilities']:
+            for key in ['opponentEvasionRemovalAbilities','opponentAttackRequirementAbilities','bounceTargetUntapAbilities','manaOnlySelfUntapAbilities','simpleTargetUntapAbilities','selfDrawAbilities','equipAbilities']:
                 untaps=fact.get(key,[])
                 if not isinstance(untaps,list) or any(not isinstance(v,str) or not v for v in untaps):
                     label={'selfDrawAbilities':'self draw','equipAbilities':'equip'}.get(key,'untap')

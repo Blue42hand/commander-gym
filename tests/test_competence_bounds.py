@@ -141,7 +141,8 @@ class RecordedCompetenceTests(unittest.TestCase):
         with self.assertRaises(OpenAIResponsesPilotError):_validate_native_action_params({'bouncedPermanents':['e0']},a)
         _validate_native_action_params({'bouncedPermanents':['e34'],'targets':['e0']},a)
         b,r=bounded_observation(o,self.facts)
-        self.assertFalse(any(x['semanticId']==a['semanticId'] for x in b['legalActions']))
+        # Legacy facts do not certify the bounce/untap family; keep inference.
+        self.assertTrue(any(x['semanticId']==a['semanticId'] for x in b['legalActions']))
         o=deepcopy(o);zone(o,'Stack','enemy',threat={'name':'Unknown threat'})
         b,_=bounded_observation(o,self.facts)
         self.assertTrue(any(x['semanticId']==a['semanticId'] for x in b['legalActions']))
@@ -248,16 +249,20 @@ class RecordedImprovementTests(unittest.TestCase):
         o=decision('ChooseOptionDecision','OptionChosenResponse',{'optionIndex':'INTEGER'},options=['Human','Elf','Faerie'],prompt='Choose creature type',context={'sourceName':'Renewed Solidarity'})
         self.assertEqual(EngineDeckPolicy(self.facts,'alela').try_choose(o).choice.response['optionIndex'],2)
 
-    def test_original_overflow_fits_with_explanations_and_numbered_choices(self):
+    def test_original_overflow_keeps_numbered_choices_above_advisory_target(self):
         from test_lmstudio import discovery
         from test_engine_deck_policy import expand
         o=self.state('overflow');before=deepcopy(o)
         models=discovery();models['models'][0]['loaded_instances'][0]['config']['context_length']=131072
         summary={'goal':'Contract test','keyFacts':[],'evidenceIds':[],'uncertainty':'high','missingInformation':[]}
         t=FakeTransport(completion(json.dumps({'decision':{'option':0},'explanation':summary})),models=models)
-        BoundedPolicyFallback(config(context_window=131072,max_prompt_bytes=32768,decision_explanations=True),t,facts=self.facts).choose_with_policy_context(o,[{'metadata':{'policyLayers':{'status':'deferred'}}}])
+        result=BoundedPolicyFallback(config(context_window=131072,max_prompt_bytes=122880,decision_explanations=True),t,facts=self.facts).choose_with_policy_context(o,[{'metadata':{'policyLayers':{'status':'deferred'}}}])
         req=t.calls[1][1]
-        self.assertLess(len(json.dumps(req,ensure_ascii=False).encode()),32768)
+        # Legacy facts do not certify partial Aura suppression. Preserve the
+        # larger native target domain instead of pruning it to fit a soft goal.
+        size=len(json.dumps(req,ensure_ascii=False).encode())
+        self.assertGreater(size,32768);self.assertLess(size,122880)
+        self.assertTrue(result.metadata['boundedFallback']['promptTargetExceeded'])
         choices=expand(json.loads(req['messages'][1]['content']))['choices']
         self.assertEqual([c['option'] for c in choices],list(range(len(choices))))
         self.assertEqual(o,before)

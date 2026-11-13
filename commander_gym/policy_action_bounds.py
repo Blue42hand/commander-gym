@@ -55,6 +55,52 @@ def ranked_removal_targets(o,targets,facts,*,neutralize=False):
     return [t for t in ranked if score(t)>=score(ranked[0])-3][:3] if ranked else []
 
 
+def positive_counter_decision(p,facts):
+    if not isinstance(p,dict):return None
+    context=p.get('context') or {};rows=p.get('targetRequirements')
+    hint=context.get('effectHint')
+    normalize=lambda s:s.strip().removesuffix('.').casefold() if isinstance(s,str) else None
+    matches=[count for text,count in facts.get(context.get('sourceName')).get('positiveCounterTriggers',{}).items()
+             if normalize(text)==normalize(hint)]
+    constraints=['sameOwner','sameNumericProperty','selectionGroups','exclusiveGroups','distinctCategories','totalCap','differentNames','differentControllers','mustDifferFromEarlier']
+    if (len(matches)==1 and p.get('responseSpec',{}).get('responseType') in {'TargetsResponse','TargetsChosenResponse'}
+        and isinstance(rows,list) and len(rows)==1 and rows[0].get('minTargets')==rows[0].get('maxTargets')==1
+        and not any(rows[0].get(k) for k in constraints) and isinstance(p.get('legalTargets'),dict)):
+        return str(rows[0]['index'])
+    return None
+
+
+def combat_lock_effects(contract):
+    return {'preventsAttackingAndBlocking':True,'preventsActivatedAbilities':contract['activatedAbilities'],
+            'keepsTriggeredAndStaticAbilities':True}
+
+
+def ranked_combat_lock_targets(o,targets,facts,contract):
+    """Score functions this exact Aura stops; a trigger engine keeps its triggers."""
+    state=o['state'];cards=state.get('cards',{})
+    if (o.get('nativePaymentError') is not None or state.get('activePlayerId')!=o['agentToAct']
+        or state.get('currentStep') not in {'PRECOMBAT_MAIN','POSTCOMBAT_MAIN'}
+        or state.get('combat') or ids_in(state,'Stack')):return targets
+    if any(type(cards.get(t,{}).get(k)) is not int for t in targets for k in ['power','toughness']):return targets
+    if any(cards[t].get('activeEffects') or 'activatedAbilityCounts' not in facts.get(cards[t].get('name')) for t in targets):return targets
+    def score(t):
+        c=cards[t];f=facts.get(c.get('name'));attached=[facts.get(cards.get(i,{}).get('name')) for i in c.get('attachments',[])]
+        combat_disabled=any(a.get('attachedCombatLock') for a in attached)
+        power=max(0,c['power']);body=power+max(0,c['toughness'])
+        value=0 if combat_disabled else body+(2*power if c.get('isCommander') else 0)
+        if abilities_removed(o,c,facts):return value
+        blocked={a['attachedCombatLock']['activatedAbilities'] for a in attached if a.get('attachedCombatLock')}
+        counts=f['activatedAbilityCounts'];scope=contract['activatedAbilities']
+        if scope in {'all','nonMana'} and counts['nonMana'] and not blocked & {'all','nonMana'}:
+            value+=max(8,f.get('staticValue',0))
+        if scope=='all' and counts['mana'] and 'all' not in blocked:
+            value+=15 if f.get('variableMana') else 4*max(1,f.get('developmentMana',1))
+        return value
+    ordered=sorted(targets,key=lambda t:(-score(t),t))
+    if not ordered or score(ordered[0])<=0:return targets
+    return [t for t in ordered if score(t)>=score(ordered[0])-3][:3]
+
+
 def reviewed_exile_decision(p):
     rows=p.get('targetRequirements')
     constraints=['sameOwner','sameNumericProperty','selectionGroups','exclusiveGroups','distinctCategories','totalCap','differentNames','differentControllers','mustDifferFromEarlier']
@@ -117,6 +163,52 @@ def own_bounce_rescue(o,target,facts):
         if threat.get('controllerId') in (None,o['agentToAct']) or facts.get(threat.get('name')).get('spellPolarity')!=['HARMFUL']:continue
         if any(t.get('entityId')==target and t.get('type')=='Permanent' for t in threat.get('targets',[])):return True
     return False
+
+
+def bounce_commander_rescue(o, candidates, facts):
+    cards=o['state'].get('cards',{});me=o['agentToAct']
+    for target in candidates:
+        card=cards.get(target,{})
+        if card.get('controllerId')!=me or not card.get('isCommander'):continue
+        if abilities_removed(o,card,facts) or any(facts.get(cards.get(a,{}).get('name')).get('attachedCombatLock') for a in card.get('attachments',[])):
+            return True
+    return False
+
+
+def plain_token_has_no_evasion_grant(card):
+    # Native public token characteristics suffice for plain bodies. Copies,
+    # hidden faces, text-bearing tokens and unrecognized keyword mechanics defer.
+    ordinary={'FLYING','REACH','VIGILANCE','HASTE','TRAMPLE','MENACE','LIFELINK',
+              'DEATHTOUCH','FIRST_STRIKE','DOUBLE_STRIKE','DEFENDER','INDESTRUCTIBLE'}
+    return (card.get('isToken') is True and card.get('isFaceDown') is False
+            and card.get('oracleText')=='' and card.get('abilityFlags')==[]
+            and card.get('cardFaces')==[] and card.get('isDoubleFaced') is False
+            and card.get('copyOf') is None and not card.get('activeEffects')
+            and isinstance(card.get('keywords'),list) and set(card['keywords'])<=ordinary)
+
+
+def evasion_removal_has_no_subject(o,facts):
+    """Only certify current no-op utility when public state rules out new evasion."""
+    state=o['state'];cards=state.get('cards',{});me=o['agentToAct']
+    if any(p.get('activeEffects') for p in state.get('players',[])):return False
+    for entity in ids_in(state,'Battlefield'):
+        card=cards.get(entity,{})
+        if card.get('activeEffects'):return False
+        sensitivity=facts.get(card.get('name')).get('evasionSensitive')
+        if sensitivity is not False and not (sensitivity is None and plain_token_has_no_evasion_grant(card)):return False
+        if 'CREATURE' not in card.get('cardTypes',[]) or card.get('controllerId')==me:continue
+        if card.get('controllerId') is None or not isinstance(card.get('keywords'),list):return False
+        if not isinstance(card.get('hexproofFromColors'),list):return False
+        if any(type(card.get(k)) is not bool for k in ['hexproofFromMonocolored','hexproofFromMulticolored']):return False
+        if ({'HEXPROOF','SHROUD'} & set(card['keywords']) or card['hexproofFromColors']
+            or card['hexproofFromMonocolored'] or card['hexproofFromMulticolored']):return False
+    for entity in ids_in(state,'Stack'):
+        card=cards.get(entity,{});identity=card.get('abilityIdentity') or {};definition=identity.get('cardDefinitionId')
+        if card.get('activeEffects') or not isinstance(definition,str):return False
+        contract=facts.get(definition.split('#',1)[0]);ability=identity.get('abilityId')
+        harmless=set(contract.get('bounceTargetUntapAbilities',[])+contract.get('simpleTargetUntapAbilities',[])+contract.get('manaOnlySelfUntapAbilities',[])) | set(contract.get('simpleLifeGainTriggers',{}))
+        if ability not in harmless:return False
+    return True
 
 
 def tutor_payoff_score(name, facts, preferred_engines=()):
@@ -274,6 +366,17 @@ def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=()
             pairs={i:[t for t in ts if 'MENACE' not in cards.get(t,{}).get('keywords',[])] for i,ts in a['validBlockTargets'].items()}
             a['validBlockTargets']={i:ts for i,ts in pairs.items() if ts}
             if isinstance(a.get('validBlockers'),list):a['validBlockers']=[i for i in a['validBlockers'] if i in a['validBlockTargets']]
+        if (a.get('kind')=='ActivateAbility' and can_pass and not o.get('pendingDecision') and o.get('nativePaymentError') is None
+            and name not in reaction_timing_exceptions and not cards.get(raw.get('sourceId'),{}).get('activeEffects')):
+            if (raw.get('abilityId') in facts.get(name).get('opponentAttackRequirementAbilities',[])
+                and state.get('activePlayerId')==me
+                and not any(p.get('teamSharedTurns') or p.get('teamSharedLife') for p in state.get('players',[]))):
+                restrictions.append({'action':a['semanticId'],'rule':'opponent-attack-requirement-needs-opponent-turn'})
+                held_autopay |= raw.get('paymentStrategy',{}).get('type')=='AutoPay';continue
+            if (raw.get('abilityId') in facts.get(name).get('opponentEvasionRemovalAbilities',[])
+                and evasion_removal_has_no_subject(o,facts)):
+                restrictions.append({'action':a['semanticId'],'rule':'evasion-removal-needs-protected-subject'})
+                held_autopay |= raw.get('paymentStrategy',{}).get('type')=='AutoPay';continue
         casting=a.get('kind','').startswith('Cast')
         if (not o.get('pendingDecision') and o.get('nativePaymentError') is None and can_pass
             and a.get('kind')=='ActivateAbility' and raw.get('abilityId') in facts.get(name).get('equipAbilities',[])
@@ -419,7 +522,16 @@ def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=()
                 a['validTargets']=targets
                 if not targets:restrictions.append({'action':a['semanticId'],'rule':'removal-without-useful-target'});continue
             if targets and all(t in ids_in(state,'Battlefield') and cards.get(t,{}).get('controllerId') not in (None,me) for t in targets):
-                a['validTargets']=ranked_removal_targets(o,targets,facts,neutralize='NEUTRALIZE' in facts.get(name).get('tags',[]) or name in NEUTRALIZING_AURAS)
+                lock=facts.get(name).get('attachedCombatLock')
+                if lock:
+                    a['validTargets']=ranked_combat_lock_targets(o,targets,facts,lock)
+                elif (name in NEUTRALIZING_AURAS or 'NEUTRALIZE' in facts.get(name).get('tags',[])) and not (
+                    facts.get(name).get('removesAttachedAbilities') or name in ABILITY_REMOVING_AURAS):
+                    # An uncovered suppression effect is not full removal. Keep
+                    # its current native enemy domain for inference.
+                    pass
+                else:
+                    a['validTargets']=ranked_removal_targets(o,targets,facts,neutralize='NEUTRALIZE' in facts.get(name).get('tags',[]) or name in NEUTRALIZING_AURAS)
                 if a['validTargets']!=targets:restrictions.append({'action':a['semanticId'],'rule':'reviewed-removal-threat-shortlist'})
         if name in {"Green Sun's Zenith",'Chord of Calling'} and a.get('hasXCost') and type(a.get('maxAffordableX')) is int:
             deck = o.get('knownDeck', {}).get('cards', {})
@@ -449,14 +561,36 @@ def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=()
                 plans.append({'action':a['semanticId'],'source':name,'goal':'Search for a missing draw engine' if engines else 'Search for enchantment development','preferredCard':preferred,'binding':'Recompute against native search options; no queued entity IDs.'})
             elif deck and all(facts.get(n) for n in deck):
                 restrictions.append({'action':a['semanticId'],'rule':'tutor-without-known-payoff'}); continue
-        if name == 'Wirewood Symbiote' and raw.get('abilityId') == 'Wirewood Symbiote:1':
-            # Quiet main-phase untap with no tapped target cannot gain mana or
-            # rescue from a stack object. Other windows remain uncertain.
-            s = o.get('state', {})
-            if s.get('currentStep') in {'PRECOMBAT_MAIN','POSTCOMBAT_MAIN'} and s.get('activePlayerId') == me and not ids_in(s,'Stack'):
-                targets = a.get('validTargets')
-                if isinstance(targets,list) and targets and all(t in cards and not cards[t].get('isTapped') for t in targets):
-                    restrictions.append({'action':a['semanticId'],'rule':'untap-without-tapped-target'}); continue
+        cost=a.get('additionalCostInfo') or {}
+        if (a.get('kind')=='ActivateAbility' and raw.get('abilityId') in facts.get(name).get('bounceTargetUntapAbilities',[])
+            and quiet and can_pass and not o.get('pendingDecision') and o.get('nativePaymentError') is None
+            and state.get('currentStep') in {'UNTAP','UPKEEP','DRAW','PRECOMBAT_MAIN','POSTCOMBAT_MAIN','END','END_STEP','CLEANUP'}
+            and not state.get('combat')
+            and name not in allow_self_targets and name not in reaction_timing_exceptions
+            and not cards.get(raw.get('sourceId'),{}).get('activeEffects') and not raw.get('costPayment')
+            and a.get('requiresTargets') is True and a.get('minTargets')==a.get('targetCount')==1
+            and a.get('targetRequirements') is None and isinstance(a.get('validTargets'),list)
+            and cost.get('costType')=='BouncePermanent' and cost.get('bounceCount')==1
+            and not cost.get('alsoRequired') and not cost.get('costAfterSacrifice')
+            and isinstance(cost.get('validBounceTargets'),list)
+            and not bounce_commander_rescue(o,cost['validBounceTargets'],facts)):
+            # Pure untap cannot improve an already untapped creature. Preserve
+            # unknown status/ownership and defer rebuy plans through deck overrides.
+            targets=[t for t in a['validTargets'] if cards.get(t,{}).get('isTapped') is not False
+                     and cards.get(t,{}).get('controllerId') in (None,me)]
+            if targets!=a['validTargets']:
+                restrictions.append({'action':a['semanticId'],'rule':'bounce-untap-needs-useful-target'})
+                a['validTargets']=targets
+            if not targets:
+                held_autopay |= raw.get('paymentStrategy',{}).get('type')=='AutoPay';continue
+            # With one remaining target, paying by returning it removes the
+            # very object the ability needs. Multiple-target tradeoffs retain
+            # their native cost domain for inference.
+            if len(targets)==1 and targets[0] in cost['validBounceTargets']:
+                cost['validBounceTargets']=[t for t in cost['validBounceTargets'] if t!=targets[0]]
+                restrictions.append({'action':a['semanticId'],'rule':'preserve-sole-untap-target-during-bounce-payment'})
+                if not cost['validBounceTargets']:
+                    held_autopay |= raw.get('paymentStrategy',{}).get('type')=='AutoPay';continue
         retained.append(a)
     # Native AutoPay already funds an affordable cast/cycle. Keep explicit mana
     # decisions and menus without such a line intact (including enabling mana).
@@ -485,6 +619,14 @@ def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=()
         if isinstance(targets,list) and targets and all(t in ids_in(state,'Battlefield') and cards.get(t,{}).get('controllerId') not in (None,me) for t in targets):
             pending['legalTargets'][slot]=ranked_removal_targets(o,targets,facts)
             restrictions.append({'rule':'reviewed-etb-exile-threat-shortlist'})
+    positive_slot=positive_counter_decision(pending,facts)
+    if positive_slot is not None and o.get('nativePaymentError') is None and pending.get('context',{}).get('sourceName') not in allow_self_targets:
+        targets=pending['legalTargets'].get(positive_slot)
+        if isinstance(targets,list) and any(cards.get(t,{}).get('controllerId')==me and 'CREATURE' in cards[t].get('cardTypes',[]) for t in targets):
+            filtered=[t for t in targets if cards.get(t,{}).get('controllerId') in (None,me)]
+            if filtered!=targets:
+                pending['legalTargets'][positive_slot]=filtered
+                restrictions.append({'rule':'positive-counter-on-own-creature'})
     reduction=fixed_stat_reduction(pending,facts) if isinstance(pending,dict) else None
     if reduction and pending['context']['sourceName'] not in allow_self_targets:
         slot=str(pending['targetRequirements'][0]['index']);targets=pending['legalTargets'].get(slot)

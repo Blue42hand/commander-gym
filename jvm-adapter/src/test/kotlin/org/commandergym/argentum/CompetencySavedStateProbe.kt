@@ -8,6 +8,8 @@ import com.wingedsheep.engine.state.components.battlefield.TappedComponent
 import com.wingedsheep.engine.state.components.battlefield.AttachedToComponent
 import com.wingedsheep.engine.state.components.player.ManaPoolComponent
 import com.wingedsheep.engine.mechanics.layers.StateProjector
+import com.wingedsheep.engine.state.components.battlefield.CountersComponent
+import com.wingedsheep.sdk.core.CounterType
 import com.wingedsheep.sdk.core.Zone
 import com.wingedsheep.sdk.model.EntityId
 import com.wingedsheep.gameserver.config.GameBeansConfig
@@ -109,6 +111,112 @@ object CompetencySavedStateProbe {
                                 else check(changed==0 && beforePool==afterPool)
                             }
                             val heldCard=entry["heldCard"]
+                            val auraScope=entry["auraScopeComparison"]?.jsonObject
+                            val positiveCounter=entry["positiveCounterComparison"]?.jsonObject
+                            val resolutionChoices=mutableListOf<JsonElement>()
+                            if(auraScope!=null || positiveCounter!=null) {
+                                val ownCounterTarget=json.decodeFromJsonElement<EntityId>(entry.getValue("positiveTriggerTarget"))
+                                var steps=0
+                                while(result.state.stack.isNotEmpty() || result.state.pendingDecision!=null) {
+                                    check(++steps<=128)
+                                    val question=result.state.pendingDecision
+                                    val next=when(question) {
+                                        null -> PassPriority(requireNotNull(result.state.priorityPlayerId))
+                                        is ChooseTargetsDecision -> {
+                                            check(question.context.sourceName=="Generous Visitor")
+                                            val slot=question.targetRequirements.single()
+                                            check(slot.minTargets==1 && slot.maxTargets==1 && ownCounterTarget in question.legalTargets.getValue(slot.index))
+                                            val response=TargetsResponse(question.id,mapOf(slot.index to listOf(ownCounterTarget)))
+                                            resolutionChoices.add(json.encodeToJsonElement(DecisionResponse.serializer(),response))
+                                            SubmitDecision(question.playerId,response)
+                                        }
+                                        is YesNoDecision -> {
+                                            val response=YesNoResponse(question.id,false)
+                                            resolutionChoices.add(json.encodeToJsonElement(DecisionResponse.serializer(),response))
+                                            SubmitDecision(question.playerId,response)
+                                        }
+                                        else -> error("Unexpected Aura/counter continuation: $question")
+                                    }
+                                    result=processor.process(result.state,next).result
+                                    check(result.outcome !is Outcome.Rejected)
+                                }
+                                if(auraScope!=null) {
+                                    val threat=json.decodeFromJsonElement<EntityId>(auraScope.getValue("threat"))
+                                    val engine=json.decodeFromJsonElement<EntityId>(auraScope.getValue("engine"))
+                                    val aura=json.decodeFromJsonElement<EntityId>(auraScope.getValue("aura"))
+                                    val projected=StateProjector().project(result.state)
+                                    check(result.state.getEntity(aura)!!.get<AttachedToComponent>()!!.targetId==(if(branch=="baseline")engine else threat))
+                                    check(projected.cantAttack(threat)==(branch=="replacement"))
+                                    check(projected.cantBlock(threat)==(branch=="replacement"))
+                                    check(!projected.hasLostAllAbilities(engine))
+                                }
+                                if(positiveCounter!=null) {
+                                    val enemy=json.decodeFromJsonElement<EntityId>(positiveCounter.getValue("enemy"))
+                                    val own=json.decodeFromJsonElement<EntityId>(positiveCounter.getValue("own"))
+                                    fun count(state:GameState,id:EntityId)=state.getEntity(id)!!.get<CountersComponent>()?.getCount(CounterType.PLUS_ONE_PLUS_ONE) ?: 0
+                                    check(count(result.state,enemy)-count(initial,enemy)==if(branch=="baseline")1 else 0)
+                                    check(count(result.state,own)-count(initial,own)==if(branch=="replacement")1 else 0)
+                                }
+                            }
+                            val bounceUntap=entry["bounceUntapComparison"]?.jsonObject
+                            if(bounceUntap!=null) {
+                                val target=json.decodeFromJsonElement<EntityId>(bounceUntap.getValue("target"))
+                                val untouched=json.decodeFromJsonElement<EntityId>(bounceUntap.getValue("baselineUntappedTarget"))
+                                val payment=json.decodeFromJsonElement<EntityId>(bounceUntap.getValue("replacementPayment"))
+                                check(action is ActivateAbility && initial.stack.isEmpty())
+                                check(initial.getEntity(target)!!.has<TappedComponent>())
+                                check(!initial.getEntity(untouched)!!.has<TappedComponent>())
+                                var passes=0
+                                while(result.state.stack.isNotEmpty()) {
+                                    check(++passes<=128 && result.state.pendingDecision==null)
+                                    result=processor.process(result.state,PassPriority(result.state.priorityPlayerId!!)).result
+                                    check(result.outcome !is Outcome.Rejected)
+                                }
+                                if(branch=="baseline") {
+                                    check(target in result.state.getZone(ZoneKey(action.playerId,Zone.HAND)))
+                                    check(untouched in result.state.getBattlefield() && !result.state.getEntity(untouched)!!.has<TappedComponent>())
+                                } else {
+                                    check(target in result.state.getBattlefield() && !result.state.getEntity(target)!!.has<TappedComponent>())
+                                    check(payment in result.state.getZone(ZoneKey(action.playerId,Zone.HAND)))
+                                }
+                            }
+                            val heldBounce=entry["heldBouncePayment"]
+                            if(heldBounce!=null) {
+                                val material=json.decodeFromJsonElement<EntityId>(heldBounce)
+                                check(material in initial.getBattlefield())
+                                if(branch=="baseline") {
+                                    var steps=0
+                                    while(result.state.stack.isNotEmpty() || result.state.pendingDecision!=null) {
+                                        check(++steps<=128)
+                                        val question=result.state.pendingDecision
+                                        val next=when(question) {
+                                            null -> PassPriority(requireNotNull(result.state.priorityPlayerId))
+                                            is YesNoDecision -> SubmitDecision(question.playerId,YesNoResponse(question.id,false))
+                                            else -> error("Unexpected bounce continuation: $question")
+                                        }
+                                        result=processor.process(result.state,next).result
+                                        check(result.outcome !is Outcome.Rejected)
+                                    }
+                                    check(material !in result.state.getBattlefield())
+                                } else {
+                                    check(action is PassPriority && result.outcome is Outcome.Done)
+                                    check(material in result.state.getBattlefield())
+                                }
+                            }
+                            val heldUtility=entry["heldUtilitySource"]
+                            if(heldUtility!=null) {
+                                val source=json.decodeFromJsonElement<EntityId>(heldUtility)
+                                check(!initial.getEntity(source)!!.has<TappedComponent>())
+                                check(result.outcome is Outcome.Done && result.state.pendingDecision==null)
+                                if(branch=="baseline") {
+                                    check(action is ActivateAbility)
+                                    check(result.state.getEntity(source)!!.has<TappedComponent>())
+                                    check(result.state.stack.size==initial.stack.size+1)
+                                } else {
+                                    check(action is PassPriority)
+                                    check(!result.state.getEntity(source)!!.has<TappedComponent>())
+                                }
+                            }
                             val heldSource=entry["heldSource"]
                             if(branch=="replacement" && heldSource!=null) {
                                 check(action is PassPriority && result.outcome is Outcome.Done)
@@ -223,6 +331,25 @@ object CompetencySavedStateProbe {
                             }
                             putJsonObject(branch) {
                                 put("accepted",result.outcome !is Outcome.Rejected)
+                                if(auraScope!=null) {
+                                    put("largeCombatThreatStopped",branch=="replacement")
+                                    put("triggerEngineAbilitiesRemain",true)
+                                }
+                                if(positiveCounter!=null)put("positiveCounterGivenToOwnCreature",branch=="replacement")
+                                if(auraScope!=null || positiveCounter!=null) {
+                                    put("resolvedWithOpponentsPassing",true)
+                                    put("continuationChoices",JsonArray(resolutionChoices))
+                                }
+                                if(heldUtility!=null)put("utilitySourceUntapped",branch=="replacement")
+                                if(heldBounce!=null) {
+                                    put("bouncedMaterialPreserved",branch=="replacement")
+                                    put("resolvedWithOpponentsPassing",branch=="baseline")
+                                }
+                                if(bounceUntap!=null) {
+                                    put("resolvedWithOpponentsPassing",true)
+                                    put("usefulUntap",branch=="replacement")
+                                    put("tappedResourcePreserved",branch=="replacement")
+                                }
                                 if(equipment!=null) {
                                     put("resolvedWithOpponentsPassing",true);put("attachmentUnchanged",true)
                                     put("manaAndSourceTapsPreserved",branch=="replacement")

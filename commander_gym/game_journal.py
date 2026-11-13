@@ -16,8 +16,8 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping
-from collections.abc import Sequence
+from typing import Any
+from collections.abc import Mapping, Sequence
 from itertools import islice
 import gzip
 from .record_codec import encode_record, decode_record, physical_lines, file_identity, check_cancelled
@@ -44,19 +44,36 @@ def _json(value: Any) -> bytes:
                       ensure_ascii=False, allow_nan=False).encode("utf-8")
 
 
+_FIELD_NORMALIZER = re.compile(r"[^a-z]")
+_SECRET_VALUE_PATTERN = re.compile(r"\bsk-(?:proj-|svcacct-)?[A-Za-z0-9_-]{16,}")
+
+
 def _safe(value: Any) -> None:
-    """Reject transport/config secrets before either admin or seat persistence."""
-    if isinstance(value, Mapping):
-        for key, item in value.items():
-            normalized = re.sub(r"[^a-z]", "", str(key).lower())
-            if normalized in FORBIDDEN or normalized.endswith(("apikey", "headers", "credentials")):
-                raise JournalError("credential or transport field is forbidden")
-            _safe(item)
-    elif isinstance(value, (list, tuple)):
-        for item in value:
-            _safe(item)
-    elif isinstance(value, str) and re.search(r"\bsk-(?:proj-|svcacct-)?[A-Za-z0-9_-]{16,}", value):
-        raise JournalError("credential-shaped value is forbidden")
+    """Reject transport/config secrets, scanning every value and every field.
+
+    Native checkpoints repeat the same component keys for hundreds of cards.
+    Cache only their pure name normalization within this call; never cache a
+    security decision, a value, or data across callbacks.
+    """
+    names = {}
+    def walk(node):
+        if isinstance(node, Mapping):
+            for key, item in node.items():
+                text = str(key)
+                normalized = names.get(text)
+                if normalized is None:
+                    normalized = _FIELD_NORMALIZER.sub("", text.lower())
+                    if len(names) < 4096:
+                        names[text] = normalized
+                if normalized in FORBIDDEN or normalized.endswith(("apikey", "headers", "credentials")):
+                    raise JournalError("credential or transport field is forbidden")
+                walk(item)
+        elif isinstance(node, (list, tuple)):
+            for item in node:
+                walk(item)
+        elif isinstance(node, str) and _SECRET_VALUE_PATTERN.search(node):
+            raise JournalError("credential-shaped value is forbidden")
+    walk(value)
 
 
 def _private_dir(path: Path, *, create: bool = False) -> None:

@@ -9,6 +9,11 @@ import com.wingedsheep.sdk.dsl.Effects
 import com.wingedsheep.sdk.dsl.DynamicAmounts
 import com.wingedsheep.sdk.core.CounterType
 import com.wingedsheep.sdk.core.Zone
+import com.wingedsheep.sdk.scripting.MustAttack
+import com.wingedsheep.sdk.scripting.CantAttack
+import com.wingedsheep.sdk.scripting.CantBlock
+import com.wingedsheep.sdk.scripting.PreventActivatedAbilities
+import com.wingedsheep.sdk.scripting.ActivatedAbilityScope
 import com.wingedsheep.sdk.scripting.LoseAllAbilities
 import com.wingedsheep.sdk.scripting.ModifyStats
 import com.wingedsheep.sdk.scripting.GrantKeyword
@@ -18,6 +23,10 @@ import com.wingedsheep.sdk.scripting.EntersWithChoice
 import com.wingedsheep.sdk.scripting.ChoiceType
 import com.wingedsheep.sdk.scripting.Duration
 import com.wingedsheep.sdk.scripting.costs.manaCostOrNull
+import com.wingedsheep.sdk.scripting.costs.atomOrNull
+import com.wingedsheep.sdk.scripting.costs.CostAtom
+import com.wingedsheep.sdk.scripting.ActivationRestriction
+import com.wingedsheep.sdk.scripting.effects.AddCountersEffect
 import com.wingedsheep.sdk.scripting.effects.ModifyStatsEffect
 import com.wingedsheep.sdk.scripting.effects.TapUntapEffect
 import com.wingedsheep.sdk.scripting.filters.unified.GroupFilter
@@ -206,6 +215,16 @@ object PublicCardFacts {
                         effect.tap==false && effect.target is EffectTarget.BoundVariable && it.targetRequirements.size==1
                 }.forEach { add(it.id.value) }
             }
+            putJsonArray("bounceTargetUntapAbilities") {
+                activated.filter {
+                    val effect = it.effect as? TapUntapEffect
+                    val cost = it.cost.atomOrNull as? CostAtom.ReturnToHand
+                    cost != null && cost.count == 1 && cost.youControl &&
+                        !it.isManaAbility && it.timing == TimingRule.InstantSpeed && it.activateFromZone == Zone.BATTLEFIELD &&
+                        it.restrictions.all { restriction -> restriction == ActivationRestriction.OncePerTurn } &&
+                        effect?.tap == false && effect.target is EffectTarget.BoundVariable && it.targetRequirements.size == 1
+                }.forEach { add(it.id.value) }
+            }
             // Match exact SDK descriptions at the native target-selection seam;
             // no Oracle text parsing or guesses from a generic REMOVAL tag.
             putJsonObject("fixedStatReductions") {
@@ -257,6 +276,31 @@ object PublicCardFacts {
             putJsonArray("manaColors") { manaColors.sorted().forEach { add(it) } }
             put("simpleMana", simpleMana)
             put("simplePermanent", noStatic && noTriggers && noReplacement && (activated.isEmpty() || simpleMana))
+            val opponentCreatures = GroupFilter(GameObjectFilter.Creature.opponentControls())
+            val removeEvasion = Effects.ForEachInGroup(opponentCreatures,
+                Effects.CantHaveKeywords(setOf(Keyword.HEXPROOF,Keyword.SHROUD),EffectTarget.IterationEntity))
+            val requireAttacks = Effects.GrantStaticAbility(MustAttack(opponentCreatures),EffectTarget.Controller,Duration.EndOfTurn)
+            fun utilityIds(effect: com.wingedsheep.sdk.scripting.effects.Effect) = activated.filter {
+                !it.isManaAbility && manaAndTapOnly(it.cost) && it.restrictions.isEmpty() &&
+                    it.activateFromZone == Zone.BATTLEFIELD && it.targetRequirements.isEmpty() && it.effect == effect
+            }.map { it.id.value }
+            val evasionRemovalIds = utilityIds(removeEvasion)
+            putJsonArray("opponentEvasionRemovalAbilities") { evasionRemovalIds.forEach { add(it) } }
+            putJsonArray("opponentAttackRequirementAbilities") { utilityIds(requireAttacks).forEach { add(it) } }
+            // An uncertainty signal from native data, not a positive gameplay rule.
+            // Exclude certified negative effects; retain every other possible
+            // hexproof/shroud reference so future or conditional grants defer.
+            val evasionScript = buildJsonObject {
+                for ((key,value) in script) {
+                    if(key=="activatedAbilities") {
+                        val entries=value.jsonArray
+                        check(entries.size==activated.size)
+                        put(key,JsonArray(entries.filterIndexed { index,_ -> activated[index].id.value !in evasionRemovalIds }))
+                    } else put(key,value)
+                }
+            }.toString()
+            put("evasionSensitive", card.keywords.any { it in setOf(Keyword.HEXPROOF,Keyword.SHROUD) } ||
+                evasionScript.contains("hexproof",ignoreCase=true) || evasionScript.contains("shroud",ignoreCase=true))
             putJsonArray("equipAbilities") {
                 activated.filter { it.isEquipAbility }.forEach { add(it.id.value) }
             }
@@ -308,6 +352,39 @@ object PublicCardFacts {
                         gate.decisionMaker!=null && gate.decisionMaker!=EffectTarget.Controller) continue
                     val count=(1..10).firstOrNull { gate.then==Patterns.Library.lookAtTopAndReorder(it) } ?: continue
                     put(ability.id.value,count)
+                }
+            }
+            putJsonObject("positiveCounterTriggers") {
+                for (ability in card.script.triggeredAbilities) {
+                    val effect=ability.effect as? AddCountersEffect ?: continue
+                    if(effect.counterType == CounterType.PLUS_ONE_PLUS_ONE && effect.count in 1..10 &&
+                        effect.target is EffectTarget.BoundVariable && ability.allTargetRequirements.size == 1) {
+                        put(effect.description,effect.count)
+                    }
+                }
+            }
+            putJsonObject("activatedAbilityCounts") {
+                put("mana", activated.count { it.isManaAbility })
+                put("nonMana", activated.count { !it.isManaAbility })
+            }
+            val statics = card.script.staticAbilities
+            val attackLock = CantAttack(filter = GroupFilter.attachedCreature())
+            val blockLock = CantBlock(filter = GroupFilter.attachedCreature())
+            val activationLocks = statics.filterIsInstance<PreventActivatedAbilities>()
+            val activationLock = activationLocks.singleOrNull()
+            val attachedActivationLock = activationLock != null && !activationLock.anyZone &&
+                activationLock.filter == GameObjectFilter.Permanent.attachedToBySource() &&
+                activationLock.abilities in setOf(ActivatedAbilityScope.ALL, ActivatedAbilityScope.NON_MANA)
+            if (noTriggers && noReplacement && activated.isEmpty() && attackLock in statics && blockLock in statics &&
+                (activationLocks.isEmpty() || attachedActivationLock) && statics.all {
+                    it == attackLock || it == blockLock || it == activationLock
+                }) {
+                putJsonObject("attachedCombatLock") {
+                    put("activatedAbilities", when(activationLock?.abilities) {
+                        ActivatedAbilityScope.ALL -> "all"
+                        ActivatedAbilityScope.NON_MANA -> "nonMana"
+                        else -> "none"
+                    })
                 }
             }
             put("removesAttachedAbilities", card.script.staticAbilities.any {

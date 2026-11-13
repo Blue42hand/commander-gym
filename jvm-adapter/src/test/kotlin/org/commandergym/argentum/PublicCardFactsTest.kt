@@ -13,6 +13,37 @@ class PublicCardFactsTest {
     private val registry = GameBeansConfig(GameProperties()).cardRegistry()
     private val revision = "12ab2f0ed5bd018334521dc52497e6444f26f5a9"
 
+    @Test fun utilityEffectsMatchNativeScopeAndKeepConditionalEvasionUncertain() {
+        val cards=PublicCardFacts.export(registry,listOf("Arcane Lighthouse","Bident of Thassa","Swiftfoot Boots","Wirewood Symbiote"),revision)["cards"]!!.jsonObject
+        assertEquals(listOf("Arcane Lighthouse:2"),cards["Arcane Lighthouse"]!!.jsonObject["opponentEvasionRemovalAbilities"]!!.jsonArray.map { it.jsonPrimitive.content })
+        assertEquals(listOf("Bident of Thassa:2"),cards["Bident of Thassa"]!!.jsonObject["opponentAttackRequirementAbilities"]!!.jsonArray.map { it.jsonPrimitive.content })
+        assertFalse(cards["Arcane Lighthouse"]!!.jsonObject["evasionSensitive"]!!.jsonPrimitive.boolean)
+        assertTrue(cards["Swiftfoot Boots"]!!.jsonObject["evasionSensitive"]!!.jsonPrimitive.boolean)
+        assertFalse(cards["Wirewood Symbiote"]!!.jsonObject["evasionSensitive"]!!.jsonPrimitive.boolean)
+    }
+
+    @Test fun combatLocksPreserveTriggeredAndStaticAbilitiesAndHaveExplicitActivationScope() {
+        val cards=PublicCardFacts.export(registry,listOf("Arrest","Pacifism","Darksteel Mutation","Talrand, Sky Summoner","Elvish Archdruid"),revision)["cards"]!!.jsonObject
+        assertEquals("all",cards["Arrest"]!!.jsonObject["attachedCombatLock"]!!.jsonObject["activatedAbilities"]!!.jsonPrimitive.content)
+        assertEquals("none",cards["Pacifism"]!!.jsonObject["attachedCombatLock"]!!.jsonObject["activatedAbilities"]!!.jsonPrimitive.content)
+        assertFalse(cards["Darksteel Mutation"]!!.jsonObject.containsKey("attachedCombatLock"))
+        assertEquals(0,cards["Talrand, Sky Summoner"]!!.jsonObject["activatedAbilityCounts"]!!.jsonObject["nonMana"]!!.jsonPrimitive.int)
+        assertEquals(1,cards["Elvish Archdruid"]!!.jsonObject["activatedAbilityCounts"]!!.jsonObject["mana"]!!.jsonPrimitive.int)
+    }
+
+    @Test fun positiveCounterTriggersRequireWholeFixedPlusOneEffect() {
+        val cards=PublicCardFacts.export(registry,listOf("Generous Visitor","The One Ring","Beastmaster Ascension"),revision)["cards"]!!.jsonObject
+        assertEquals(listOf(1),cards["Generous Visitor"]!!.jsonObject["positiveCounterTriggers"]!!.jsonObject.values.map { it.jsonPrimitive.int })
+        for(name in listOf("The One Ring","Beastmaster Ascension")) assertTrue(cards[name]!!.jsonObject["positiveCounterTriggers"]!!.jsonObject.isEmpty())
+    }
+
+    @Test fun bounceUntapContractUsesTheWholeTypedCostAndEffect() {
+        val cards = PublicCardFacts.export(registry,listOf("Wirewood Symbiote","Quirion Ranger","Wirewood Lodge","Skullclamp"),revision)["cards"]!!.jsonObject
+        assertEquals(listOf("Wirewood Symbiote:1"),cards["Wirewood Symbiote"]!!.jsonObject["bounceTargetUntapAbilities"]!!.jsonArray.map { it.jsonPrimitive.content })
+        for(name in listOf("Wirewood Lodge","Skullclamp")) assertTrue(cards[name]!!.jsonObject["bounceTargetUntapAbilities"]!!.jsonArray.isEmpty())
+        assertEquals(listOf("Quirion Ranger:1"),cards["Quirion Ranger"]!!.jsonObject["bounceTargetUntapAbilities"]!!.jsonArray.map { it.jsonPrimitive.content })
+    }
+
     @Test fun equipAbilityIdsUseTheNativeEquipFlag() {
         val cards=PublicCardFacts.export(registry,listOf("Skullclamp","The One Ring"),revision)["cards"]!!.jsonObject
         assertEquals(listOf("Skullclamp:2"),cards["Skullclamp"]!!.jsonObject["equipAbilities"]!!.jsonArray.map { it.jsonPrimitive.content })

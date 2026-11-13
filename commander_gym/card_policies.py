@@ -69,6 +69,12 @@ class SharedCardPolicies(ResourcePolicies):
         from .modal_policies import modal_pending
         modal=modal_pending(self,o,p)
         if modal is not None:return modal
+        from .policy_action_bounds import positive_counter_decision
+        positive=positive_counter_decision(p,self.facts)
+        if positive is not None and o.get('nativePaymentError') is None and p.get('context',{}).get('sourceName') not in self.self_target_exceptions:
+            targets=p['legalTargets'].get(positive)
+            if isinstance(targets,list) and len(targets)==1 and self._card(o,targets[0]).get('controllerId')==o['agentToAct'] and 'CREATURE' in self._card(o,targets[0]).get('cardTypes',[]):
+                return self._decision(p,p['responseSpec']['responseType'],'shared-positive-counter-single-own-target',selectedTargets={positive:targets})
         from .policy_action_bounds import copied_neutralization_targets
         copy=copied_neutralization_targets(o,p,self.facts)
         if copy and p.get('context',{}).get('sourceName') not in self.self_target_exceptions and len(copy[1])==1:

@@ -21,6 +21,7 @@ PROMPT_TARGET_BYTES = 32768
 _CARD_FIELDS = {'name', 'manaCost', 'typeLine', 'cardTypes', 'subtypes', 'oracleText',
                 'power', 'toughness', 'keywords', 'abilityFlags', 'isTapped', 'hasSummoningSickness',
                 'isCommander', 'controllerId', 'ownerId', 'counters', 'activeEffects', 'attachments',
+                'protections', 'hexproofFromColors', 'hexproofFromMonocolored', 'hexproofFromMulticolored',
                 'isFaceDown', 'isPhasedOut', 'damage', 'chosenCreatureType', 'colors', 'colorIdentity', 'manaValue', 'zone', 'isToken',
                 'targets', 'stackText', 'abilityIdentity', 'chosenModeDescriptions', 'perModeTargets', 'chosenX', 'linkedExile'}
 
@@ -232,7 +233,7 @@ def validate_selection_bounds(wire, o):
 
 
 def _candidate_description(wire, o, facts=None):
-    from .policy_action_bounds import abilities_removed
+    from .policy_action_bounds import abilities_removed, combat_lock_effects
     cards = {**o.get('state', {}).get('cards', {}), **_pending_card_map(o.get('pendingDecision') or {})}
     players = {p['playerId']:p.get('name', p['playerId']) for p in o.get('state', {}).get('players', [])}
     def describe(value):
@@ -265,7 +266,17 @@ def _candidate_description(wire, o, facts=None):
         result['costBasis']='alternative cost' if a.get('action',{}).get('useAlternativeCost') or a.get('kind')=='CastWithAlternativeCost' else 'mana cost'
     elif a.get('kind')=='PlayLand':
         result['costBasis']='land drop, no mana'
+    raw=a.get('action',{})
+    if a.get('kind')=='ActivateAbility' and facts is not None:
+        contract=facts.get(cards.get(raw.get('sourceId'),{}).get('name'))
+        if raw.get('abilityId') in contract.get('opponentEvasionRemovalAbilities',[]):
+            result['reviewedEffects']={'opponentCreaturesLose':['HEXPROOF','SHROUD'],'duration':'end of turn',
+                                      'purpose':'Enable targeting protected opposing creatures this turn.'}
+        elif raw.get('abilityId') in contract.get('opponentAttackRequirementAbilities',[]):
+            result['reviewedEffects']={'opponentCreaturesAttackIfAble':True,'duration':'end of turn'}
     source=cards.get(a.get('action',{}).get('cardId'),{})
+    lock=(facts.get(source.get('name')).get('attachedCombatLock') if facts is not None else None)
+    if lock:result['reviewedEffects']=combat_lock_effects(lock)
     if source.get('name')=='Syncopate' and type(choice['params'].get('xValue')) is int:
         result['reviewedEffects']={'counterTargetUnlessControllerPays':choice['params']['xValue'],'exileIfCountered':True}
     if source.get('name')=='Into the Roil' and a.get('action',{}).get('declaredCostSlot') in (None,'KICKED'):
@@ -295,9 +306,11 @@ def decision_context(o, *, frozen, policy_context, facts):
             linked=[i for i in card['linkedExile'] if i in visible and i in cards]
             if linked:card['linkedExile']=linked
             else:card.pop('linkedExile')
-    from .policy_action_bounds import abilities_removed
+    from .policy_action_bounds import abilities_removed, combat_lock_effects
     for entity,card in cards.items():
         if abilities_removed(o,s.get('cards',{}).get(entity,{}),facts):card['printedAbilitiesRemoved']=True
+        lock=facts.get(card.get('name')).get('attachedCombatLock')
+        if lock:card['reviewedEffects']=combat_lock_effects(lock)
     # Public history can grow indefinitely. Keep identities and ownership for
     # inactive cards; retain complete rules whenever an affordable offer or a
     # pending decision references the card, or it has an observed active effect.
@@ -643,6 +656,7 @@ class BoundedPolicyFallback:
             instructions += (' Wrap the requested decision in {"decision":...,"explanation":...}.'
                 ' Supply a brief decision summary: goal, up to three keyFacts, visible evidenceIds, uncertainty, and missingInformation.'
                 ' Describe the relevant game facts and intended benefit, not a step-by-step reasoning trace.'
+                " manaPool is floating mana; affordable includes untapped sources. Use each card's own rules."
                 ' Each text must be at most 180 characters, all text at most 720 characters.'
                 ' evidenceIds must use only card instance or player IDs from the schema enum; never use dN definition references or context paths.'
                 ' Use an empty evidenceIds list if no entity reference is needed.'
