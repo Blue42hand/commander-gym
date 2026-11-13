@@ -285,6 +285,31 @@ object CompetencySavedStateProbe {
                                     check(payment in result.state.getZone(ZoneKey(action.playerId,Zone.HAND)))
                                 }
                             }
+                            val removedTarget=entry["removedUntapTarget"]
+                            if(removedTarget!=null) {
+                                val target=json.decodeFromJsonElement<EntityId>(removedTarget)
+                                check(target in initial.getBattlefield())
+                                if(branch=="baseline") {
+                                    check(action is ActivateAbility && result.outcome !is Outcome.Rejected)
+                                    entry["recordedCommanderResponse"]?.jsonObject?.let { response ->
+                                        val question=result.state.pendingDecision as YesNoDecision
+                                        check(response.getValue("type").jsonPrimitive.content=="YesNoResponse")
+                                        check(json.encodeToJsonElement(question.id)==response.getValue("decisionId"))
+                                        check(question.context.sourceId==target && question.context.phase==DecisionPhase.STATE_BASED)
+                                        result=processor.process(result.state,SubmitDecision(question.playerId,
+                                            YesNoResponse(question.id,response.getValue("choice").jsonPrimitive.boolean))).result
+                                        check(result.outcome !is Outcome.Rejected)
+                                        put("recordedCommanderHandChoiceApplied",true)
+                                    }
+                                    check(target !in result.state.getBattlefield())
+                                    check(target in result.state.getZone(ZoneKey(action.playerId,Zone.HAND)))
+                                } else {
+                                    check(action is PassPriority && result.outcome !is Outcome.Rejected)
+                                    check(target in result.state.getBattlefield())
+                                }
+                                if(branch=="baseline")put("returnedTargetCannotReceiveUntap",true)
+                                else put("replacementPreservesTarget",true)
+                            }
                             val heldBounce=entry["heldBouncePayment"]
                             if(heldBounce!=null) {
                                 val material=json.decodeFromJsonElement<EntityId>(heldBounce)

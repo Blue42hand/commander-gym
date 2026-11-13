@@ -152,6 +152,20 @@ def enumerate_choices(o):
                     if selections is None:return None
                     payments=[{'exiledCards':selected} for selected in selections]
                     plain={**a,'additionalCostInfo':None,'action':{**a.get('action',{}),'useAlternativeCost':False}}
+                elif cost.get('costType')=='BouncePermanent':
+                    fields=a.get('parameterSpec',{}).get('allowedFields',{})
+                    options=cost.get('validBounceTargets');count=cost.get('bounceCount')
+                    if (a.get('kind')!='ActivateAbility' or a.get('manaCostString')
+                        or cost.get('alsoRequired') or cost.get('costAfterSacrifice')
+                        or fields.get('bouncedPermanents')!='ENTITY_ID_ARRAY' or not isinstance(options,list)
+                        or any(not isinstance(i,str) or not i for i in options)
+                        or len(set(options))!=len(options) or type(count) is not int or count<1
+                        or a.get('action',{}).get('costPayment')
+                        or not set(fields)<={'bounce','bouncedPermanents','targets','targetGroups','xValue'}):return None
+                    selections=_selections(options,count,count)
+                    if selections is None:return None
+                    payments=[{'bouncedPermanents':selected} for selected in selections]
+                    plain={**a,'additionalCostInfo':None}
                 else:
                     source=a.get('action',{}).get('sourceId');fields=a.get('parameterSpec',{}).get('allowedFields',{})
                     count=cost.get('sacrificeCount');options=cost.get('validSacrificeTargets')
@@ -184,11 +198,38 @@ def enumerate_choices(o):
                 choices.extend(_action(a,{**payment,'targets':[t]}) for payment in payments for t in targets)
             elif (a.get('parameterSpec', {}).get('allowedFields') == {}
                   or a.get('requiresTargets') is False and a.get('validTargets') in (None,[]) and a.get('targetRequirements') is None and (a['kind'] in {'CastSpell', 'PlayLand', 'PassPriority'}
-                      or set(a.get('parameterSpec', {}).get('allowedFields', {})) <= ({'targets','targetGroups','xValue','sacrificedPermanents','sacrifice'} if cost else {'targets','targetGroups','xValue','convokedCreatures'} if a.get('hasConvoke') else {'targets','targetGroups','xValue'}))):
+                      or set(a.get('parameterSpec', {}).get('allowedFields', {})) <= ({'targets','targetGroups','xValue','sacrificedPermanents','sacrifice','bouncedPermanents','bounce'} if cost else {'targets','targetGroups','xValue','convokedCreatures'} if a.get('hasConvoke') else {'targets','targetGroups','xValue'}))):
                 choices.extend(_action(a,payment) for payment in payments)
             else: return None
             if len(choices) > MAX_CHOICES: return None
     return choices if 0 < len(choices) <= MAX_CHOICES else None
+
+
+def _unproductive_return_untap_choice(wire,o,facts,exceptions=()):
+    """Certified return/untap choices normally benefit our surviving creature.
+
+    This is a default policy preference, not native illegality. Deck overrides
+    retain deliberate return/rebuy plans; unknown effects keep inference.
+    """
+    if (wire.get('channel')!='action' or o.get('pendingDecision') or o.get('nativePaymentError') is not None
+        or not any(a.get('kind')=='PassPriority' and affordable(a) for a in o.get('legalActions',[]))):return False
+    choice=wire.get('choice',{});params=choice.get('params',{})
+    a=next((a for a in o.get('legalActions',[]) if a.get('semanticId')==choice.get('semanticId')),None)
+    if not a:return False
+    raw=a.get('action',{});cost=a.get('additionalCostInfo') or {}
+    source=o.get('state',{}).get('cards',{}).get(raw.get('sourceId'),{});name=source.get('name')
+    if (a.get('kind')!='ActivateAbility' or name in exceptions or source.get('activeEffects')
+        or raw.get('abilityId') not in facts.get(name).get('bounceTargetUntapAbilities',[])
+        or cost.get('costType')!='BouncePermanent' or cost.get('bounceCount')!=1
+        or cost.get('alsoRequired') or cost.get('costAfterSacrifice') or raw.get('costPayment')
+        or a.get('requiresTargets') is not True or a.get('targetCount')!=1 or a.get('minTargets')!=1
+        or a.get('targetRequirements') is not None):return False
+    from .policy_action_bounds import bounce_commander_rescue
+    if bounce_commander_rescue(o,cost.get('validBounceTargets',[]),facts):return False
+    targets=params.get('targets',[]);returned=params.get('bouncedPermanents',[])
+    if len(targets)!=1 or len(returned)!=1:return False
+    controller=o.get('state',{}).get('cards',{}).get(targets[0],{}).get('controllerId')
+    return targets==returned or controller is not None and controller!=o['agentToAct']
 
 
 def _delve_bounds(action):
@@ -666,6 +707,10 @@ class BoundedPolicyFallback:
         if wires:
             valid = []
             for wire in wires:
+                if _unproductive_return_untap_choice(wire,o,self.defaults.facts,self_target_exceptions|timing_exceptions):
+                    restriction={'action':wire['choice']['semanticId'],'rule':'return-untap-needs-own-surviving-target'}
+                    if restriction not in restrictions:restrictions.append(restriction)
+                    continue
                 try:
                     validate_selection_bounds(wire, o)
                     self.validator._choice_from_response({'status':'completed','output_text':json.dumps(wire)}, o, retry_count=0)
