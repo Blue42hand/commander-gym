@@ -635,6 +635,8 @@ def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=()
         # Keep creature-sacrifice combat tricks and explicit landfall/reaction plans.
         ramp_window=known_combat and (no_live_combat or isinstance(source.get('cardTypes'),list) and 'CREATURE' not in source['cardTypes'])
         if (not o.get('pendingDecision') and o.get('nativePaymentError') is None and can_pass and ramp_window
+            and state.get('currentStep') in {'UNTAP','UPKEEP','DRAW','PRECOMBAT_MAIN','POSTCOMBAT_MAIN','BEGIN_COMBAT','DECLARE_ATTACKERS','DECLARE_BLOCKERS','FIRST_STRIKE_COMBAT_DAMAGE','COMBAT_DAMAGE','END_COMBAT','END','END_STEP','CLEANUP'}
+            and state.get('activePlayerId') in {p.get('playerId') for p in state.get('players',[]) if p.get('playerId')}
             and a.get('kind')=='ActivateAbility' and a.get('isManaAbility') is not True
             and raw.get('abilityId') in facts.get(name).get('selfTappedLandRampAbilities',[])
             and not source.get('activeEffects') and name not in reaction_timing_exceptions

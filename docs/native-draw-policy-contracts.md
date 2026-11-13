@@ -43,3 +43,10 @@ reorder-only triggers may finish first. Unknown stacks, payment corrections,
 unknown combat data, creature-sacrifice combat responses, and explicit deck
 reaction-timing overrides keep their native decision domain. Noncreature sources
 normally wait during combat; a landfall deck can override that default.
+
+Small complete return/untap menus also receive literal option facts after context
+compression. The returned permanent and untap target retain their own names and
+current states, without table or shared-value references. The summary is optional:
+its complete request is checked against the existing admission budget, and an
+otherwise fitting request proceeds without it when needed. Native choices are
+never truncated or removed to fit this diagnostic context.

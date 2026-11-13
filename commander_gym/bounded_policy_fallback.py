@@ -232,6 +232,49 @@ def _unproductive_return_untap_choice(wire,o,facts,exceptions=()):
     return targets==returned or controller is not None and controller!=o['agentToAct']
 
 
+RETURN_UNTAP_BRIEF_INSTRUCTIONS = (
+    ' returnUntapOptions contains literal complete option facts, without shared-value references.'
+    ' The returned permanent pays the cost; the named untap target receives the effect.'
+    ' Prefer Pass if no concrete benefit justifies returning a permanent.'
+    ' Untapping never resets a once-per-turn activation limit.')
+
+
+def _return_untap_options(wires,o,facts):
+    if not wires or len(wires)>8:return None
+    cards=o.get('state',{}).get('cards',{});rows=[];seen=False
+    for option,wire in enumerate(wires):
+        if wire.get('channel')!='action':return None
+        c=wire['choice'];a=next(a for a in o['legalActions'] if a['semanticId']==c['semanticId'])
+        if a['kind']=='PassPriority':
+            rows.append({'option':option,'action':'Pass priority','returnCost':[],'untapTarget':None});continue
+        raw=a.get('action',{});source=cards.get(raw.get('sourceId'),{});p=c.get('params',{})
+        if (raw.get('abilityId') not in facts.get(source.get('name')).get('bounceTargetUntapAbilities',[])
+            or len(p.get('targets',[]))!=1 or len(p.get('bouncedPermanents',[]))!=1):return None
+        def identity(i):
+            card=cards.get(i,{})
+            return {'id':i,'name':card.get('name'),'controller':card.get('controllerId'),
+                    'tapped':card.get('isTapped'),'power':card.get('power'),'toughness':card.get('toughness')}
+        rows.append({'option':option,'source':identity(raw.get('sourceId')),
+                     'returnCost':[identity(i) for i in p['bouncedPermanents']],
+                     'costTiming':'Returning happens before the ability resolves.',
+                     'untapTarget':identity(p['targets'][0]),
+                     'abilityEffect':'Untap only if it resolves. This ability does not draw a card or grant an extra attack.'})
+        seen=True
+    return rows if seen else None
+
+
+def _literal_options_fit(view,instructions,fmt,config):
+    # Match the local request's serialized-byte admission before optional context
+    # is included. The reserve absorbs small transport-envelope changes.
+    request={'model':config.model,'messages':[
+        {'role':'system','content':instructions+'\nThe current native parameterSpec and response schema define all allowed fields, including additional cost payments.'},
+        {'role':'user','content':json.dumps(view,separators=(',',':'))}],
+        'response_format':{'type':'json_schema','json_schema':{k:v for k,v in fmt.items() if k!='type'}},
+        'max_tokens':config.max_output_tokens,'stream':config.stream,'reasoning_effort':'none','temperature':0}
+    if config.stream:request['stream_options']={'include_usage':True}
+    return len(json.dumps(request,ensure_ascii=False).encode())+128<=config.max_prompt_bytes
+
+
 def _delve_bounds(action):
     """Use an explicit native pure-delve payment contract, never estimate mana."""
     if not action.get('hasDelve') or any(action.get(k) for k in
@@ -842,6 +885,11 @@ class BoundedPolicyFallback:
             instructions += ' Removing hexproof or shroud needs a follow-up that targets the affected creature.'
         if (o.get('pendingDecision') or {}).get('prompt')=='You may draw a card':
             instructions += ' Hand-size limits apply during cleanup, not while drawing cards.'
+        brief=_return_untap_options(wires,o,self.defaults.facts)
+        if brief:
+            extended={**view,'returnUntapOptions':brief}
+            if _literal_options_fit(extended,instructions+RETURN_UNTAP_BRIEF_INSTRUCTIONS,fmt,self.model.config):
+                view=extended;instructions+=RETURN_UNTAP_BRIEF_INSTRUCTIONS
         choice = self.model._choose(o, response_format=fmt, model_view=view,
                                    instructions_override=instructions, output_decoder=decode)
         request_sizes = [len(json.dumps(a['request'],ensure_ascii=False).encode())

@@ -28,7 +28,7 @@ class LandRampTimingTests(unittest.TestCase):
             if mode=='quiet':self.assertEqual(o,before)
 
     def test_main_end_step_overrides_and_unknown_or_live_creature_combat_keep_choice(self):
-        for mode in ['main','end','override','creature-combat','unknown-combat','missing-combat','unknown-stack','hidden-stack','modified','pending','payment','unknown-ability']:
+        for mode in ['main','end','override','creature-combat','unknown-combat','missing-combat','unknown-stack','hidden-stack','modified','pending','payment','unknown-ability','unknown-phase','unknown-active']:
             with self.subTest(mode=mode):
                 o,f=self.board();kw={}
                 if mode=='main':o['state'].update(activePlayerId='me',currentStep='PRECOMBAT_MAIN')
@@ -45,6 +45,8 @@ class LandRampTimingTests(unittest.TestCase):
                 elif mode=='pending':o['pendingDecision']={'type':'Unknown'}
                 elif mode=='payment':o['nativePaymentError']='retry'
                 elif mode=='unknown-ability':o['legalActions'][1]['action']['abilityId']='unknown'
+                elif mode=='unknown-phase':o['state']['currentStep']='UNKNOWN'
+                elif mode=='unknown-active':o['state']['activePlayerId']=None
                 before=deepcopy(o);v,_=bounded_observation(o,f,**kw)
                 self.assertTrue(any(a['actionId']==1 for a in v['legalActions']))
                 self.assertEqual(o,before)
