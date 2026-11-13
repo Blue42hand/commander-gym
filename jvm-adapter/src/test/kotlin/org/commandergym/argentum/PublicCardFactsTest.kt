@@ -74,6 +74,12 @@ class PublicCardFactsTest {
         assertTrue(ids("Wirewood Symbiote").isEmpty());assertTrue(ids("Timberwatch Elf").isEmpty())
     }
 
+    @Test fun ordinaryConditionalTappedLandsExposeAConservativeEntryContract() {
+        val cards=PublicCardFacts.export(registry,listOf("Shattered Sanctum","Canopy Vista","Sunpetal Grove","Forest","Overgrown Tomb"),revision)["cards"]!!.jsonObject
+        for(name in listOf("Shattered Sanctum","Canopy Vista","Sunpetal Grove")) assertTrue(cards[name]!!.jsonObject["conditionalTappedEntry"]!!.jsonPrimitive.boolean,name)
+        for(name in listOf("Forest","Overgrown Tomb")) assertFalse(cards[name]!!.jsonObject["conditionalTappedEntry"]!!.jsonPrimitive.boolean,name)
+    }
+
     @Test fun publicFactsDistinguishOrdinaryManaFromChoicesAndTriggeredBoards() {
         val names = listOf("Forest", "Sol Ring", "Arcane Signet", "Sythis, Harvest's Hand", "Vanquisher's Banner", "Mesa Enchantress", "Underworld Dreams")
         val export = PublicCardFacts.export(registry, names, revision)

@@ -34,8 +34,10 @@ class CardFacts:
                   'staticValue', 'repeatable', 'affectsOpponent', 'feeds', 'rewards', 'tribesRewarded'}
         fields |= {'freeOptionalDraws', 'drawSensitive'}
         for name, fact in document['cards'].items():
-            if not isinstance(name, str) or not name or not isinstance(fact, dict) or not fields <= set(fact) or set(fact) - fields - {'simpleTargetUntapAbilities', 'friendlyStaticPermanent', 'developmentMana', 'manaOnlySelfUntapAbilities', 'fixedStatReductions', 'removesAttachedAbilities', 'untappedIfLandSubtypes', 'variableMana', 'commanderColorMana', 'painManaColors', 'colorIdentity', 'untappedPayLife'}:
+            if not isinstance(name, str) or not name or not isinstance(fact, dict) or not fields <= set(fact) or set(fact) - fields - {'conditionalTappedEntry', 'simpleTargetUntapAbilities', 'friendlyStaticPermanent', 'developmentMana', 'manaOnlySelfUntapAbilities', 'fixedStatReductions', 'removesAttachedAbilities', 'untappedIfLandSubtypes', 'variableMana', 'commanderColorMana', 'painManaColors', 'colorIdentity', 'untappedPayLife'}:
                 raise ValueError('invalid native card fact fields')
+            if 'conditionalTappedEntry' in fact and type(fact['conditionalTappedEntry']) is not bool:
+                raise ValueError('invalid conditional land entry contract')
             if 'friendlyStaticPermanent' in fact and type(fact['friendlyStaticPermanent']) is not bool:
                 raise ValueError('invalid friendly static permanent contract')
             if 'developmentMana' in fact and (type(fact['developmentMana']) is not int or not 0<=fact['developmentMana']<=20):

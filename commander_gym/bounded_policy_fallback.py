@@ -155,11 +155,35 @@ def enumerate_choices(o):
     return choices if 0 < len(choices) <= MAX_CHOICES else None
 
 
+def _delve_bounds(action):
+    """Use an explicit native pure-delve payment contract, never estimate mana."""
+    if not action.get('hasDelve') or any(action.get(k) for k in
+            ['hasXCost','hasConvoke','hasTapForGeneric','hasHarmonize','tapForPower','additionalCostInfo']):
+        return None
+    low, high = action.get('minDelveNeeded'), action.get('maxDelveCards')
+    candidates = action.get('validDelveCards')
+    if (type(low) is not int or type(high) is not int or not 0 <= low <= high
+            or not isinstance(candidates,list) or not candidates): return None
+    ids = [c.get('entityId') if isinstance(c,dict) else None for c in candidates]
+    if any(not isinstance(i,str) or not i for i in ids) or len(set(ids)) != len(ids) or low>len(ids): return None
+    return ids,low,min(high,len(ids))
+
+
 def validate_selection_bounds(wire, o):
     """Check native bounds omitted by the legacy wire-type validator.
 
     This does not simulate Magic or replace native execution of complex constraints.
     """
+    if wire.get('channel') == 'action':
+        choice=wire.get('choice',{})
+        action=next((a for a in o.get('legalActions',[]) if a.get('semanticId')==choice.get('semanticId')),None)
+        bounds=_delve_bounds(action) if action else None
+        if bounds is not None:
+            candidates,low,high=bounds;selected=choice.get('params',{}).get('delvedCards',[])
+            if (not isinstance(selected,list) or any(not isinstance(i,str) for i in selected)
+                    or len(selected)!=len(set(selected)) or not set(selected)<=set(candidates)
+                    or not low<=len(selected)<=high):
+                raise PilotContractError('bounded-fallback-delve-outside-native-bounds')
     p = o.get('pendingDecision')
     if wire.get('channel') != 'decision' or not p: return
     r = wire['response']; rt = r['type']
@@ -224,6 +248,8 @@ def _candidate_description(wire, o, facts=None):
     if not result['paymentFacts']:result.pop('paymentFacts')
     if a.get('kind','').startswith('Cast'):
         result['costBasis']='alternative cost' if a.get('action',{}).get('useAlternativeCost') or a.get('kind')=='CastWithAlternativeCost' else 'mana cost'
+    elif a.get('kind')=='PlayLand':
+        result['costBasis']='land drop, no mana'
     source=cards.get(a.get('action',{}).get('cardId'),{})
     if source.get('name')=='Into the Roil' and a.get('action',{}).get('declaredCostSlot') in (None,'KICKED'):
         result['reviewedEffects']={'returnTargetNonlandPermanentToOwnersHand':True,
@@ -446,6 +472,14 @@ def constrain_native_format(o):
         if semantic is not None:
             action = next((a for a in o.get('legalActions', []) if a.get('semanticId') == semantic), {})
             fields = props.get('params', {}).get('properties', {})
+            bounds=_delve_bounds(action)
+            if bounds is not None and 'delvedCards' in fields:
+                ids,low,high=bounds
+                fields['delvedCards']={'type':'array','items':{'type':'string','enum':ids},
+                                      'minItems':low,'maxItems':high}
+                if low>0:
+                    required=props['params'].setdefault('required',[])
+                    if 'delvedCards' not in required: required.append('delvedCards')
             if 'xValue' in fields and type(action.get('maxAffordableX')) is int:
                 fields['xValue']['minimum'] = action['minX'] if type(action.get('minX')) is int else 0
                 fields['xValue']['maximum'] = action['maxAffordableX']

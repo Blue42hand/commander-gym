@@ -201,10 +201,10 @@ class DefaultPolicySubsystem(SharedCardPolicies, MaskedHeuristicSubsystem):
             if setup: return self._action(setup, 'shared-card-landfall-before-land')
         def timing_known(a):
             card = self._card(o,a['action'].get('cardId')); f = self.facts.get(card.get('name'))
-            return (f.get('unconditionalUntapped') or f.get('entersTapped') or f.get('untappedIfLandSubtypes')
+            return (f.get('unconditionalUntapped') or f.get('entersTapped') or f.get('conditionalTappedEntry') or f.get('untappedIfLandSubtypes')
                     or f.get('untappedPayLife') or card.get('name') in {*BASIC,'Woodland Cemetery','Overgrown Tomb'})
         supported = [a for a in lands if timing_known(a) and self._land_colors(self._card(o,a['action'].get('cardId')),o)]
-        if supported and len(supported) < len(lands) and max(self._land_score(o,a) for a in supported) >= 100:
+        if supported and len(supported) < len(lands):
             lands = supported
         if any(not self._land_colors(self._card(o,a['action'].get('cardId')),o) for a in lands):
             return SubsystemDecision(reason='default-unknown-land-mana')
@@ -255,7 +255,7 @@ class DefaultPolicySubsystem(SharedCardPolicies, MaskedHeuristicSubsystem):
             return not any(c.get('name') in {'Forest', 'Swamp', 'Overgrown Tomb'}
                            or set(c.get('subtypes', [])) & {'Forest', 'Swamp'} for c in board)
         # Tomb can enter untapped by paying life; native owns that decision.
-        return self.facts.get(name).get('entersTapped', False)
+        return self.facts.get(name).get('entersTapped', False) or self.facts.get(name).get('conditionalTappedEntry', False)
 
     def _land_score(self, o, action):
         card = self._card(o, action['action'].get('cardId'))

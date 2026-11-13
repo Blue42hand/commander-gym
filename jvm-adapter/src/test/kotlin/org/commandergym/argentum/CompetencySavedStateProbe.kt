@@ -32,7 +32,17 @@ object CompetencySavedStateProbe {
                             val params=choice["params"]
                             val action=if(params==null) template else ActionParameterizer.apply(template,json.decodeFromJsonElement<ActionParams>(params),initial)
                             val result=processor.process(initial,action).result
-                            check(result.outcome !is Outcome.Rejected) { "$branch rejected for callback ${entry["sequence"]}: ${result.outcome}" }
+                            val expectedError=if(branch=="baseline") entry["expectedBaselineError"]?.jsonPrimitive?.content else null
+                            if(expectedError!=null) {
+                                check(result.outcome is Outcome.Rejected && expectedError in result.outcome.toString())
+                            } else {
+                                check(result.outcome !is Outcome.Rejected) { "$branch rejected for callback ${entry["sequence"]}: ${result.outcome}" }
+                            }
+                            if(branch=="replacement" && entry["delvePayment"]?.jsonPrimitive?.boolean==true) {
+                                check(action is CastSpell)
+                                check(result.outcome is Outcome.Done && result.state.pendingDecision==null)
+                                check(action.cardId in result.state.stack)
+                            }
                             var flyers:Int?=null
                             if(branch=="replacement" && entry["ordinaryManaCast"]?.jsonPrimitive?.boolean==true) {
                                 check(action is CastSpell && !action.useAlternativeCost)
@@ -42,8 +52,15 @@ object CompetencySavedStateProbe {
                                 flyers=initial.getZone(ZoneKey(action.playerId,Zone.BATTLEFIELD)).count { "FLYING" in projected.getKeywords(it) }
                                 check(flyers<4)
                             }
+                            if(branch=="replacement" && entry["landDevelopment"]?.jsonPrimitive?.boolean==true) {
+                                check(action is PlayLand)
+                                check(result.outcome is Outcome.Done && result.state.pendingDecision==null)
+                                check(action.cardId in initial.getZone(ZoneKey(action.playerId,Zone.HAND)))
+                                check(action.cardId in result.state.getZone(ZoneKey(action.playerId,Zone.BATTLEFIELD)))
+                                check(action.cardId !in result.state.getZone(ZoneKey(action.playerId,Zone.HAND)))
+                            }
                             putJsonObject(branch) {
-                                put("accepted",true)
+                                put("accepted",result.outcome !is Outcome.Rejected)
                                 put("outcome",result.outcome.toString())
                                 put("pendingDecision",result.state.pendingDecision?.javaClass?.simpleName)
                                 put("actionType",action.javaClass.simpleName)

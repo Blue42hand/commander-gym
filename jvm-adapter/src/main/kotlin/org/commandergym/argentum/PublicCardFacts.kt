@@ -223,6 +223,7 @@ object PublicCardFacts {
                 }
             })
             put("untappedPayLife", if (tapped?.unlessCondition == null) tapped?.payLifeCost ?: 0 else 0)
+            put("conditionalTappedEntry", card.typeLine.isLand && noTriggers && tapped?.unlessCondition != null && tapped.payLifeCost == null)
             put("commanderColorMana", commanderMana)
             putJsonArray("painManaColors") { painColors.sorted().forEach { add(it) } }
             putJsonArray("colorIdentity") { card.colorIdentity.mapNotNull { mapOf("WHITE" to "W", "BLUE" to "U", "BLACK" to "B", "RED" to "R", "GREEN" to "G")[it.name] }.sorted().forEach { add(it) } }
