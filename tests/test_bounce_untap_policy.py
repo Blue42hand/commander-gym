@@ -137,3 +137,44 @@ class BounceUntapPolicyTests(unittest.TestCase):
         self.assertIsNotNone(chosen)
         self.assertEqual(next(a['kind'] for a in o['legalActions'] if a['actionId']==chosen.action_id),'PassPriority')
         self.assertEqual(o,before)
+
+    def test_saved_empty_begin_combat_windows_all_preserve_own_board(self):
+        from commander_gym.engine_deck_policy import EngineDeckPolicy
+        root=Path(__file__).with_name('fixtures')
+        fixture=json.load(gzip.open(root/'cycle-23-bounce-windows.json.gz','rt'))
+        f=CardFacts(json.load(gzip.open(root/'cycle-22-resource-facts.json.gz','rt')))
+        checked=[]
+        for row in fixture['rows']:
+            if row['sequence']==6857:continue
+            o=row['observation'];before=deepcopy(o)
+            self.assertEqual(row['evidence']['nativeBaselineStatus'],'accepted')
+            choice=EngineDeckPolicy(f,'lathril').try_choose(o).choice
+            self.assertIsNotNone(choice,row['sequence'])
+            self.assertEqual(next(a['kind'] for a in o['legalActions'] if a['actionId']==choice.action_id),'PassPriority')
+            self.assertEqual(o,before);checked.append(row['sequence'])
+        self.assertEqual(checked,[2188,3560,4897,6591])
+
+    def test_actual_reactive_window_keeps_domain_and_explains_return_cost(self):
+        from commander_gym.bounded_policy_fallback import BoundedPolicyFallback
+        from test_lmstudio import config,FakeTransport,completion
+        root=Path(__file__).with_name('fixtures')
+        rows=json.load(gzip.open(root/'cycle-23-bounce-windows.json.gz','rt'))['rows']
+        o=next(r['observation'] for r in rows if r['sequence']==6857);before=deepcopy(o)
+        f=CardFacts(json.load(gzip.open(root/'cycle-22-resource-facts.json.gz','rt')))
+        view,_=bounded_observation(o,f)
+        self.assertIn(7,[a['actionId'] for a in view['legalActions']])
+        passed=next(a for a in o['legalActions'] if a['kind']=='PassPriority')
+        class PassTransport(FakeTransport):
+            def request(self,path,body,**options):
+                if path!='/api/v1/models':
+                    answer=({'option':0} if body['response_format']['json_schema']['name']=='bounded_policy_choice'
+                            else {'channel':'action','choice':{'semanticId':passed['semanticId'],'params':{}}})
+                    self.responses=[completion(json.dumps(answer))]
+                return super().request(path,body,**options)
+        t=PassTransport();t.models['models'][0]['loaded_instances'][0]['config']['context_length']=131072
+        BoundedPolicyFallback(config(context_window=131072,max_prompt_bytes=122880),t,facts=f).choose_with_policy_context(o,[])
+        request=next(body for path,body,_ in t.calls if path=='/v1/chat/completions')
+        instructions=request['messages'][0]['content']
+        self.assertIn('before the untap resolves',instructions)
+        self.assertIn("opponent's creature",instructions)
+        self.assertEqual(o,before)

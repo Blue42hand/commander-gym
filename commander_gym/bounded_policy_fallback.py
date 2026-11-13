@@ -788,6 +788,11 @@ class BoundedPolicyFallback:
         descriptions=' '.join(a.get('description') or '' for a in o.get('legalActions',[])).lower()
         if 'untap' in descriptions:
             instructions += ' Untapping grants no extra attack and does not remove an attacker from combat. Spend it for a concrete mana, ability, attack or defense benefit.'
+        if ('untap' in descriptions and any(
+            (a.get('additionalCostInfo') or {}).get('costType')=='BouncePermanent'
+            for a in o.get('legalActions',[]))):
+            instructions += (" Returning a creature as a cost removes it from the battlefield before the untap resolves; that same creature cannot receive the untap."
+                             " Untapping an opponent's creature usually helps that opponent. Identify a concrete benefit before returning one of your own creatures for it.")
         if 'hexproof' in descriptions or 'shroud' in descriptions:
             instructions += ' Removing hexproof or shroud needs a follow-up that targets the affected creature.'
         if (o.get('pendingDecision') or {}).get('prompt')=='You may draw a card':
