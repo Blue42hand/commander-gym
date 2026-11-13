@@ -214,7 +214,24 @@ def disables_only_opposing_permanent(o, spell_id):
     return target in ids_in(state,'Battlefield') and controller not in (None,me)
 
 
-def stranded_land_mana_boost(o, name, facts):
+def live_combat_draw_decision(o):
+    """Keep inference when drawing might change our blocks or save a blocked attacker."""
+    state=o.get('state',{});combat=state.get('combat');me=o['agentToAct']
+    if state.get('currentStep')=='END_COMBAT' or combat is None:return False
+    if any(p.get('teamSharedLife') or p.get('teamSharedTurns') for p in state.get('players',[])):return True
+    if not isinstance(combat,dict) or not isinstance(combat.get('attackers'),list):return True
+    for attacker in combat['attackers']:
+        if not isinstance(attacker,dict):return True
+        target=attacker.get('attackingTarget')
+        if not isinstance(target,dict) or target.get('type')!='Player':return True
+        if target.get('playerId') is None or target['playerId']==me:return True
+        if combat.get('attackingPlayerId')==me:
+            if attacker.get('isBlocked') is not False or attacker.get('blockedBy'):return True
+        elif combat.get('attackingPlayerId') is None:return True
+    return False
+
+
+def stranded_land_mana_boost(o, name, facts, action):
     """Hold a reviewed land boost when paying for it exhausts the sole useful land.
 
     Other permanents, floating mana, land drops and unknown board details can create
@@ -222,6 +239,10 @@ def stranded_land_mana_boost(o, name, facts):
     """
     boost=facts.get(name).get('temporaryLandManaBoost');state=o['state'];me=o['agentToAct']
     if not boost or facts.get(name).get('manaCost')!='{'+boost['color']+'}':return False
+    raw=action.get('action',{})
+    if (not affordable(action) or action.get('manaCostString')!=facts.get(name).get('manaCost')
+        or raw.get('useWithoutPayingManaCost') or raw.get('useAlternativeCost')
+        or raw.get('alternativePayment') or action.get('additionalCostInfo')):return False
     own=ids_in(state,'Battlefield',me)
     if len(own)!=1 or any(a.get('kind')=='PlayLand' for a in o.get('legalActions',[])):return False
     land=state.get('cards',{}).get(own[0],{})
@@ -238,6 +259,7 @@ def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=()
     view = deepcopy(o); cards = view.get('state', {}).get('cards', {}); me = view['agentToAct']
     restrictions = []; retained = []; plans = []
     answered=pending_counter_answers(o,facts);held_autopay=False;state=o.get('state',{});own_stack=own_stack_can_resolve(o,facts)
+    can_pass=any(a.get('kind')=='PassPriority' and affordable(a) for a in o.get('legalActions',[]))
     for a in view.get('legalActions', []):
         raw = a.get('action', {}); name = cards.get(raw.get('cardId', raw.get('sourceId')), {}).get('name')
         state = o.get('state',{})
@@ -253,9 +275,19 @@ def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=()
             a['validBlockTargets']={i:ts for i,ts in pairs.items() if ts}
             if isinstance(a.get('validBlockers'),list):a['validBlockers']=[i for i in a['validBlockers'] if i in a['validBlockTargets']]
         casting=a.get('kind','').startswith('Cast')
+        if (not o.get('pendingDecision') and o.get('nativePaymentError') is None and can_pass
+            and a.get('kind')=='ActivateAbility' and raw.get('abilityId') in facts.get(name).get('equipAbilities',[])
+            and name not in reaction_timing_exceptions and a.get('requiresTargets') is True
+            and a.get('minTargets')==a.get('targetCount')==1 and a.get('targetRequirements') is None
+            and isinstance(a.get('validTargets'),list)):
+            targets=[t for t in a['validTargets'] if raw.get('sourceId') not in (cards.get(t,{}).get('attachments') or [])]
+            if targets!=a['validTargets']:
+                restrictions.append({'action':a['semanticId'],'rule':'avoid-equipping-current-host'})
+                a['validTargets']=targets
+                if not targets:
+                    held_autopay |= raw.get('paymentStrategy',{}).get('type')=='AutoPay';continue
         if (casting and quiet and not o.get('pendingDecision') and o.get('nativePaymentError') is None
-            and state.get('activePlayerId')==me and state.get('currentStep') in {'PRECOMBAT_MAIN','POSTCOMBAT_MAIN'}
-            and name not in reaction_timing_exceptions and stranded_land_mana_boost(o,name,facts)):
+            and name not in reaction_timing_exceptions and stranded_land_mana_boost(o,name,facts,a)):
             restrictions.append({'action':a['semanticId'],'rule':'hold-land-mana-boost-without-remaining-source'})
             held_autopay |= raw.get('paymentStrategy',{}).get('type')=='AutoPay';continue
         if a.get('kind')=='CastSpellModal' and name not in allow_self_targets:
@@ -270,6 +302,13 @@ def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=()
             and a.get('targetRequirements') is None and not a.get('additionalCostInfo')
             and a.get('parameterSpec',{}).get('allowedFields',{}).get('targets')=='ENTITY_ID_ARRAY')
         combat_step=state.get('currentStep') in {'BEGIN_COMBAT','DECLARE_ATTACKERS','DECLARE_BLOCKERS','FIRST_STRIKE_COMBAT_DAMAGE','COMBAT_DAMAGE','END_COMBAT'}
+        if (not o.get('pendingDecision') and o.get('nativePaymentError') is None and quiet and combat_step
+            and can_pass and not cards.get(raw.get('sourceId'),{}).get('activeEffects')
+            and a.get('kind')=='ActivateAbility' and raw.get('abilityId') in facts.get(name).get('selfDrawAbilities',[])
+            and a.get('requiresTargets') is False and name not in reaction_timing_exceptions
+            and not live_combat_draw_decision(o)):
+            restrictions.append({'action':a['semanticId'],'rule':'draw-waits-for-development-or-relevant-combat'})
+            held_autopay |= raw.get('paymentStrategy',{}).get('type')=='AutoPay';continue
         if combat_step and state.get('activePlayerId')!=me:
             combat=state.get('combat');empty_combat=('combat' in state and combat is None or
                 isinstance(combat,dict) and isinstance(combat.get('attackers'),list) and not combat['attackers'])
@@ -303,7 +342,10 @@ def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=()
             and state.get('currentStep') in {'UNTAP','UPKEEP','DRAW'}
             and (casting or a.get('kind')=='ActivateAbility' and a.get('isManaAbility') is not True and raw.get('abilityId') not in {'Lathril, Blade of the Elves:2','Sterling Grove:1'})):
             restrictions.append({'action':a['semanticId'],'rule':'development-waits-for-main'});held_autopay |= raw.get('paymentStrategy',{}).get('type')=='AutoPay';continue
-        if (not o.get('pendingDecision') and o.get('nativePaymentError') is None and quiet and not state.get('combat') and (casting or a.get('kind')=='ActivateAbility' and a.get('isManaAbility') is not True) and 'DRAW' in facts.get(name).get('tags',[])
+        if (not o.get('pendingDecision') and o.get('nativePaymentError') is None and quiet and can_pass and not state.get('combat')
+            and (casting and 'DRAW' in facts.get(name).get('tags',[]) or
+                 a.get('kind')=='ActivateAbility' and raw.get('abilityId') in facts.get(name).get('selfDrawAbilities',[]))
+            and name not in reaction_timing_exceptions
             and not facts.get(name).get('affectsOpponent') and 'COUNTERSPELL' not in facts.get(name).get('tags',[])
             and not (state.get('activePlayerId')==me and state.get('currentStep') in {'PRECOMBAT_MAIN','POSTCOMBAT_MAIN'}
                      or state.get('activePlayerId')!=me and state.get('currentStep') in {'END','END_STEP'})):

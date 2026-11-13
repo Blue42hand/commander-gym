@@ -31,6 +31,58 @@ class CompetenceBoundsTests(unittest.TestCase):
         schema=constrain_target_params({'type':'object','properties':{'targets':{}}},a)
         self.assertNotIn('anyOf',schema)
 
+    def test_flat_target_model_schema_has_one_spelling_and_preserves_other_requirements(self):
+        from commander_gym.lmstudio_pilot import _schema_check, _missing_required_paths
+        from commander_gym.lmstudio_provider import LMStudioError
+        a={'requiresTargets':True,'minTargets':1,'targetCount':1,'validTargets':['e200']}
+        original={'type':'object','properties':{'targets':{},'targetGroups':{},'xValue':{'type':'integer'}},
+                  'required':['xValue'],'additionalProperties':False}
+        before=deepcopy(original);s=constrain_target_params(original,a)
+        self.assertEqual(original,before);self.assertNotIn('anyOf',s)
+        self.assertNotIn('targetGroups',s['properties']);self.assertEqual(s['required'],['xValue','targets'])
+        _schema_check(s,{'targets':['e200'],'xValue':0},validate=True)
+        for params in [{'cardId':'e331','targetIds':['e200']},{'cardId':'e331'},
+                       {'targets':['e200','e200'],'xValue':0},{'targets':['other'],'xValue':0},
+                       {'targetGroups':[['e200']],'xValue':0}]:
+            with self.assertRaises(LMStudioError):_schema_check(s,params,validate=True)
+        self.assertIn('targets',_missing_required_paths(s,{'cardId':'e331'}))
+        # The native API retains support for its original grouped alias.
+        validate_target_params({'targetGroups':[['e200']]},a)
+        group=constrain_target_params({'type':'object','properties':{'targetGroups':{}}},a)
+        self.assertEqual(group['required'],['targetGroups'])
+        _schema_check(group,{'targetGroups':[['e200']]},validate=True)
+        a['targetRequirements']=[{'complex':'native grouped contract'}]
+        self.assertEqual(constrain_target_params(original,a),original)
+
+    def test_saved_provider_failure_retries_with_canonical_targets(self):
+        import gzip
+        from pathlib import Path
+        from commander_gym.heuristic_facts import CardFacts
+        from commander_gym.lmstudio_pilot import _schema_check
+        from test_lmstudio import discovery
+        fixture=json.load(gzip.open(Path(__file__).with_name('fixtures')/'cycle-16-target-failure.json.gz','rt'))
+        self.assertTrue(fixture['evidence']['nativeMaskedMatch'])
+        invalid=fixture['failedModelIo']['attempts'][0]['response']
+        parsed=json.loads(invalid['outputText'])
+        oldschema=fixture['failedModelIo']['attempts'][0]['request']['response_format']['json_schema']['schema']
+        from commander_gym.lmstudio_provider import LMStudioError
+        with self.assertRaises(LMStudioError):_schema_check(oldschema,parsed,validate=True)
+        repaired=deepcopy(parsed);repaired['decision']['choice']['params']={'targets':['e200']}
+        class Replay:
+            def __init__(self):self.requests=[]
+            def request(self,path,body,**kwargs):
+                if path=='/api/v1/models':
+                    models=discovery();models['models'][0]['loaded_instances'][0]['config']['context_length']=131072
+                    return models
+                self.requests.append(deepcopy(body))
+                return completion(json.dumps(parsed if len(self.requests)==1 else repaired))
+        t=Replay();o=fixture['observation'];before=deepcopy(o)
+        c=BoundedPolicyFallback(config(context_window=131072,max_prompt_bytes=122880,decision_explanations=True),t,
+                                facts=CardFacts(fixture['cardFacts'])).choose_with_policy_context(o,[{'metadata':{'policyLayers':{'status':'deferred'}}}])
+        self.assertEqual(dict(c.params),{'targets':['e200']});self.assertEqual(len(t.requests),2)
+        self.assertIn('decision.choice.params.targets',t.requests[1]['messages'][1]['content'])
+        self.assertEqual(o,before)
+
     def test_removal_bounds_keep_enemy_and_unknown_ownership(self):
         a=offer('CastSpell',1,card='spell');a.update(requiresTargets=True,targetCount=1,minTargets=1,validTargets=['own','enemy','unknown'])
         o=observation(a);zone(o,'Hand','me',spell={'name':'Reality Shift'})

@@ -5,6 +5,9 @@ import com.wingedsheep.ai.engine.knowledge.SynergyAxes
 import com.wingedsheep.ai.engine.knowledge.TargetPolarityAnalyzer
 import com.wingedsheep.engine.registry.CardRegistry
 import com.wingedsheep.sdk.dsl.Patterns
+import com.wingedsheep.sdk.dsl.Effects
+import com.wingedsheep.sdk.dsl.DynamicAmounts
+import com.wingedsheep.sdk.core.CounterType
 import com.wingedsheep.sdk.core.Zone
 import com.wingedsheep.sdk.scripting.LoseAllAbilities
 import com.wingedsheep.sdk.scripting.ModifyStats
@@ -254,6 +257,24 @@ object PublicCardFacts {
             putJsonArray("manaColors") { manaColors.sorted().forEach { add(it) } }
             put("simpleMana", simpleMana)
             put("simplePermanent", noStatic && noTriggers && noReplacement && (activated.isEmpty() || simpleMana))
+            putJsonArray("equipAbilities") {
+                activated.filter { it.isEquipAbility }.forEach { add(it.id.value) }
+            }
+            putJsonArray("selfDrawAbilities") {
+                // Whole effects only: self draw, or the burden-counter draw pattern.
+                // Modes, targets, protection, pumps and mixed effects stay uncertain.
+                val burdenDraw = Effects.AddCounters(CounterType.BURDEN, 1, EffectTarget.Self) then
+                    Effects.DrawCards(DynamicAmounts.countersOnSelf(CounterType.BURDEN))
+                for (ability in activated) {
+                    val effect = ability.effect
+                    val drawCount = (effect as? DrawCardsEffect)?.count as? DynamicAmount.Fixed
+                    val fixedDraw = effect is DrawCardsEffect && effect.target == EffectTarget.Controller &&
+                        drawCount != null && drawCount.amount in 1..10
+                    if (!ability.isManaAbility && ability.timing == TimingRule.InstantSpeed && ability.restrictions.isEmpty() &&
+                        ability.targetRequirements.isEmpty() && ability.activateFromZone == Zone.BATTLEFIELD &&
+                        (fixedDraw || effect == burdenDraw)) add(ability.id.value)
+                }
+            }
             put("friendlyStaticPermanent", friendlyStaticPermanent)
             put("unconditionalUntapped", noReplacement)
             put("entersTapped", intent.entersTapped)

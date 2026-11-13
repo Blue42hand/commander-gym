@@ -84,15 +84,21 @@ def constrain_target_params(schema, action):
     array = {'type':'array','items':item,'minItems':low}
     if high is not None: array['maxItems'] = high
     if offered == []: array['maxItems'] = 0
-    aliases = []
-    if 'targets' in fields:
-        fields['targets'] = array; aliases.append({'type':'object','required':['targets']})
-    if 'targetGroups' in fields:
-        # With no per-group native contract, one group represents the flat slot.
+    # Flat native slots have one canonical model spelling. An alias-only
+    # anyOf adds no decision value and some local grammar converters mishandle
+    # sibling object constraints around that union. Native validation continues
+    # to accept either representation from other callers.
+    selected = 'targets' if 'targets' in fields else 'targetGroups' if 'targetGroups' in fields else None
+    if selected == 'targets':
+        fields['targets'] = array
+        fields.pop('targetGroups', None)
+        if 'targetGroups' in schema.get('required', []):
+            schema['required'] = list(dict.fromkeys('targets' if k == 'targetGroups' else k for k in schema['required']))
+    elif selected == 'targetGroups':
         fields['targetGroups'] = {'type':'array','items':deepcopy(array),'maxItems':1}
         if low > 0: fields['targetGroups']['minItems'] = 1
-        aliases.append({'type':'object','required':['targetGroups']})
-    if low > 0 and aliases: schema['anyOf'] = aliases
+    if low > 0 and selected:
+        schema['required'] = list(dict.fromkeys(schema.get('required', []) + [selected]))
     return schema
 
 

@@ -5,6 +5,8 @@ import com.wingedsheep.engine.state.GameState
 import com.wingedsheep.engine.state.ZoneKey
 import com.wingedsheep.engine.state.components.identity.LifeTotalComponent
 import com.wingedsheep.engine.state.components.battlefield.TappedComponent
+import com.wingedsheep.engine.state.components.battlefield.AttachedToComponent
+import com.wingedsheep.engine.state.components.player.ManaPoolComponent
 import com.wingedsheep.engine.mechanics.layers.StateProjector
 import com.wingedsheep.sdk.core.Zone
 import com.wingedsheep.sdk.model.EntityId
@@ -85,6 +87,40 @@ object CompetencySavedStateProbe {
                                     initial.getEntity(template.playerId)!!.get<LifeTotalComponent>()!!.life-1)
                             }
                             val modalQuestions=mutableListOf<JsonElement>()
+                            val equipment=entry["equipmentComparison"]?.jsonObject
+                            if(equipment!=null) {
+                                val source=json.decodeFromJsonElement<EntityId>(equipment.getValue("source"))
+                                val host=json.decodeFromJsonElement<EntityId>(equipment.getValue("host"))
+                                check(initial.stack.isEmpty())
+                                check(initial.getEntity(source)!!.get<AttachedToComponent>()!!.targetId==host)
+                                var passes=0
+                                while(result.state.stack.isNotEmpty()) {
+                                    check(++passes<=128 && result.state.pendingDecision==null)
+                                    result=processor.process(result.state,PassPriority(requireNotNull(result.state.priorityPlayerId))).result
+                                    check(result.outcome !is Outcome.Rejected)
+                                }
+                                check(result.state.getEntity(source)!!.get<AttachedToComponent>()!!.targetId==host)
+                                val changed=initial.getBattlefield().count { id ->
+                                    initial.getEntity(id)?.has<TappedComponent>()!=result.state.getEntity(id)?.has<TappedComponent>()
+                                }
+                                val beforePool=initial.getEntity(action.playerId)?.get<ManaPoolComponent>()?.total ?: 0
+                                val afterPool=result.state.getEntity(action.playerId)?.get<ManaPoolComponent>()?.total ?: 0
+                                if(branch=="baseline") check(changed>0 || afterPool<beforePool)
+                                else check(changed==0 && beforePool==afterPool)
+                            }
+                            val heldCard=entry["heldCard"]
+                            val heldSource=entry["heldSource"]
+                            if(branch=="replacement" && heldSource!=null) {
+                                check(action is PassPriority && result.outcome is Outcome.Done)
+                                val source=json.decodeFromJsonElement<EntityId>(heldSource)
+                                check(!initial.getEntity(source)!!.has<TappedComponent>())
+                                check(!result.state.getEntity(source)!!.has<TappedComponent>())
+                            }
+                            if(branch=="replacement" && heldCard!=null) {
+                                check(action is PassPriority && result.outcome is Outcome.Done)
+                                val kept=json.decodeFromJsonElement<EntityId>(heldCard)
+                                check(kept in result.state.getZone(ZoneKey(action.playerId,Zone.HAND)) && kept !in result.state.stack)
+                            }
                             val tapCost=entry["tapCost"]?.jsonObject
                             if(branch=="replacement" && tapCost!=null) {
                                 check(result.outcome !is Outcome.Rejected)
@@ -187,6 +223,12 @@ object CompetencySavedStateProbe {
                             }
                             putJsonObject(branch) {
                                 put("accepted",result.outcome !is Outcome.Rejected)
+                                if(equipment!=null) {
+                                    put("resolvedWithOpponentsPassing",true);put("attachmentUnchanged",true)
+                                    put("manaAndSourceTapsPreserved",branch=="replacement")
+                                }
+                                if(branch=="replacement" && heldCard!=null) put("cardRetainedInHand",true)
+                                if(branch=="replacement" && heldSource!=null) put("drawSourceUntapped",true)
                                 if(branch=="replacement" && tapCost!=null) put("offeredSourceAndCreatureTapped",true)
                                 if(branch=="replacement" && heldRemoval!=null) {
                                     put("cardRetainedInHand",true);put("pendingRemovalPreserved",true)

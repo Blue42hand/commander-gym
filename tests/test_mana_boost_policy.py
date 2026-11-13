@@ -10,6 +10,16 @@ from test_heuristic_policy import observation, offer, zone, facts, fact
 
 
 class ManaBoostPolicyTests(unittest.TestCase):
+    def test_saved_game22_combat_start_keeps_the_stranded_ritual(self):
+        fixture=json.load(gzip.open(Path(__file__).with_name('fixtures')/'cycle-16-ritual.json.gz','rt'))
+        self.assertEqual(fixture['sequence'],452);self.assertTrue(fixture['evidence']['nativeMaskedMatch'])
+        o=fixture['observation'];self.assertEqual(o['state']['currentStep'],'BEGIN_COMBAT')
+        f=CardFacts(fixture['cardFacts']);before=deepcopy(o)
+        from commander_gym.default_policies import DefaultPolicySubsystem
+        result=DefaultPolicySubsystem(f).try_choose(o);self.assertIsNotNone(result.choice)
+        chosen=next(a for a in o['legalActions'] if a['actionId']==result.choice.action_id)
+        self.assertEqual(chosen['kind'],'PassPriority');self.assertEqual(o,before)
+
     def test_saved_game20_ritual_choice_is_replaced_with_holding_the_card(self):
         fixture=json.load(gzip.open(Path(__file__).with_name('fixtures')/'cycle-14-ritual.json.gz','rt'))
         self.assertEqual(fixture['sequence'],413)
@@ -34,7 +44,7 @@ class ManaBoostPolicyTests(unittest.TestCase):
         doc['cards']['Island']=fact(manaCost='',types=['LAND'],subtypes=['Island'],manaColors=['U'],simpleMana=True)
         doc['cards']['Sapphire Surge']=fact(manaCost='{U}',types=['INSTANT'],temporaryLandManaBoost={'subtype':'Island','color':'U','amount':1})
         f=CardFacts(doc)
-        cast=offer('CastSpell',1,card='spell');cast['action']['paymentStrategy']={'type':'AutoPay'}
+        cast=offer('CastSpell',1,card='spell');cast['action']['paymentStrategy']={'type':'AutoPay'};cast['manaCostString']='{U}'
         o=observation(offer('PassPriority',0),cast)
         zone(o,'Hand','me',spell={'name':'Sapphire Surge'})
         zone(o,'Battlefield','me',land={'name':'Island','cardTypes':['LAND'],'subtypes':['Island'],'isTapped':False})
@@ -47,6 +57,26 @@ class ManaBoostPolicyTests(unittest.TestCase):
         self.assertEqual([a['kind'] for a in bounded['legalActions']],['PassPriority'])
         self.assertEqual(r[0]['rule'],'hold-land-mana-boost-without-remaining-source')
         self.assertEqual(o,before)
+
+    def test_all_priority_windows_hold_the_stranded_boost(self):
+        for step in ['UPKEEP','DRAW','PRECOMBAT_MAIN','BEGIN_COMBAT','DECLARE_ATTACKERS','DECLARE_BLOCKERS','COMBAT_DAMAGE','POSTCOMBAT_MAIN','END_STEP']:
+            for active in ['me','enemy']:
+                with self.subTest(step=step,active=active):
+                    o,f=self.board();o['state'].update(currentStep=step,activePlayerId=active)
+                    bounded,_=bounded_observation(o,f)
+                    self.assertFalse(any(a['kind']=='CastSpell' for a in bounded['legalActions']))
+
+    def test_free_discounted_alternative_and_unknown_costs_retain_inference(self):
+        for mode in ['free','free-flag','alternative','unknown','extra-cost']:
+            with self.subTest(mode=mode):
+                o,f=self.board();a=o['legalActions'][1]
+                if mode=='free':a['manaCostString']='{0}'
+                elif mode=='free-flag':a['action']['useWithoutPayingManaCost']=True
+                elif mode=='alternative':a['action']['useAlternativeCost']=True
+                elif mode=='unknown':a.pop('manaCostString')
+                else:a['additionalCostInfo']={'costType':'Unknown'}
+                bounded,_=bounded_observation(o,f)
+                self.assertTrue(any(a['kind']=='CastSpell' for a in bounded['legalActions']))
 
     def test_plans_and_uncertainty_keep_inference(self):
         for case in ['second-land','engine','land-drop','floating','unknown-pool','stack','payment','override']:

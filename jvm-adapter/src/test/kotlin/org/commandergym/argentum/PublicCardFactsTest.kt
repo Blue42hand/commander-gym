@@ -13,6 +13,18 @@ class PublicCardFactsTest {
     private val registry = GameBeansConfig(GameProperties()).cardRegistry()
     private val revision = "12ab2f0ed5bd018334521dc52497e6444f26f5a9"
 
+    @Test fun equipAbilityIdsUseTheNativeEquipFlag() {
+        val cards=PublicCardFacts.export(registry,listOf("Skullclamp","The One Ring"),revision)["cards"]!!.jsonObject
+        assertEquals(listOf("Skullclamp:2"),cards["Skullclamp"]!!.jsonObject["equipAbilities"]!!.jsonArray.map { it.jsonPrimitive.content })
+        assertTrue(cards["The One Ring"]!!.jsonObject["equipAbilities"]!!.jsonArray.isEmpty())
+    }
+
+    @Test fun selfDrawAbilitiesIdentifyTheActivatedEffectInsteadOfWholeCardTags() {
+        val cards=PublicCardFacts.export(registry,listOf("The One Ring","Skullclamp","Solemn Simulacrum"),revision)["cards"]!!.jsonObject
+        assertEquals(listOf("The One Ring:3"),cards["The One Ring"]!!.jsonObject["selfDrawAbilities"]!!.jsonArray.map { it.jsonPrimitive.content })
+        for(name in listOf("Skullclamp","Solemn Simulacrum")) assertTrue(cards[name]!!.jsonObject["selfDrawAbilities"]!!.jsonArray.isEmpty())
+    }
+
     @Test fun simpleLifeGainTriggerRequiresAWholeFixedControllerGain() {
         val cards = PublicCardFacts.export(registry, listOf("Authority of the Consuls", "Sythis, Harvest's Hand", "High Tide"), revision)["cards"]!!.jsonObject
         val gains = cards["Authority of the Consuls"]!!.jsonObject["simpleLifeGainTriggers"]!!.jsonObject

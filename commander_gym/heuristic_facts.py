@@ -34,7 +34,7 @@ class CardFacts:
                   'staticValue', 'repeatable', 'affectsOpponent', 'feeds', 'rewards', 'tribesRewarded'}
         fields |= {'freeOptionalDraws', 'drawSensitive'}
         for name, fact in document['cards'].items():
-            if not isinstance(name, str) or not name or not isinstance(fact, dict) or not fields <= set(fact) or set(fact) - fields - {'simpleLifeGainTriggers', 'temporaryLandManaBoost', 'freeOptionalLibraryReorders', 'conditionalTappedEntry', 'simpleTargetUntapAbilities', 'friendlyStaticPermanent', 'developmentMana', 'manaOnlySelfUntapAbilities', 'fixedStatReductions', 'removesAttachedAbilities', 'untappedIfLandSubtypes', 'variableMana', 'commanderColorMana', 'painManaColors', 'colorIdentity', 'untappedPayLife'}:
+            if not isinstance(name, str) or not name or not isinstance(fact, dict) or not fields <= set(fact) or set(fact) - fields - {'equipAbilities', 'selfDrawAbilities', 'simpleLifeGainTriggers', 'temporaryLandManaBoost', 'freeOptionalLibraryReorders', 'conditionalTappedEntry', 'simpleTargetUntapAbilities', 'friendlyStaticPermanent', 'developmentMana', 'manaOnlySelfUntapAbilities', 'fixedStatReductions', 'removesAttachedAbilities', 'untappedIfLandSubtypes', 'variableMana', 'commanderColorMana', 'painManaColors', 'colorIdentity', 'untappedPayLife'}:
                 raise ValueError('invalid native card fact fields')
             boost=fact.get('temporaryLandManaBoost')
             if boost is not None and (not isinstance(boost,dict) or set(boost)!={'subtype','color','amount'}
@@ -47,10 +47,11 @@ class CardFacts:
                 raise ValueError('invalid friendly static permanent contract')
             if 'developmentMana' in fact and (type(fact['developmentMana']) is not int or not 0<=fact['developmentMana']<=20):
                 raise ValueError('invalid native development mana')
-            for key in ['manaOnlySelfUntapAbilities','simpleTargetUntapAbilities']:
+            for key in ['manaOnlySelfUntapAbilities','simpleTargetUntapAbilities','selfDrawAbilities','equipAbilities']:
                 untaps=fact.get(key,[])
                 if not isinstance(untaps,list) or any(not isinstance(v,str) or not v for v in untaps):
-                    raise ValueError('invalid native untap ability contract')
+                    label={'selfDrawAbilities':'self draw','equipAbilities':'equip'}.get(key,'untap')
+                    raise ValueError('invalid native '+label+' ability contract')
             reductions=fact.get('fixedStatReductions',{})
             if not isinstance(reductions,dict) or any(not isinstance(k,str) or not k or not isinstance(v,dict) or set(v)!={'power','toughness'} or type(v['power']) is not int or v['power']>0 or type(v['toughness']) is not int or v['toughness']>=0 for k,v in reductions.items()):
                 raise ValueError('invalid native stat reduction contract')
