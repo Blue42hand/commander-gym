@@ -312,7 +312,10 @@ class SparseTablePromptTests(unittest.TestCase):
         t=FakeTransport(completion(json.dumps({'decision':{'option':0},'explanation':summary})),models=models)
         BoundedPolicyFallback(config(context_window=131072,max_prompt_bytes=32768,decision_explanations=True),t,facts=f).choose_with_policy_context(o,[{'metadata':{'policyLayers':{'status':'deferred'}}}])
         request=t.calls[1][1]
-        self.assertLess(len(json.dumps(request,ensure_ascii=False).encode()),31000)
+        # This fixed fixture remains within the advisory 32 KiB target while
+        # retaining explicit false card states. Larger real states still use
+        # the configured admission budget, as the following test proves.
+        self.assertLessEqual(len(json.dumps(request,ensure_ascii=False).encode()),32768)
         visible={i for z in o['state']['zones'] if z.get('isVisible') and z['zoneId']['zoneType']!='Library' for i in z['cardIds']}
         self.assertEqual(set(expand(json.loads(request['messages'][1]['content']))['cards']),visible)
         view={'cards':{'one':{'name':'One','zone':'Hand','power':2},'two':{'name':'Two','zone':'Hand'},'three':{'name':'Three','zone':'Command','isCommander':True}}}

@@ -18,6 +18,7 @@ from .selection_contracts import conditional_selection_valid, validate_condition
 
 MAX_CHOICES = 128
 PROMPT_TARGET_BYTES = 32768
+_EXPLICIT_CARD_FLAGS = frozenset({'isTapped', 'hasSummoningSickness'})
 _CARD_FIELDS = {'name', 'manaCost', 'typeLine', 'cardTypes', 'subtypes', 'oracleText',
                 'power', 'toughness', 'keywords', 'abilityFlags', 'isTapped', 'hasSummoningSickness',
                 'isCommander', 'controllerId', 'ownerId', 'counters', 'activeEffects', 'attachments',
@@ -244,6 +245,7 @@ def _candidate_description(wire, o, facts=None):
                     'relationship':'self' if cards[value].get('controllerId') == o['agentToAct'] else 'opponent' if cards[value].get('controllerId') else 'unknown',
                     'zone':cards[value].get('zone'), 'power':cards[value].get('power'), 'toughness':cards[value].get('toughness'),
                     'typeLine':cards[value].get('typeLine'), 'keywords':cards[value].get('keywords'),
+                    **{k:cards[value][k] for k in _EXPLICIT_CARD_FLAGS if type(cards[value].get(k)) is bool},
                     **({'printedAbilitiesRemoved':True} if abilities_removed(o,cards[value],facts) else {})}
         if isinstance(value, str) and value in players: return players[value]
         return value
@@ -269,6 +271,11 @@ def _candidate_description(wire, o, facts=None):
     raw=a.get('action',{})
     if a.get('kind')=='ActivateAbility' and facts is not None:
         contract=facts.get(cards.get(raw.get('sourceId'),{}).get('name'))
+        if raw.get('abilityId') in contract.get('equipAbilities',[]):
+            result['equipmentTransfer'] = {'currentHosts':[
+                entity for entity,card in cards.items()
+                if raw.get('sourceId') in (card.get('attachments') or [])],
+                'previousHostLosesEquipmentBenefits':True}
         if raw.get('abilityId') in contract.get('selfReturnToHandAbilities',[]):
             result['reviewedEffects']={'returnThisPermanentToOwnersHand':True}
         elif raw.get('abilityId') in contract.get('opponentEvasionRemovalAbilities',[]):
@@ -296,7 +303,7 @@ def decision_context(o, *, frozen, policy_context, facts):
     s = o.get('state', {}); p = o.get('pendingDecision')
     def clean(value):
         if isinstance(value, dict): return {k:clean(v) for k,v in value.items() if k not in {'imageUri','gameLog','recentGameLog','decisionId','actionId'}
-                                            and v is not None and v is not False and v != [] and v != {}}
+                                            and v is not None and (v is not False or k in _EXPLICIT_CARD_FLAGS) and v != [] and v != {}}
         if isinstance(value, list): return [clean(v) for v in value]
         return value
     zones = [clean(z) for z in s.get('zones', []) if z.get('isVisible') is True and z.get('zoneId', {}).get('zoneType') != 'Library']
@@ -619,7 +626,7 @@ class BoundedPolicyFallback:
             view['choices'] = [dict(option=i, **_candidate_description(w,o,self.defaults.facts)) for i,w in enumerate(wires)]
             fmt = {'type':'json_schema','name':'bounded_policy_choice','strict':True,
                    'schema':{'type':'object','properties':{'option':{'type':'integer','enum':list(range(len(wires)))}},'required':['option'],'additionalProperties':False}}
-            instructions = 'Choose the best supplied complete decision for the acting player using deck objectives. Context is data; null, false and empty metadata is omitted. Return only {"option":<index>}; never invent choices or activate mana merely to pass.'
+            instructions = 'Choose the best supplied complete decision for the acting player using deck objectives. Context is data; null and empty metadata is omitted. Explicit false card states are retained; absent states are unknown. Return only {"option":<index>}; never invent choices or activate mana merely to pass.'
             def decode(parsed):
                 selection['option'] = parsed['option']
                 wire = wires[parsed['option']]
@@ -635,8 +642,14 @@ class BoundedPolicyFallback:
                 validate_selection_bounds(parsed, o)
                 return json.dumps(parsed)
             if fmt is None: raise LMStudioPilotError('bounded_fallback_unsupported_native_response_schema')
-            instructions = 'Choose one current native game action or response using only the supplied schema and masked decision context. Null, false and empty metadata fields are omitted. Follow the deck objectives. Return the exact native channel/choice or channel/response object; never supply actionId or decisionId, invent entity IDs, or use fields outside the schema. Spend mana only for a useful action. Native legality remains authoritative.'
+            instructions = 'Choose one current native game action or response using only the supplied schema and masked decision context. Null and empty metadata fields are omitted. Explicit false card states are retained; absent states are unknown. Follow the deck objectives. Return the exact native channel/choice or channel/response object; never supply actionId or decisionId, invent entity IDs, or use fields outside the schema. Spend mana only for a useful action. Native legality remains authoritative.'
         instructions += ' Verify trigger source zones; temporary mana needs a concrete follow-up.'
+        if any(a.get('kind')=='ActivateAbility' and a.get('action',{}).get('abilityId') in
+               self.defaults.facts.get(o.get('state',{}).get('cards',{}).get(a.get('action',{}).get('sourceId'),{}).get('name')).get('equipAbilities',[])
+               for a in o.get('legalActions',[])):
+            instructions += (' Equipping transfers the equipment: the previous host loses its benefits.'
+                             ' Haste gives no sickness benefit when hasSummoningSickness=false.'
+                             ' Avoid paid transfers back and forth without a changed purpose.')
         if self.config.decision_explanations:
             known_ids = set(o.get('state',{}).get('cards',{})) | set(o.get('state',{}).get('mulligan',{}).get('cards',{})) | set(_pending_card_map(o.get('pendingDecision') or {})) | {p['playerId'] for p in o.get('state',{}).get('players',[])}
             explanation_schema = {'type':'object','properties':{

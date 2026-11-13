@@ -277,7 +277,7 @@ class LathrilPolicyTests(unittest.TestCase):
         self.assertIsNone(result.choice)
         self.assertEqual(len(result.metadata['candidateChoices']),2)
         from commander_gym.bounded_policy_fallback import BoundedPolicyFallback
-        c=BoundedPolicyFallback(config(),t,facts=p.facts).choose_with_policy_context(o,[{'metadata':result.metadata}])
+        c=BoundedPolicyFallback(config(max_prompt_bytes=6400,max_output_tokens=768),t,facts=p.facts).choose_with_policy_context(o,[{'metadata':result.metadata}])
         self.assertIn(c.params['targets'][0],['a','b']);self.assertNotIn('mine',c.params['targets'])
         self.assertIn('modelIo',c.metadata)
         self.assertEqual(c.metadata['boundedFallback']['candidateCount'],2)
