@@ -34,8 +34,13 @@ class CardFacts:
                   'staticValue', 'repeatable', 'affectsOpponent', 'feeds', 'rewards', 'tribesRewarded'}
         fields |= {'freeOptionalDraws', 'drawSensitive'}
         for name, fact in document['cards'].items():
-            if not isinstance(name, str) or not name or not isinstance(fact, dict) or not fields <= set(fact) or set(fact) - fields - {'freeOptionalLibraryReorders', 'conditionalTappedEntry', 'simpleTargetUntapAbilities', 'friendlyStaticPermanent', 'developmentMana', 'manaOnlySelfUntapAbilities', 'fixedStatReductions', 'removesAttachedAbilities', 'untappedIfLandSubtypes', 'variableMana', 'commanderColorMana', 'painManaColors', 'colorIdentity', 'untappedPayLife'}:
+            if not isinstance(name, str) or not name or not isinstance(fact, dict) or not fields <= set(fact) or set(fact) - fields - {'temporaryLandManaBoost', 'freeOptionalLibraryReorders', 'conditionalTappedEntry', 'simpleTargetUntapAbilities', 'friendlyStaticPermanent', 'developmentMana', 'manaOnlySelfUntapAbilities', 'fixedStatReductions', 'removesAttachedAbilities', 'untappedIfLandSubtypes', 'variableMana', 'commanderColorMana', 'painManaColors', 'colorIdentity', 'untappedPayLife'}:
                 raise ValueError('invalid native card fact fields')
+            boost=fact.get('temporaryLandManaBoost')
+            if boost is not None and (not isinstance(boost,dict) or set(boost)!={'subtype','color','amount'}
+                or boost['subtype'] not in {'Plains','Island','Swamp','Mountain','Forest'}
+                or boost['color'] not in {'W','U','B','R','G'} or type(boost['amount']) is not int or boost['amount']!=1):
+                raise ValueError('invalid temporary land mana boost contract')
             if 'conditionalTappedEntry' in fact and type(fact['conditionalTappedEntry']) is not bool:
                 raise ValueError('invalid conditional land entry contract')
             if 'friendlyStaticPermanent' in fact and type(fact['friendlyStaticPermanent']) is not bool:

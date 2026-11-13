@@ -13,6 +13,15 @@ class PublicCardFactsTest {
     private val registry = GameBeansConfig(GameProperties()).cardRegistry()
     private val revision = "12ab2f0ed5bd018334521dc52497e6444f26f5a9"
 
+    @Test fun temporaryLandManaBonusRequiresTheWholeReviewedEffect() {
+        val cards = PublicCardFacts.export(registry, listOf("High Tide", "Dark Ritual", "Forest", "Elvish Archdruid"), revision)["cards"]!!.jsonObject
+        val bonus = cards["High Tide"]!!.jsonObject["temporaryLandManaBoost"]!!.jsonObject
+        assertEquals("Island", bonus["subtype"]!!.jsonPrimitive.content)
+        assertEquals("U", bonus["color"]!!.jsonPrimitive.content)
+        assertEquals(1, bonus["amount"]!!.jsonPrimitive.int)
+        for (name in listOf("Dark Ritual", "Forest", "Elvish Archdruid")) assertFalse("temporaryLandManaBoost" in cards[name]!!.jsonObject)
+    }
+
     @Test fun utilityManaAndCheckLandEntryRemainSeparateFromSimpleActivation() {
         val cards = PublicCardFacts.export(registry, listOf("Myriad Landscape", "Arcane Lighthouse", "Sunpetal Grove", "Underground River", "Serra's Sanctum", "Sanctum Weaver", "Command Tower", "Adarkar Wastes", "Alela, Artful Provocateur"), revision)["cards"]!!.jsonObject
         fun fact(name: String) = cards[name]!!.jsonObject

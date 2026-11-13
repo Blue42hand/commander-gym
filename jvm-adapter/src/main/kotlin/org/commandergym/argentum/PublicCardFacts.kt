@@ -39,6 +39,9 @@ import com.wingedsheep.sdk.scripting.effects.DrawCardsEffect
 import com.wingedsheep.sdk.scripting.effects.ManaExpiry
 import com.wingedsheep.sdk.scripting.targets.EffectTarget
 import com.wingedsheep.sdk.scripting.EventPattern
+import com.wingedsheep.sdk.scripting.AdditionalManaOnSourceTap
+import com.wingedsheep.sdk.scripting.TappedForManaType
+import com.wingedsheep.sdk.scripting.effects.GrantStaticAbilityEffect
 import kotlinx.serialization.json.*
 
 /** Public definitions only: this API cannot accept GameState or a seat snapshot. */
@@ -225,6 +228,19 @@ object PublicCardFacts {
             })
             put("untappedPayLife", if (tapped?.unlessCondition == null) tapped?.payLifeCost ?: 0 else 0)
             put("conditionalTappedEntry", card.typeLine.isLand && noTriggers && tapped?.unlessCondition != null && tapped.payLifeCost == null)
+            // A whole spell granting one fixed land-subtype mana bonus for this turn.
+            // Mixed effects, extra costs, riders and conditional production remain unknown.
+            val boost = card.script.spellEffect as? GrantStaticAbilityEffect
+            val bonus = boost?.ability as? AdditionalManaOnSourceTap
+            val boostSubtype = if (boost?.target == EffectTarget.Controller && boost.duration == Duration.EndOfTurn &&
+                bonus?.amount == DynamicAmount.Fixed(1) && bonus.color != null && bonus.rider == null &&
+                bonus.whenProducing == TappedForManaType.ANY && noStatic && noTriggers && noReplacement && activated.isEmpty() &&
+                card.script.additionalCosts.isEmpty()) {
+                Subtype.ALL_BASIC_LAND_TYPES.singleOrNull { bonus.sourceFilter == GameObjectFilter.Land.withSubtype(Subtype(it)) }
+            } else null
+            if (boostSubtype != null) putJsonObject("temporaryLandManaBoost") {
+                put("subtype", boostSubtype); put("color", bonus!!.color!!.symbol.toString()); put("amount", 1)
+            }
             put("commanderColorMana", commanderMana)
             putJsonArray("painManaColors") { painColors.sorted().forEach { add(it) } }
             putJsonArray("colorIdentity") { card.colorIdentity.mapNotNull { mapOf("WHITE" to "W", "BLUE" to "U", "BLACK" to "B", "RED" to "R", "GREEN" to "G")[it.name] }.sorted().forEach { add(it) } }

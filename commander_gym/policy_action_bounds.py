@@ -195,6 +195,26 @@ def disables_only_opposing_permanent(o, spell_id):
     return target in ids_in(state,'Battlefield') and controller not in (None,me)
 
 
+def stranded_land_mana_boost(o, name, facts):
+    """Hold a reviewed land boost when paying for it exhausts the sole useful land.
+
+    Other permanents, floating mana, land drops and unknown board details can create
+    a plan, so those retain inference. This uses a native effect contract, not a deck name.
+    """
+    boost=facts.get(name).get('temporaryLandManaBoost');state=o['state'];me=o['agentToAct']
+    if not boost or facts.get(name).get('manaCost')!='{'+boost['color']+'}':return False
+    own=ids_in(state,'Battlefield',me)
+    if len(own)!=1 or any(a.get('kind')=='PlayLand' for a in o.get('legalActions',[])):return False
+    land=state.get('cards',{}).get(own[0],{})
+    if (land.get('isTapped') is not False or land.get('subtypes')!=[boost['subtype']]
+        or land.get('cardTypes')!=['LAND'] or land.get('attachments') or land.get('activeEffects')
+        or land.get('abilityFlags') or not facts.get(land.get('name')).get('simpleMana')):return False
+    player=next((p for p in state.get('players',[]) if p.get('playerId')==me),{})
+    pool=player.get('manaPool')
+    return (isinstance(pool,dict) and all(pool.get(c)==0 for c in ['white','blue','black','red','green','colorless'])
+        and not pool.get('restrictedMana') and not player.get('activeEffects'))
+
+
 def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=(), reaction_timing_exceptions=(), counter_target_exceptions=()):
     view = deepcopy(o); cards = view.get('state', {}).get('cards', {}); me = view['agentToAct']
     restrictions = []; retained = []; plans = []
@@ -214,6 +234,11 @@ def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=()
             a['validBlockTargets']={i:ts for i,ts in pairs.items() if ts}
             if isinstance(a.get('validBlockers'),list):a['validBlockers']=[i for i in a['validBlockers'] if i in a['validBlockTargets']]
         casting=a.get('kind','').startswith('Cast')
+        if (casting and quiet and not o.get('pendingDecision') and o.get('nativePaymentError') is None
+            and state.get('activePlayerId')==me and state.get('currentStep') in {'PRECOMBAT_MAIN','POSTCOMBAT_MAIN'}
+            and name not in reaction_timing_exceptions and stranded_land_mana_boost(o,name,facts)):
+            restrictions.append({'action':a['semanticId'],'rule':'hold-land-mana-boost-without-remaining-source'})
+            held_autopay |= raw.get('paymentStrategy',{}).get('type')=='AutoPay';continue
         if a.get('kind')=='CastSpellModal' and name not in allow_self_targets:
             from .modal_policies import modal_plan,value_modal_contract
             plan=modal_plan(o,a,facts)

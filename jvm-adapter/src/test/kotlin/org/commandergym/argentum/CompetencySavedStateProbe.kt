@@ -3,6 +3,7 @@ package org.commandergym.argentum
 import com.wingedsheep.engine.core.*
 import com.wingedsheep.engine.state.GameState
 import com.wingedsheep.engine.state.ZoneKey
+import com.wingedsheep.engine.state.components.identity.LifeTotalComponent
 import com.wingedsheep.engine.mechanics.layers.StateProjector
 import com.wingedsheep.sdk.core.Zone
 import com.wingedsheep.sdk.model.EntityId
@@ -44,6 +45,28 @@ object CompetencySavedStateProbe {
                                 check(action is CastSpell)
                                 check(result.outcome is Outcome.Done && result.state.pendingDecision==null)
                                 check(action.cardId in result.state.stack)
+                            }
+                            if(branch=="replacement" && entry["manaBeforeSacrifice"]?.jsonPrimitive?.boolean==true) {
+                                check(result.outcome is Outcome.Done && result.state.pendingDecision==null)
+                                val next=entry.getValue("followingCast").jsonObject
+                                val template=json.decodeFromJsonElement<GameAction>(next.getValue("action"))
+                                val following=ActionParameterizer.apply(template,json.decodeFromJsonElement<ActionParams>(next.getValue("params")),result.state)
+                                check(following is CastSpell)
+                                result=processor.process(result.state,following).result
+                                check(result.outcome is Outcome.Done && result.state.pendingDecision==null)
+                                check(following.cardId in result.state.stack)
+                            }
+                            val directManaBeforeSacrifice=entry["expectDirectManaBeforeSacrifice"]?.jsonPrimitive?.boolean==true
+                            if(directManaBeforeSacrifice) {
+                                val template=json.decodeFromJsonElement<GameAction>(entry.getValue("followingCast").jsonObject.getValue("action"))
+                                check(template is CastSpell)
+                                check(result.outcome is Outcome.Done && result.state.pendingDecision==null)
+                                check(template.cardId in result.state.stack)
+                                val sacrifice=entry.getValue("followingCast").jsonObject.getValue("params").jsonObject.getValue("sacrificedPermanents").jsonArray
+                                    .map { json.decodeFromJsonElement<EntityId>(it) }
+                                check(sacrifice.all { it !in result.state.getBattlefield() && it in result.state.getZone(ZoneKey(template.playerId,Zone.GRAVEYARD)) })
+                                check(result.state.getEntity(template.playerId)!!.get<LifeTotalComponent>()!!.life==
+                                    initial.getEntity(template.playerId)!!.get<LifeTotalComponent>()!!.life-1)
                             }
                             val modalQuestions=mutableListOf<JsonElement>()
                             val modalResponses=mutableListOf<JsonElement>()
@@ -131,6 +154,9 @@ object CompetencySavedStateProbe {
                             }
                             putJsonObject(branch) {
                                 put("accepted",result.outcome !is Outcome.Rejected)
+                                if(directManaBeforeSacrifice) {
+                                    put("castOnStack",true);put("sacrificeInGraveyard",true);put("manaAbilityDamageExactlyOnce",true)
+                                }
                                 if(modal!=null) { put("modalCastCompleted",modalCompleted);put("resolvedWithOpponentsPassing",modalResolved);put("commanderRestored",modalResolved);put("nativeCastingQuestions",JsonArray(modalQuestions));put("nativeCastingResponses",JsonArray(modalResponses)) }
                                 put("outcome",result.outcome.toString())
                                 put("pendingDecision",result.state.pendingDecision?.javaClass?.simpleName)
