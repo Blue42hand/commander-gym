@@ -119,6 +119,37 @@ class ResourcePolicies:
                 and ctx.get('phase')=='RESOLUTION' and ctx.get('sourceId')==entity
                 and color in (p.get('availableColors') or []) and current_pool==pool):
                 return self._decision(p,rt,'default-complete-manual-mana-color',color=color)
+        # The model may select a manual mana action whose color is asked in a
+        # separate callback. Keep the immediate casting cost across that boundary.
+        observed=getattr(self,'_callback_mana_color_need',None)
+        self._callback_mana_color_need=None
+        namespace=tuple(v.get('playerId') for v in o['state'].get('players',[]))
+        current_pool=next((v.get('manaPool',{}) for v in o['state'].get('players',[]) if v['playerId']==o['agentToAct']),{})
+        key=(namespace,o['agentToAct'],o['state'].get('turnNumber'),o['state'].get('currentStep'))
+        if observed is not None:
+            previous_key,sources,color,pool=observed
+            if (key==previous_key and rt=='ColorChosenResponse' and p.get('kind')=='ChooseColorDecision'
+                and p.get('playerId')==o['agentToAct'] and ctx.get('phase')=='RESOLUTION'
+                and ctx.get('sourceId') in sources and p.get('prompt')=='Choose a color of mana to add'
+                and p.get('maxColors')==1 and current_pool==pool and color in (p.get('availableColors') or [])):
+                return self._decision(p,rt,'default-preserve-casting-payment-color',color=color)
+        if (rt=='ManaSourcesSelectedResponse' and ctx.get('phase')=='CASTING'
+            and namespace and all(isinstance(v,str) and v for v in namespace)
+            and not current_pool.get('restrictedMana')):
+            cost=mana_cost(p.get('requiredCost',''));units=[]
+            valid=cost is not None
+            for name,color in [('white','W'),('blue','U'),('black','B'),('red','R'),('green','G'),('colorless','C')]:
+                n=current_pool.get(name)
+                if type(n) is not int or not 0<=n<=32:valid=False;break
+                units.extend([{color}]*n)
+            if valid and not self._payable(cost,units):
+                colors=[name for name,color in [('WHITE','W'),('BLUE','U'),('BLACK','B'),('RED','R'),('GREEN','G')]
+                        if self._payable(cost,units+[{color}])]
+                sources={a.get('action',{}).get('sourceId') for a in o.get('legalActions',[])
+                         if a.get('kind')=='ActivateAbility' and a.get('isManaAbility') is True and affordable(a)
+                         and a.get('requiresManaColorChoice') is True and isinstance(a.get('action',{}).get('sourceId'),str)}
+                if len(colors)==1 and sources:
+                    self._observed_mana_color_need=(key,sources,colors[0],dict(current_pool))
         if rt=='ManaSourcesSelectedResponse' and (p.get('canAutoPayNow') is True or self._floating_payable(o,p.get('requiredCost',''))):
             return self._decision(p,rt,'default-fund-native-mana-request',autoPay=p.get('canAutoPayNow') is not False,declined=False,selectedSources=[],waterbendPermanents=[])
         if rt=='ManaSourcesSelectedResponse':

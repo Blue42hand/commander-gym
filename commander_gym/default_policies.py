@@ -73,6 +73,8 @@ class DefaultPolicySubsystem(SharedCardPolicies, MaskedHeuristicSubsystem):
         return replace(result, metadata=metadata)
 
     def _choose(self, o):
+        self._callback_mana_color_need=getattr(self,'_observed_mana_color_need',None)
+        self._observed_mana_color_need=None
         if not isinstance(o.get('state'), dict): return SubsystemDecision(reason='default-missing-masked-state')
         key=(o['agentToAct'],o['state'].get('turnNumber'),o['state'].get('currentStep'))
         if getattr(self,'_unfunded_attack',None)!=key:self._unfunded_attack=None
@@ -82,7 +84,9 @@ class DefaultPolicySubsystem(SharedCardPolicies, MaskedHeuristicSubsystem):
                 return self._action(declaration,'default-cancel-unfunded-attack',{'attackers':{}})
         from .modal_policies import remember_modal_plans
         remember_modal_plans(self,o)
-        if o.get('pendingDecision') is None:self._manual_mana_color=None
+        if o.get('pendingDecision') is None:
+            self._manual_mana_color=None
+            self._observed_mana_color_need=None
         if 'mulligan' in o.get('state', {}): return self._opening(o)
         if o.get('pendingDecision') is not None: return self._pending(o, o['pendingDecision'])
         shared = self._card_actions(o)

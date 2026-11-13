@@ -343,6 +343,20 @@ object CompetencySavedStateProbe {
                                     check(material in result.state.getBattlefield())
                                 }
                             }
+                            entry["manaColorForCost"]?.jsonPrimitive?.content?.let { cost ->
+                                check(action is SubmitDecision && action.response is ColorChosenResponse)
+                                val payable=services.manaSolver.canPay(result.state,action.playerId,com.wingedsheep.sdk.core.ManaCost.parse(cost))
+                                check(payable==(branch=="replacement"))
+                                if(branch=="replacement") {
+                                    val question=result.state.pendingDecision as SelectManaSourcesDecision
+                                    check(question.canAutoPayNow==true)
+                                    result=processor.process(result.state,SubmitDecision(action.playerId,
+                                        ManaSourcesSelectedResponse(question.id,autoPay=true,declined=false))).result
+                                    check(result.outcome is Outcome.Done && result.state.pendingDecision==null)
+                                    val spell=json.decodeFromJsonElement<EntityId>(entry.getValue("manaPaymentSpell"))
+                                    check(spell in result.state.stack)
+                                }
+                            }
                             val playerDraw=entry["beneficialPlayerDrawComparison"]?.jsonObject
                             if(playerDraw!=null) {
                                 check(action is CastSpell && result.outcome is Outcome.Done && result.state.pendingDecision==null)
@@ -651,6 +665,10 @@ object CompetencySavedStateProbe {
                                     put("castOnStack",true);put("sacrificeInGraveyard",true);put("manaAbilityDamageExactlyOnce",true)
                                 }
                                 if(modal!=null) { put("modalCastCompleted",modalCompleted);put("resolvedWithOpponentsPassing",modalResolved);put("commanderRestored",modalResolved);put("nativeCastingQuestions",JsonArray(modalQuestions));put("nativeCastingResponses",JsonArray(modalResponses)) }
+                                if(entry["manaColorForCost"]!=null) {
+                                    put("remainingCostPayable",branch=="replacement")
+                                    if(branch=="replacement")put("nativeCastCompleted",true)
+                                }
                                 put("outcome",result.outcome.toString())
                                 put("pendingDecision",result.state.pendingDecision?.javaClass?.simpleName)
                                 put("actionType",action.javaClass.simpleName)

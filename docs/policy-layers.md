@@ -395,3 +395,19 @@ prebound mode targets, mode-override parameters and genuinely combinatorial
 contracts retain the native schema.
 Explicitly empty opponent combats do not create an untap/blocker decision;
 unknown combat metadata retains model control.
+
+### Immediate mana-color continuation
+
+When a native casting-payment request can be completed by exactly one color of
+additional unrestricted mana, defaults may remember that color across the next
+callback. This also applies when the model chooses the manual mana activation.
+The remembered source must have been an affordable native mana action requiring
+a color choice; defaults do not choose its additional tap or sacrifice costs.
+
+The follow-up must be the exact mana-color prompt for an observed source, with
+the same seat namespace, player, turn, step and unchanged mana pool. Memory is
+consumed once and expires on any intervening callback, including a deck override.
+Ambiguous or unknown costs, restricted pools, missing data, multiple possible
+colors and larger deficits retain bounded inference. Native validation and payment
+remain authoritative. Saved game30 callbacks5197/5204 exercise this boundary:
+the original white choice cannot fund the pending blue cost, whereas blue can.

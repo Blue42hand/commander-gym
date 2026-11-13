@@ -72,3 +72,57 @@ class HiddenBoardManaPaymentTests(unittest.TestCase):
         p=DefaultPolicySubsystem(self.facts);p.try_choose(self.initial());o=self.initial();o['pendingDecision']=None
         p.try_choose(o)
         self.assertIsNone(p.try_choose(self.color()).choice)
+
+class SavedDeferredManaColorTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        root=Path(__file__).parent/'fixtures'
+        cls.rows={r['sequence']:r for r in json.load(gzip.open(root/'cycle-29-mana-color-windows.json.gz','rt'))['rows']}
+        cls.facts=CardFacts(json.load(gzip.open(root/'cycle-28-native-facts.json.gz','rt')))
+    def initial(self):return deepcopy(self.rows[5197]['observation'])
+    def color(self):return deepcopy(self.rows[5204]['observation'])
+    def test_default_and_deck_complete_deferred_manual_activation_color(self):
+        for policy in [DefaultPolicySubsystem(self.facts),EngineDeckPolicy(self.facts,'alela')]:
+            initial=self.initial();before=deepcopy(initial)
+            self.assertIsNone(policy.try_choose(initial).choice)
+            self.assertEqual(initial,before)
+            color=self.color();before=deepcopy(color);c=policy.try_choose(color).choice
+            self.assertEqual(c.response,{**self.rows[5204]['choice']['response'],'color':'BLUE'})
+            self.assertEqual(color,before)
+            self.assertIsNone(policy.try_choose(self.color()).choice)
+            self.assertEqual(self.rows[5204]['evidence']['nativeBaselineStatus'],'accepted')
+    def test_changed_or_unrelated_followup_clears_memory(self):
+        for mode in ['source','actor','turn','step','pool','namespace','prompt','phase','count','unavailable','intervening-decision','intervening-action']:
+            with self.subTest(mode=mode):
+                policy=DefaultPolicySubsystem(self.facts);policy.try_choose(self.initial());o=self.color();p=o['pendingDecision']
+                if mode=='source':p['context']['sourceId']='unknown'
+                elif mode=='actor':p['playerId']='policy-talrand'
+                elif mode=='turn':o['state']['turnNumber']+=1
+                elif mode=='step':o['state']['currentStep']='POSTCOMBAT_MAIN'
+                elif mode=='pool':next(v for v in o['state']['players'] if v['playerId']==o['agentToAct'])['manaPool']['red']=1
+                elif mode=='namespace':o['state']['players'][-1]['playerId']='other-game'
+                elif mode=='prompt':p['prompt']='Choose protection color'
+                elif mode=='phase':p['context']['phase']='UNKNOWN'
+                elif mode=='count':p['maxColors']=2
+                elif mode=='unavailable':p['availableColors']=['WHITE','BLACK']
+                elif mode=='intervening-decision':p['context']['sourceId']='different-resolution'
+                elif mode=='intervening-action':o['pendingDecision']=None
+                policy.try_choose(o)
+                self.assertIsNone(policy.try_choose(self.color()).choice)
+    def test_unknown_or_nonunique_required_color_keeps_inference(self):
+        for mode in ['generic','multiple-pips','unknown-cost','restricted','unknown-pool','no-color-actions','unaffordable']:
+            with self.subTest(mode=mode):
+                policy=DefaultPolicySubsystem(self.facts);o=self.initial();p=o['pendingDecision']
+                if mode=='generic':p['requiredCost']='{1}'
+                elif mode=='multiple-pips':p['requiredCost']='{W}{U}'
+                elif mode=='unknown-cost':p['requiredCost']='unknown'
+                elif mode=='restricted':next(v for v in o['state']['players'] if v['playerId']==o['agentToAct'])['manaPool']['restrictedMana']=[{'unknown':True}]
+                elif mode=='unknown-pool':next(v for v in o['state']['players'] if v['playerId']==o['agentToAct'])['manaPool'].pop('blue')
+                else:
+                    for a in o['legalActions']:
+                        if mode=='no-color-actions':a['requiresManaColorChoice']=False
+                        else:a['affordable']=a['isAffordable']=False
+                policy.try_choose(o)
+                self.assertIsNone(policy.try_choose(self.color()).choice)
+    def test_fresh_color_question_has_no_assumed_payment_goal(self):
+        self.assertIsNone(DefaultPolicySubsystem(self.facts).try_choose(self.color()).choice)
