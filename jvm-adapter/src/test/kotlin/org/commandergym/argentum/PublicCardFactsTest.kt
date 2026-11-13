@@ -13,6 +13,40 @@ class PublicCardFactsTest {
     private val registry = GameBeansConfig(GameProperties()).cardRegistry()
     private val revision = "12ab2f0ed5bd018334521dc52497e6444f26f5a9"
 
+    @Test fun combatGrantedDrawsDoNotBecomeDrawPunishers() {
+        val cards=PublicCardFacts.export(registry,listOf("Reconnaissance Mission","Underworld Dreams","Laboratory Maniac"),revision)["cards"]!!.jsonObject
+        assertFalse(cards["Reconnaissance Mission"]!!.jsonObject["drawSensitive"]!!.jsonPrimitive.boolean)
+        for(name in listOf("Underworld Dreams","Laboratory Maniac"))
+            assertTrue(cards[name]!!.jsonObject["drawSensitive"]!!.jsonPrimitive.boolean,name)
+        // A granted ability's source identity remains distinct from its host.
+        assertTrue(cards["Reconnaissance Mission"]!!.jsonObject["freeOptionalDraws"]!!.jsonObject.isEmpty())
+        assertEquals(1,cards["Reconnaissance Mission"]!!.jsonObject["grantedFreeOptionalDraws"]!!.jsonObject["Reconnaissance Mission:1"]!!.jsonPrimitive.int)
+    }
+
+    @Test fun grantedFreeDrawsRequireTheWholeOptionalControllerDrawEffect() {
+        val mission=registry.getCard("Reconnaissance Mission")!!
+        val grant=mission.script.staticAbilities.single() as com.wingedsheep.sdk.scripting.GrantTriggeredAbility
+        for(effect in listOf(
+            com.wingedsheep.sdk.dsl.Effects.DrawCards(1),
+            com.wingedsheep.sdk.scripting.effects.CompositeEffect(listOf(grant.ability.effect,com.wingedsheep.sdk.dsl.Effects.GainLife(1)))
+        )) {
+            val changed=mission.copy(script=mission.script.copy(staticAbilities=listOf(grant.copy(ability=grant.ability.copy(effect=effect)))))
+            val overlay=com.wingedsheep.engine.registry.CardRegistry(registry);overlay.register(changed)
+            assertTrue(PublicCardFacts.export(overlay,listOf(changed.name),revision)["cards"]!!.jsonObject[changed.name]!!.jsonObject["grantedFreeOptionalDraws"]!!.jsonObject.isEmpty())
+        }
+    }
+
+    @Test fun grantedDrawEventTriggersRemainDrawSensitive() {
+        val mission=registry.getCard("Reconnaissance Mission")!!
+        val grant=mission.script.staticAbilities.single() as com.wingedsheep.sdk.scripting.GrantTriggeredAbility
+        val drawTrigger=registry.getCard("Underworld Dreams")!!.script.triggeredAbilities.single().trigger
+        val changed=mission.copy(script=mission.script.copy(staticAbilities=listOf(
+            grant.copy(ability=grant.ability.copy(trigger=drawTrigger)))))
+        val overlay=com.wingedsheep.engine.registry.CardRegistry(registry)
+        overlay.register(changed)
+        assertTrue(PublicCardFacts.export(overlay,listOf(changed.name),revision)["cards"]!!.jsonObject[changed.name]!!.jsonObject["drawSensitive"]!!.jsonPrimitive.boolean)
+    }
+
     @Test fun zeroXDrawContractChecksTheActualBaseEffect() {
         val cards=PublicCardFacts.export(registry,listOf("Finale of Revelation","Blue Sun's Zenith","Chord of Calling","Pull from Tomorrow"),revision)["cards"]!!.jsonObject
         assertTrue(cards["Finale of Revelation"]!!.jsonObject["emptySelfDrawAtZeroX"]!!.jsonPrimitive.boolean)

@@ -34,7 +34,7 @@ class CardFacts:
                   'staticValue', 'repeatable', 'affectsOpponent', 'feeds', 'rewards', 'tribesRewarded'}
         fields |= {'freeOptionalDraws', 'drawSensitive'}
         for name, fact in document['cards'].items():
-            if not isinstance(name, str) or not name or not isinstance(fact, dict) or not fields <= set(fact) or set(fact) - fields - {'emptySelfDrawAtZeroX', 'selfResourceDrawSpell', 'protectionEquipmentKeywords', 'plainPermanentCast', 'beneficialPlayerDrawCount', 'powerManaAbilities', 'positiveStatBoostAbilities', 'entryStatReduction', 'selfReturnToHandAbilities', 'evasionSensitive', 'opponentEvasionRemovalAbilities', 'opponentAttackRequirementAbilities', 'positiveCounterTriggers', 'activatedAbilityCounts', 'attachedCombatLock', 'bounceTargetUntapAbilities', 'equipAbilities', 'selfDrawAbilities', 'simpleLifeGainTriggers', 'temporaryLandManaBoost', 'freeOptionalLibraryReorders', 'conditionalTappedEntry', 'simpleTargetUntapAbilities', 'friendlyStaticPermanent', 'developmentMana', 'manaOnlySelfUntapAbilities', 'fixedStatReductions', 'removesAttachedAbilities', 'untappedIfLandSubtypes', 'variableMana', 'commanderColorMana', 'painManaColors', 'colorIdentity', 'untappedPayLife'}:
+            if not isinstance(name, str) or not name or not isinstance(fact, dict) or not fields <= set(fact) or set(fact) - fields - {'grantedFreeOptionalDraws', 'emptySelfDrawAtZeroX', 'selfResourceDrawSpell', 'protectionEquipmentKeywords', 'plainPermanentCast', 'beneficialPlayerDrawCount', 'powerManaAbilities', 'positiveStatBoostAbilities', 'entryStatReduction', 'selfReturnToHandAbilities', 'evasionSensitive', 'opponentEvasionRemovalAbilities', 'opponentAttackRequirementAbilities', 'positiveCounterTriggers', 'activatedAbilityCounts', 'attachedCombatLock', 'bounceTargetUntapAbilities', 'equipAbilities', 'selfDrawAbilities', 'simpleLifeGainTriggers', 'temporaryLandManaBoost', 'freeOptionalLibraryReorders', 'conditionalTappedEntry', 'simpleTargetUntapAbilities', 'friendlyStaticPermanent', 'developmentMana', 'manaOnlySelfUntapAbilities', 'fixedStatReductions', 'removesAttachedAbilities', 'untappedIfLandSubtypes', 'variableMana', 'commanderColorMana', 'painManaColors', 'colorIdentity', 'untappedPayLife'}:
                 raise ValueError('invalid native card fact fields')
             protection=fact.get('protectionEquipmentKeywords')
             if 'protectionEquipmentKeywords' in fact and (not isinstance(protection,list)
@@ -126,6 +126,9 @@ class CardFacts:
                 not isinstance(ability,str) or not ability or type(count) is not int or not 1<=count<=10
                 for ability,count in reorders.items()):
                 raise ValueError('invalid free optional library reorder contract')
+            grants=fact.get('grantedFreeOptionalDraws',{})
+            if (not isinstance(grants,dict) or any(not isinstance(a,str) or not a or type(n) is not int or not 1<=n<=10 for a,n in grants.items())):
+                raise ValueError('invalid granted free optional draw contract')
             if (not isinstance(fact['freeOptionalDraws'], dict) or any(
                 not isinstance(ability, str) or not ability or type(count) is not int or not 1 <= count <= 10
                 for ability, count in fact['freeOptionalDraws'].items())):
@@ -134,6 +137,12 @@ class CardFacts:
         self.engine_revision = document['engineRevision']
         self.creature_types = frozenset(t.lower() for t in document['creatureTypes'])
         self.digest = hashlib.sha256(canonical(document)).hexdigest()
+        granted={};granted_ids=set()
+        for fact in document['cards'].values():
+            granted_ids.update(fact.get('grantedFreeOptionalDraws',{}))
+            for contract in ['freeOptionalDraws','grantedFreeOptionalDraws']:
+                for ability,count in fact.get(contract,{}).items():granted.setdefault(ability,set()).add(count)
+        self._granted_draw_counts={ability:next(iter(counts)) for ability,counts in granted.items() if ability in granted_ids and len(counts)==1}
 
     @classmethod
     def load(cls, path):
@@ -141,6 +150,9 @@ class CardFacts:
 
     def document(self):
         return deepcopy(self._document)
+
+    def granted_free_draw_count(self, ability):
+        return self._granted_draw_counts.get(ability)
 
     def get(self, name):
         # Never hand a mutable reference into the catalog to a policy or caller.

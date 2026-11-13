@@ -6,6 +6,8 @@ import com.wingedsheep.ai.engine.knowledge.TargetPolarityAnalyzer
 import com.wingedsheep.engine.registry.CardRegistry
 import com.wingedsheep.sdk.dsl.Triggers
 import com.wingedsheep.sdk.scripting.TriggeredAbility
+import com.wingedsheep.sdk.scripting.GrantTriggeredAbility
+import com.wingedsheep.sdk.scripting.StaticAbility
 import com.wingedsheep.sdk.scripting.ActivatedAbility
 import com.wingedsheep.sdk.scripting.SuppressHexproofForGroup
 import com.wingedsheep.sdk.scripting.SuppressWardForGroup
@@ -84,6 +86,28 @@ object PublicCardFacts {
         is JsonObject -> (value["type"] as? JsonPrimitive)?.content?.contains("Draw") == true || value.values.any(::drawSensitive)
         is JsonArray -> value.any(::drawSensitive)
         else -> false
+    }
+
+    private fun freeOptionalDrawCount(effect: com.wingedsheep.sdk.scripting.effects.Effect): Int? {
+        val gate=effect as? GatedEffect ?: return null
+        val draw=gate.then as? DrawCardsEffect ?: return null
+        val count=draw.count as? DynamicAmount.Fixed ?: return null
+        return count.amount.takeIf {
+            gate.gate is Gate.MayDecide && gate.otherwise==null &&
+                (gate.decisionMaker==null || gate.decisionMaker==EffectTarget.Controller) &&
+                draw.target==EffectTarget.Controller && it in 1..10
+        }
+    }
+
+    private fun drawSensitiveStatic(ability: StaticAbility): Boolean {
+        val encoded=json.encodeToJsonElement(StaticAbility.serializer(),ability)
+        if(ability !is GrantTriggeredAbility)return drawSensitive(encoded)
+        // Granted triggers follow the same rule as printed triggers: inspect
+        // the event and conditions, not an effect occurring after another event.
+        // Keep the filter and every other field in the conservative scan.
+        val grant=encoded.jsonObject
+        val granted=grant.getValue("ability").jsonObject
+        return drawSensitive(JsonObject(grant + ("ability" to JsonObject(granted - "effect"))))
     }
 
     fun export(registry: CardRegistry, names: Collection<String>, engineRevision: String): JsonObject {
@@ -444,16 +468,14 @@ object PublicCardFacts {
             // Only a whole trigger consisting of a free May(Draw N) qualifies.
             // Costs, alternative branches, choices and mixed effects remain strategic.
             putJsonObject("freeOptionalDraws") {
-                for (ability in card.script.triggeredAbilities) {
-                    val gate = ability.effect as? GatedEffect ?: continue
-                    val draw = gate.then as? DrawCardsEffect ?: continue
-                    val count = draw.count as? DynamicAmount.Fixed ?: continue
-                    if (gate.gate is Gate.MayDecide && gate.otherwise == null &&
-                        (gate.decisionMaker == null || gate.decisionMaker == EffectTarget.Controller) &&
-                        draw.target == EffectTarget.Controller && count.amount in 1..10) {
-                        put(ability.id.value, count.amount)
-                    }
-                }
+                for(ability in card.script.triggeredAbilities)
+                    freeOptionalDrawCount(ability.effect)?.let { put(ability.id.value,it) }
+            }
+            // Granted abilities keep this globally named native ability ID while
+            // callbacks identify the receiving creature as the source.
+            putJsonObject("grantedFreeOptionalDraws") {
+                for(grant in card.script.staticAbilities.filterIsInstance<GrantTriggeredAbility>())
+                    freeOptionalDrawCount(grant.ability.effect)?.let { put(grant.ability.id.value,it) }
             }
             putJsonObject("simpleLifeGainTriggers") {
                 for (ability in card.script.triggeredAbilities) {
@@ -511,7 +533,7 @@ object PublicCardFacts {
             })
             put("drawSensitive", card.script.triggeredAbilities.any {
                 drawSensitive(json.encodeToJsonElement(EventPattern.serializer(), it.trigger))
-            } || drawSensitive(script["staticAbilities"] ?: JsonNull) ||
+            } || card.script.staticAbilities.any(::drawSensitiveStatic) ||
                 drawSensitive(script["replacementEffects"] ?: JsonNull))
             put("staticValue", intent.staticPriorValue)
             put("repeatable", intent.repeatable)

@@ -285,6 +285,16 @@ object CompetencySavedStateProbe {
                                     check(payment in result.state.getZone(ZoneKey(action.playerId,Zone.HAND)))
                                 }
                             }
+                            entry["freeDrawHandGain"]?.jsonPrimitive?.int?.let { replacementCount ->
+                                val count=if(branch=="baseline") entry["baselineFreeDrawHandGain"]?.jsonPrimitive?.int ?: replacementCount else replacementCount
+                                check(action is SubmitDecision && action.response is YesNoResponse)
+                                check((action.response as YesNoResponse).choice==(count>0))
+                                val hand=ZoneKey(action.playerId,Zone.HAND)
+                                val library=ZoneKey(action.playerId,Zone.LIBRARY)
+                                check(result.state.getZone(hand).size==initial.getZone(hand).size+count)
+                                check(result.state.getZone(library).size==initial.getZone(library).size-count)
+                                put(if(branch=="baseline")"baselineCardsDrawn" else "nativeCardsDrawn",count)
+                            }
                             val removedTarget=entry["removedUntapTarget"]
                             if(removedTarget!=null) {
                                 val target=json.decodeFromJsonElement<EntityId>(removedTarget)

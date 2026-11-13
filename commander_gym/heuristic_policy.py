@@ -24,6 +24,12 @@ UNSAFE_TAGS = {'REMOVAL', 'EXILE_REMOVAL', 'SWEEPER', 'COUNTERSPELL', 'PACIFISM'
                'COMBAT_TRICK', 'PROTECTION', 'TRIGGER_LOCK', 'COUNTER_LOCK'}
 
 
+def draw_neutral_modifiers(card):
+    """Only explicit native certificates make a visible modifier draw-neutral."""
+    effects=card.get('activeEffects',[])
+    return isinstance(effects,list) and all(isinstance(e,dict) and e.get('drawNeutral') is True for e in effects)
+
+
 def plain_token_body(card):
     # Native public token characteristics suffice for plain bodies. Copies,
     # hidden faces, text-bearing tokens and unrecognized keyword mechanics defer.
@@ -288,6 +294,11 @@ class MaskedHeuristicSubsystem:
         identity = context.get('abilityIdentity') or {}
         fact = self.facts.get(context.get('sourceName'))
         count = fact.get('freeOptionalDraws', {}).get(identity.get('abilityId'))
+        if count is None:
+            source=o.get('state',{}).get('cards',{}).get(context.get('sourceId'),{})
+            if (context.get('sourceId') in ids_in(o.get('state',{}),'Battlefield')
+                and source.get('controllerId')==o['agentToAct'] and source.get('name')==context.get('sourceName')):
+                count=self.facts.granted_free_draw_count(identity.get('abilityId'))
         if (not count or context.get('phase') != 'RESOLUTION' or p.get('yesAvailable') is not True
             or p.get('peerOptions') or p.get('yesDetail') or p.get('noDetail')):
             return None
@@ -302,10 +313,10 @@ class MaskedHeuristicSubsystem:
         for i in ids_in(o['state'], 'Battlefield'):
             c = o['state'].get('cards', {}).get(i, {})
             f = self.facts.get(c.get('name'))
-            if c.get('activeEffects'):
+            if not draw_neutral_modifiers(c):
                 return None
             if not f:
-                if plain_token_body(c):continue
+                if plain_token_body({**c,'activeEffects':[]}):continue
                 return None
             if f['drawSensitive']:
                 return None
