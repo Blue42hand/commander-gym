@@ -478,7 +478,7 @@ def repeated_protection_targets(o, action, facts, history):
     def repeated(target):
         c=cards.get(target,{})
         return (target in visited and target!=hosts[0] and target in owned and c.get('controllerId')==me
-                and 'CREATURE' in c.get('cardTypes',[]) and c.get('hasSummoningSickness') is False
+                and 'CREATURE' in c.get('cardTypes',[]) and type(c.get('hasSummoningSickness')) is bool
                 and c.get('isTapped') is False and not c.get('activeEffects'))
     return [t for t in action['validTargets'] if not repeated(t)]
 
