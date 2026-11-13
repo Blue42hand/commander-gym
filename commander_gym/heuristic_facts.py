@@ -34,7 +34,7 @@ class CardFacts:
                   'staticValue', 'repeatable', 'affectsOpponent', 'feeds', 'rewards', 'tribesRewarded'}
         fields |= {'freeOptionalDraws', 'drawSensitive'}
         for name, fact in document['cards'].items():
-            if not isinstance(name, str) or not name or not isinstance(fact, dict) or not fields <= set(fact) or set(fact) - fields - {'temporaryLandManaBoost', 'freeOptionalLibraryReorders', 'conditionalTappedEntry', 'simpleTargetUntapAbilities', 'friendlyStaticPermanent', 'developmentMana', 'manaOnlySelfUntapAbilities', 'fixedStatReductions', 'removesAttachedAbilities', 'untappedIfLandSubtypes', 'variableMana', 'commanderColorMana', 'painManaColors', 'colorIdentity', 'untappedPayLife'}:
+            if not isinstance(name, str) or not name or not isinstance(fact, dict) or not fields <= set(fact) or set(fact) - fields - {'simpleLifeGainTriggers', 'temporaryLandManaBoost', 'freeOptionalLibraryReorders', 'conditionalTappedEntry', 'simpleTargetUntapAbilities', 'friendlyStaticPermanent', 'developmentMana', 'manaOnlySelfUntapAbilities', 'fixedStatReductions', 'removesAttachedAbilities', 'untappedIfLandSubtypes', 'variableMana', 'commanderColorMana', 'painManaColors', 'colorIdentity', 'untappedPayLife'}:
                 raise ValueError('invalid native card fact fields')
             boost=fact.get('temporaryLandManaBoost')
             if boost is not None and (not isinstance(boost,dict) or set(boost)!={'subtype','color','amount'}
@@ -82,6 +82,9 @@ class CardFacts:
                 or set(fact['manaColors']) - set('WUBRGC')):
                 raise ValueError('invalid native card fact value')
             reorders=fact.get('freeOptionalLibraryReorders',{})
+            gains=fact.get('simpleLifeGainTriggers',{})
+            if not isinstance(gains,dict) or any(not isinstance(k,str) or not k or type(v) is not int or not 1<=v<=10 for k,v in gains.items()):
+                raise ValueError('invalid simple life gain trigger contract')
             if not isinstance(reorders,dict) or any(
                 not isinstance(ability,str) or not ability or type(count) is not int or not 1<=count<=10
                 for ability,count in reorders.items()):

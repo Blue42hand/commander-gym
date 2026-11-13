@@ -13,6 +13,13 @@ class PublicCardFactsTest {
     private val registry = GameBeansConfig(GameProperties()).cardRegistry()
     private val revision = "12ab2f0ed5bd018334521dc52497e6444f26f5a9"
 
+    @Test fun simpleLifeGainTriggerRequiresAWholeFixedControllerGain() {
+        val cards = PublicCardFacts.export(registry, listOf("Authority of the Consuls", "Sythis, Harvest's Hand", "High Tide"), revision)["cards"]!!.jsonObject
+        val gains = cards["Authority of the Consuls"]!!.jsonObject["simpleLifeGainTriggers"]!!.jsonObject
+        assertEquals(1, gains["Authority of the Consuls:1"]!!.jsonPrimitive.int)
+        for (name in listOf("Sythis, Harvest's Hand", "High Tide")) assertTrue(cards[name]!!.jsonObject["simpleLifeGainTriggers"]!!.jsonObject.isEmpty())
+    }
+
     @Test fun temporaryLandManaBonusRequiresTheWholeReviewedEffect() {
         val cards = PublicCardFacts.export(registry, listOf("High Tide", "Dark Ritual", "Forest", "Elvish Archdruid"), revision)["cards"]!!.jsonObject
         val bonus = cards["High Tide"]!!.jsonObject["temporaryLandManaBoost"]!!.jsonObject

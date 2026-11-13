@@ -130,6 +130,25 @@ def tutor_payoff_score(name, facts, preferred_engines=()):
 # Native definitions reviewed: these counters have no optional mana payment.
 UNCONDITIONAL_COUNTERS = frozenset({'Counterspell','Negate','Dissolve','Swan Song','Arcane Denial'})
 
+def own_stack_can_resolve(o,facts):
+    """An owned stack can resolve past unrelated fixed life gain.
+
+    Opposing spells, unknown abilities and targeted responses retain inference.
+    No claim is made about their strategic value or later triggered abilities:
+    each subsequent native priority window is evaluated again.
+    """
+    state=o.get('state',{});cards=state.get('cards',{});me=o['agentToAct'];stack=ids_in(state,'Stack')
+    if not any(cards.get(i,{}).get('controllerId')==me for i in stack):return False
+    for i in stack:
+        c=cards.get(i,{})
+        if c.get('controllerId')==me:continue
+        identity=c.get('abilityIdentity') or {};definition=identity.get('cardDefinitionId')
+        if not isinstance(definition,str) or c.get('controllerId') is None:return False
+        contract=facts.get(definition.split('#',1)[0]).get('simpleLifeGainTriggers',{})
+        if (identity.get('abilityId') not in contract or c.get('targets') or c.get('activeEffects')
+            or c.get('perModeTargets')):return False
+    return True
+
 
 def pending_counter_answers(o,facts=None):
     """Targets of an unopposed own counter attempt that should resolve first.
@@ -218,7 +237,7 @@ def stranded_land_mana_boost(o, name, facts):
 def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=(), reaction_timing_exceptions=(), counter_target_exceptions=()):
     view = deepcopy(o); cards = view.get('state', {}).get('cards', {}); me = view['agentToAct']
     restrictions = []; retained = []; plans = []
-    answered=pending_counter_answers(o,facts);held_autopay=False;state=o.get('state',{})
+    answered=pending_counter_answers(o,facts);held_autopay=False;state=o.get('state',{});own_stack=own_stack_can_resolve(o,facts)
     for a in view.get('legalActions', []):
         raw = a.get('action', {}); name = cards.get(raw.get('cardId', raw.get('sourceId')), {}).get('name')
         state = o.get('state',{})
@@ -274,12 +293,12 @@ def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=()
             # Reviewed copy-and-cast mechanic plus a known mandatory spell target.
             # Unknown imprints and live stacks still need their actual decision.
             restrictions.append({'action':a['semanticId'],'rule':'counter-imprint-needs-live-spell'});continue
-        stack=ids_in(state,'Stack')
-        own_stack=bool(stack) and all(cards.get(i,{}).get('controllerId')==me for i in stack)
         if (not o.get('pendingDecision') and o.get('nativePaymentError') is None and own_stack and not state.get('combat')
+            and name not in reaction_timing_exceptions
             and raw.get('abilityId') not in {'Lathril, Blade of the Elves:2','Sterling Grove:1'}
             and (casting or a.get('kind')=='ActivateAbility' and a.get('isManaAbility') is not True)):
-            restrictions.append({'action':a['semanticId'],'rule':'let-own-stack-resolve'});continue
+            restrictions.append({'action':a['semanticId'],'rule':'let-own-stack-resolve'})
+            held_autopay |= raw.get('paymentStrategy',{}).get('type')=='AutoPay';continue
         if (not o.get('pendingDecision') and o.get('nativePaymentError') is None and quiet and state.get('activePlayerId')==me
             and state.get('currentStep') in {'UNTAP','UPKEEP','DRAW'}
             and (casting or a.get('kind')=='ActivateAbility' and a.get('isManaAbility') is not True and raw.get('abilityId') not in {'Lathril, Blade of the Elves:2','Sterling Grove:1'})):

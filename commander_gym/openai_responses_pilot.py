@@ -28,7 +28,7 @@ import re
 from time import perf_counter
 from typing import Any, Mapping
 
-from .action_contracts import constrain_target_params, validate_target_params
+from .action_contracts import constrain_target_params, validate_target_params, constrain_material_cost_params, validate_material_cost_params
 from .selection_contracts import validate_conditional_selection
 from .records import native_convoke_offer, validate_convoke_payment, is_convoke_payment_map
 
@@ -602,7 +602,7 @@ def _native_action_format(
             "type": "object",
             "properties": {
                 "semanticId": {"type": "string", "const": semantic_id},
-                "params": constrain_target_params({
+                "params": constrain_material_cost_params(constrain_target_params({
                     "type": "object",
                     "properties": {
                         name: _native_action_field_schema(action, name, kind)
@@ -610,7 +610,7 @@ def _native_action_format(
                     },
                     "additionalProperties": False,
                     **({"required": required_params} if required_params else {}),
-                }, action),
+                }, action), action),
             },
             "required": ["semanticId", "params"],
             "additionalProperties": False,
@@ -937,6 +937,7 @@ def _validate_native_action_params(
                     "ActionParams.delvedCards exceeds native maxDelveCards"
                 )
     try:
+        validate_material_cost_params(params, action)
         validate_target_params(params, action)
     except ValueError as exc:
         raise OpenAIResponsesPilotError(str(exc)) from exc

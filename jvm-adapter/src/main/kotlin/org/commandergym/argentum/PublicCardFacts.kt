@@ -42,6 +42,7 @@ import com.wingedsheep.sdk.scripting.EventPattern
 import com.wingedsheep.sdk.scripting.AdditionalManaOnSourceTap
 import com.wingedsheep.sdk.scripting.TappedForManaType
 import com.wingedsheep.sdk.scripting.effects.GrantStaticAbilityEffect
+import com.wingedsheep.sdk.scripting.effects.GainLifeEffect
 import kotlinx.serialization.json.*
 
 /** Public definitions only: this API cannot accept GameState or a seat snapshot. */
@@ -266,6 +267,15 @@ object PublicCardFacts {
                     if (gate.gate is Gate.MayDecide && gate.otherwise == null &&
                         (gate.decisionMaker == null || gate.decisionMaker == EffectTarget.Controller) &&
                         draw.target == EffectTarget.Controller && count.amount in 1..10) {
+                        put(ability.id.value, count.amount)
+                    }
+                }
+            }
+            putJsonObject("simpleLifeGainTriggers") {
+                for (ability in card.script.triggeredAbilities) {
+                    val gain = ability.effect as? GainLifeEffect ?: continue
+                    val count = gain.amount as? DynamicAmount.Fixed ?: continue
+                    if (gain.target == EffectTarget.Controller && count.amount in 1..10) {
                         put(ability.id.value, count.amount)
                     }
                 }

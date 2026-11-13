@@ -4,6 +4,7 @@ import com.wingedsheep.engine.core.*
 import com.wingedsheep.engine.state.GameState
 import com.wingedsheep.engine.state.ZoneKey
 import com.wingedsheep.engine.state.components.identity.LifeTotalComponent
+import com.wingedsheep.engine.state.components.battlefield.TappedComponent
 import com.wingedsheep.engine.mechanics.layers.StateProjector
 import com.wingedsheep.sdk.core.Zone
 import com.wingedsheep.sdk.model.EntityId
@@ -33,7 +34,22 @@ object CompetencySavedStateProbe {
                             val choice=entry.getValue(branch).jsonObject
                             val template=json.decodeFromJsonElement<GameAction>(choice.getValue("action"))
                             val params=choice["params"]
-                            val action=if(params==null) template else ActionParameterizer.apply(template,json.decodeFromJsonElement<ActionParams>(params),initial)
+                            fun parameterized():GameAction {
+                                if(params==null)return template
+                                val parsed=json.decodeFromJsonElement<ActionParams>(params)
+                                return if(entry["usePresentedAction"]?.jsonPrimitive?.boolean==true) {
+                                    val offered=services.legalActionEnumerator.enumerate(initial,template.playerId).single { it.action==template }
+                                    ActionParameterizer.apply(offered,parsed,initial)
+                                } else ActionParameterizer.apply(template,parsed,initial)
+                            }
+                            val expectedParameterError=if(branch=="baseline") entry["expectedBaselineParameterError"]?.jsonPrimitive?.content else null
+                            if(expectedParameterError!=null) {
+                                val failure=runCatching { parameterized() }.exceptionOrNull()
+                                check(failure is IllegalArgumentException && expectedParameterError in failure.message.orEmpty())
+                                putJsonObject(branch) { put("accepted",false);put("stage","native-parameterization");put("error",failure.message) }
+                                continue
+                            }
+                            val action=parameterized()
                             var result=processor.process(initial,action).result
                             val expectedError=if(branch=="baseline") entry["expectedBaselineError"]?.jsonPrimitive?.content else null
                             if(expectedError!=null) {
@@ -69,6 +85,23 @@ object CompetencySavedStateProbe {
                                     initial.getEntity(template.playerId)!!.get<LifeTotalComponent>()!!.life-1)
                             }
                             val modalQuestions=mutableListOf<JsonElement>()
+                            val tapCost=entry["tapCost"]?.jsonObject
+                            if(branch=="replacement" && tapCost!=null) {
+                                check(result.outcome !is Outcome.Rejected)
+                                for(key in listOf("source","creature")) {
+                                    val permanent=json.decodeFromJsonElement<EntityId>(tapCost.getValue(key))
+                                    check(result.state.getEntity(permanent)!!.has<TappedComponent>())
+                                }
+                            }
+                            val heldRemoval=entry["heldRemoval"]?.jsonObject
+                            if(branch=="replacement" && heldRemoval!=null) {
+                                check(action is PassPriority && result.outcome is Outcome.Done && result.state.pendingDecision==null)
+                                val kept=json.decodeFromJsonElement<EntityId>(heldRemoval.getValue("keptCard"))
+                                val pending=json.decodeFromJsonElement<EntityId>(heldRemoval.getValue("pendingSpell"))
+                                val target=json.decodeFromJsonElement<EntityId>(heldRemoval.getValue("target"))
+                                check(kept in result.state.getZone(ZoneKey(action.playerId,Zone.HAND)) && kept !in result.state.stack)
+                                check(pending in result.state.stack && target in result.state.getBattlefield())
+                            }
                             val modalResponses=mutableListOf<JsonElement>()
                             var modalCompleted=false
                             var modalResolved=false
@@ -154,6 +187,10 @@ object CompetencySavedStateProbe {
                             }
                             putJsonObject(branch) {
                                 put("accepted",result.outcome !is Outcome.Rejected)
+                                if(branch=="replacement" && tapCost!=null) put("offeredSourceAndCreatureTapped",true)
+                                if(branch=="replacement" && heldRemoval!=null) {
+                                    put("cardRetainedInHand",true);put("pendingRemovalPreserved",true)
+                                }
                                 if(directManaBeforeSacrifice) {
                                     put("castOnStack",true);put("sacrificeInGraveyard",true);put("manaAbilityDamageExactlyOnce",true)
                                 }
