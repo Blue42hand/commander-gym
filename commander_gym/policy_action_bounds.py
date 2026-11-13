@@ -396,7 +396,94 @@ def stranded_land_mana_boost(o, name, facts, action):
         and not pool.get('restrictedMana') and not player.get('activeEffects'))
 
 
-def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=(), reaction_timing_exceptions=(), counter_target_exceptions=()):
+def protection_transfer_targets(o, action, facts, preferred_engines):
+    """Keep protection on an engine over a plain token with no haste payoff.
+
+    Restrict only a certified pure protection/haste equipment in a quiet own
+    main phase. Unknown or modified creatures, useful haste transfers, richer
+    equipment and tactical response windows retain model discretion.
+    """
+    state=o.get('state',{});cards=state.get('cards',{});me=o['agentToAct']
+    source=action.get('action',{}).get('sourceId');equipment=cards.get(source,{})
+    if (not facts.get(equipment.get('name')).get('protectionEquipmentKeywords')
+        or state.get('activePlayerId')!=me or state.get('currentStep')!='PRECOMBAT_MAIN'
+        or ids_in(state,'Stack') or equipment.get('controllerId')!=me or equipment.get('activeEffects')
+        or equipment.get('attachments') or equipment.get('copyOf') is not None):return None
+    owned=ids_in(state,'Battlefield',me)
+    hosts=[i for i in owned if source in (cards.get(i,{}).get('attachments') or [])]
+    if len(hosts)!=1:return None
+    host=cards[hosts[0]]
+    if (host.get('controllerId')!=me or 'CREATURE' not in host.get('cardTypes',[]) or abilities_removed(o,host,facts)
+        or host.get('activeEffects') or host.get('hasSummoningSickness') is not False or host.get('isTapped') is not False
+        or any(type(host.get(k)) is not int for k in ['power','toughness'])
+        or not (host.get('isCommander') is True or host.get('name') in preferred_engines)):return None
+    def dominated(target):
+        c=cards.get(target,{})
+        return (target in owned and c.get('controllerId')==me and plain_token_body(c)
+                and c.get('hasSummoningSickness') is False and not c.get('attachments')
+                and not c.get('counters') and c.get('isCommander') is not True
+                and all(type(c.get(k)) is int and 0<=c[k]<=host[k] for k in ['power','toughness']))
+    return [t for t in action['validTargets'] if not dominated(t)]
+
+
+def remember_equipment_hosts(owner, o, facts):
+    """Remember observed attachments, never assume a returned action succeeded.
+
+    Only the current phase is retained per seat; this is bounded harness state,
+    not model conversation. A new phase, opening, or source leaving play resets
+    its history. Losing a cache entry simply retains model discretion.
+    """
+    state=o.get('state',{});actor=o['agentToAct']
+    players=tuple(p.get('playerId') for p in state.get('players',[]))
+    turn=state.get('turnNumber');step=state.get('currentStep')
+    cache=getattr(owner,'_equipment_phase_history',{})
+    namespace=(actor,players)
+    if type(turn) is not int or not isinstance(step,str) or 'mulligan' in state:
+        cache.pop(namespace,None);owner._equipment_phase_history=cache
+        return {}
+    key=(turn,step)
+    previous=cache.get(namespace,{})
+    hosts=previous.get('hosts',{}) if previous.get('key')==key else {}
+    cards=state.get('cards',{});owned=ids_in(state,'Battlefield',actor)
+    observed={}
+    for source in owned:
+        if not facts.get(cards.get(source,{}).get('name')).get('protectionEquipmentKeywords'):continue
+        current=[i for i in owned if source in (cards.get(i,{}).get('attachments') or [])]
+        if len(current)!=1:continue
+        observed[source]=list(dict.fromkeys([*hosts.get(source,[]),current[0]]))
+    cache.pop(namespace,None)
+    cache[namespace]={'key':key,'hosts':observed}
+    if len(cache)>64:cache.pop(next(iter(cache)))
+    owner._equipment_phase_history=cache
+    return {'actor':actor,'players':list(players),'turn':turn,'step':step,'hosts':deepcopy(observed)}
+
+
+def repeated_protection_targets(o, action, facts, history):
+    state=o.get('state',{});me=o['agentToAct'];cards=state.get('cards',{});source=action.get('action',{}).get('sourceId')
+    if (not isinstance(history,dict) or history.get('actor')!=me or history.get('turn')!=state.get('turnNumber')
+        or history.get('step')!=state.get('currentStep') or history.get('players')!=[p.get('playerId') for p in state.get('players',[])]
+        or state.get('activePlayerId')!=me or state.get('currentStep')!='PRECOMBAT_MAIN' or ids_in(state,'Stack')
+        or not facts.get(cards.get(source,{}).get('name')).get('protectionEquipmentKeywords')
+        or cards.get(source,{}).get('activeEffects')):return None
+    owned=ids_in(state,'Battlefield',me)
+    hosts=[i for i in owned if source in (cards.get(i,{}).get('attachments') or [])]
+    if len(hosts)!=1:return None
+    current=cards[hosts[0]]
+    if (current.get('controllerId')!=me or current.get('isTapped') is not False
+        or current.get('hasSummoningSickness') is not False or current.get('activeEffects')):return None
+    mapping=history.get('hosts')
+    if not isinstance(mapping,dict):return None
+    visited=mapping.get(source,[])
+    if not isinstance(visited,list) or any(not isinstance(i,str) for i in visited):return None
+    def repeated(target):
+        c=cards.get(target,{})
+        return (target in visited and target!=hosts[0] and target in owned and c.get('controllerId')==me
+                and 'CREATURE' in c.get('cardTypes',[]) and c.get('hasSummoningSickness') is False
+                and c.get('isTapped') is False and not c.get('activeEffects'))
+    return [t for t in action['validTargets'] if not repeated(t)]
+
+
+def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=(), reaction_timing_exceptions=(), counter_target_exceptions=(), equipment_history=None):
     view = deepcopy(o); cards = view.get('state', {}).get('cards', {}); me = view['agentToAct']
     restrictions = []; retained = []; plans = []
     answered=pending_counter_answers(o,facts);held_autopay=False;state=o.get('state',{});own_stack=own_stack_can_resolve(o,facts)
@@ -442,6 +529,19 @@ def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=()
                 a['validTargets']=targets
                 if not targets:
                     held_autopay |= raw.get('paymentStrategy',{}).get('type')=='AutoPay';continue
+            if name not in allow_self_targets:
+                targets=repeated_protection_targets(o,a,facts,equipment_history)
+                if targets is not None and targets!=a['validTargets']:
+                    restrictions.append({'action':a['semanticId'],'rule':'avoid-repeating-protection-host-in-same-phase'})
+                    a['validTargets']=targets
+                    if not targets:
+                        held_autopay |= raw.get('paymentStrategy',{}).get('type')=='AutoPay';continue
+                targets=protection_transfer_targets(o,a,facts,preferred_engines)
+                if targets is not None and targets!=a['validTargets']:
+                    restrictions.append({'action':a['semanticId'],'rule':'preserve-engine-protection-over-non-sick-token'})
+                    a['validTargets']=targets
+                    if not targets:
+                        held_autopay |= raw.get('paymentStrategy',{}).get('type')=='AutoPay';continue
         if (casting and can_pass and (quiet or simple_permanent_stack(o,facts)) and not o.get('pendingDecision') and o.get('nativePaymentError') is None
             and name not in reaction_timing_exceptions and stranded_land_mana_boost(o,name,facts,a)):
             restrictions.append({'action':a['semanticId'],'rule':'hold-land-mana-boost-without-remaining-source'})
@@ -569,7 +669,12 @@ def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=()
             restrictions.append({'action':a['semanticId'],'rule':'hold-reviewed-reaction-for-useful-window'})
             held_autopay |= raw.get('paymentStrategy',{}).get('type')=='AutoPay'
             continue
-        harmful = (casting and facts.get(name).get('spellPolarity') == ['HARMFUL']) or name in OPPONENT_REMOVAL or name=='Otawara, Soaring City' and quiet
+        # Reviewed neutralizing Auras can have UNKNOWN aggregate polarity
+        # (e.g. indestructible plus loss of abilities). Apply their established
+        # opposing-target default before threat ranking; friendly candidates
+        # must not silently bypass the shortlist. Deck self-target overrides
+        # still retain deliberate rescue/combo/protection plans.
+        harmful = (casting and facts.get(name).get('spellPolarity') == ['HARMFUL']) or name in OPPONENT_REMOVAL or casting and name in NEUTRALIZING_AURAS or name=='Otawara, Soaring City' and quiet
         if harmful and name not in allow_self_targets and a.get('requiresTargets') is True and a.get('targetRequirements') is None and isinstance(a.get('validTargets'),list):
             # Retain unknown ownership rather than inventing an enemy controller.
             targets = [t for t in a['validTargets'] if cards.get(t, {}).get('controllerId', t) != me or name in BOUNCE_SOURCES and own_bounce_rescue(o,t,facts)]

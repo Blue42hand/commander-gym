@@ -81,6 +81,26 @@ class PublicCardFactsTest {
         assertTrue(cards["The One Ring"]!!.jsonObject["equipAbilities"]!!.jsonArray.isEmpty())
     }
 
+    @Test fun protectionEquipmentRequiresTheWholeCanonicalNativeShape() {
+        val names=listOf("Swiftfoot Boots","Skullclamp","The One Ring")
+        val cards=PublicCardFacts.export(registry,names,revision)["cards"]!!.jsonObject
+        assertEquals(listOf("HASTE","HEXPROOF"),cards["Swiftfoot Boots"]!!.jsonObject["protectionEquipmentKeywords"]!!.jsonArray.map { it.jsonPrimitive.content })
+        for(name in names.drop(1))assertFalse(cards[name]!!.jsonObject.containsKey("protectionEquipmentKeywords"))
+        val boots=registry.getCard("Swiftfoot Boots")!!
+        val equip=boots.script.activatedAbilities.single()
+        val variants=listOf(
+            boots.copy(script=boots.script.copy(activatedAbilities=listOf(equip.copy(timing=com.wingedsheep.sdk.scripting.TimingRule.InstantSpeed)))),
+            boots.copy(script=boots.script.copy(activatedAbilities=listOf(equip.copy(effect=com.wingedsheep.sdk.dsl.Effects.DrawCards(1))))),
+            boots.copy(script=boots.script.copy(staticAbilities=listOf(com.wingedsheep.sdk.scripting.GrantKeyword(com.wingedsheep.sdk.core.Keyword.HEXPROOF,com.wingedsheep.sdk.scripting.filters.unified.GroupFilter.AllCreaturesYouControl)))),
+            boots.copy(script=boots.script.copy(triggeredAbilities=registry.getCard("Alela, Artful Provocateur")!!.script.triggeredAbilities))
+        )
+        for(card in variants) {
+            val overlay=com.wingedsheep.engine.registry.CardRegistry(registry)
+            overlay.register(card)
+            assertFalse(PublicCardFacts.export(overlay,listOf(card.name),revision)["cards"]!!.jsonObject[card.name]!!.jsonObject.containsKey("protectionEquipmentKeywords"))
+        }
+    }
+
     @Test fun selfDrawAbilitiesIdentifyTheActivatedEffectInsteadOfWholeCardTags() {
         val cards=PublicCardFacts.export(registry,listOf("The One Ring","Skullclamp","Solemn Simulacrum"),revision)["cards"]!!.jsonObject
         assertEquals(listOf("The One Ring:3"),cards["The One Ring"]!!.jsonObject["selfDrawAbilities"]!!.jsonArray.map { it.jsonPrimitive.content })

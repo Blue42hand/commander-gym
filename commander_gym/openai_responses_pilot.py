@@ -462,6 +462,16 @@ def _native_block_cap(action: Mapping[str, Any]) -> int | None:
     return cap
 
 
+def _native_block_counts(action: Mapping[str, Any]) -> dict[str, int] | None:
+    if action.get("kind", action.get("actionType")) != "DeclareBlockers":
+        return None
+    counts=action.get("blockerMaxBlockCounts")
+    if counts is None:return None
+    if not isinstance(counts,Mapping) or any(not isinstance(k,str) or not k or type(v) is not int or v<1 for k,v in counts.items()):
+        raise OpenAIResponsesPilotError("native blockerMaxBlockCounts is malformed")
+    return dict(counts)
+
+
 def _native_attack_targets(action: Mapping[str, Any]) -> tuple[list[str], list[str]] | None:
     """Read the current native attacker and defender candidates as one offer."""
     if action.get("kind", action.get("actionType")) != "DeclareAttackers":
@@ -520,12 +530,15 @@ def _native_action_field_schema(action: Mapping[str, Any], name: str, kind: str)
         targets = _native_block_targets(action)
         if targets is not None:
             cap = _native_block_cap(action)
+            counts = _native_block_counts(action) or {}
             schema = {"type": "object", "properties": {
-                blocker: {"type": "array", "items": {"type": "string", "enum": attackers}}
+                blocker: {"type": "array", "items": {"type": "string", "enum": attackers},
+                          "minItems":1,"maxItems":min(len(attackers),counts.get(blocker,1))}
                 for blocker, attackers in targets.items()
-            }, "additionalProperties": False}
+            }, "additionalProperties": False,
+                      "description":"Each selected blocker names distinct attacking creatures. Omit its key to leave it unassigned; {} means no blocks."}
             if cap is not None:
-                schema["description"] = f"Select at most {cap} distinct blocker keys."
+                schema["description"] += f" Select at most {cap} distinct blocker keys."
             return schema
     return _ACTION_PARAM_SCHEMAS[kind]
 
@@ -906,6 +919,14 @@ def _validate_native_action_params(
     except ValueError as exc: raise OpenAIResponsesPilotError(str(exc)) from exc
     try: validate_hand_exile_payment(params, action)
     except ValueError as exc: raise OpenAIResponsesPilotError(str(exc)) from exc
+    if action.get("kind",action.get("actionType"))=="DeclareBlockers" and "blockers" in params:
+        if any(not attackers or len(attackers)!=len(set(attackers)) for attackers in params['blockers'].values()):
+            raise OpenAIResponsesPilotError("ActionParams.blockers must name nonempty distinct attacking creatures; use {} for no blocks")
+        counts=_native_block_counts(action) or {}
+        # The native enumerator reports only exceptions above the ordinary
+        # one-attacker capacity in blockerMaxBlockCounts.
+        if any(len(attackers)>counts.get(blocker,1) for blocker,attackers in params['blockers'].items()):
+            raise OpenAIResponsesPilotError("ActionParams.blockers exceeds native blockerMaxBlockCounts")
     targets = _native_block_targets(action)
     if targets is not None and "blockers" in params and any(
         blocker not in targets or any(attacker not in targets[blocker] for attacker in attackers)

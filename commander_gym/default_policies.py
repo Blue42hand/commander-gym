@@ -58,13 +58,15 @@ class DefaultPolicySubsystem(SharedCardPolicies, MaskedHeuristicSubsystem):
         self.document = default_document(self.facts)
 
     def try_choose(self, observation):
-        from .policy_action_bounds import bounded_observation
+        from .policy_action_bounds import bounded_observation, remember_equipment_hosts
         tutor_engines = sorted(n for n,role in self.document['roles'].items() if role=='draw_engine')
-        bounded, restrictions = bounded_observation(observation, self.facts, allow_self_targets=self.self_target_exceptions, preferred_engines=tutor_engines, reaction_timing_exceptions=self.reaction_timing_exceptions, counter_target_exceptions=self.counter_target_exceptions)
+        equipment_history=remember_equipment_hosts(self,observation,self.facts)
+        bounded, restrictions = bounded_observation(observation, self.facts, allow_self_targets=self.self_target_exceptions, preferred_engines=tutor_engines, reaction_timing_exceptions=self.reaction_timing_exceptions, counter_target_exceptions=self.counter_target_exceptions,equipment_history=equipment_history)
         result = super().try_choose(bounded)
         metadata = {**result.metadata, 'reviewedTutorEngines':tutor_engines, 'approvedReactiveTimings':sorted(self.reaction_timing_exceptions), 'approvedCounterTargets':sorted(self.counter_target_exceptions), 'approvedSelfTargetEffects':sorted(self.self_target_exceptions), 'policyRestrictions': restrictions, 'utilityPlans':bounded.get('policyUtilityPlans',[]), 'modalPlans':deepcopy(list(getattr(self,'_modal_plans',{}).values())), 'policyLayers': {
             'defaults': 'default-policies-v2', 'deck': self.deck_policy,
             'status': 'handled' if result.choice is not None else 'deferred'},
+            'equipmentHistory':equipment_history,
             'policyContext': {'policy': self.document['policy_id'], 'objectives': list(self.document['rules'].values())}}
         if result.choice is not None:
             return replace(result, choice=replace(result.choice, metadata={**result.choice.metadata, 'policyRestrictions':restrictions, 'utilityPlans':bounded.get('policyUtilityPlans',[]), 'policyLayers': metadata['policyLayers']}), metadata=metadata)

@@ -34,8 +34,13 @@ class CardFacts:
                   'staticValue', 'repeatable', 'affectsOpponent', 'feeds', 'rewards', 'tribesRewarded'}
         fields |= {'freeOptionalDraws', 'drawSensitive'}
         for name, fact in document['cards'].items():
-            if not isinstance(name, str) or not name or not isinstance(fact, dict) or not fields <= set(fact) or set(fact) - fields - {'plainPermanentCast', 'beneficialPlayerDrawCount', 'powerManaAbilities', 'positiveStatBoostAbilities', 'entryStatReduction', 'selfReturnToHandAbilities', 'evasionSensitive', 'opponentEvasionRemovalAbilities', 'opponentAttackRequirementAbilities', 'positiveCounterTriggers', 'activatedAbilityCounts', 'attachedCombatLock', 'bounceTargetUntapAbilities', 'equipAbilities', 'selfDrawAbilities', 'simpleLifeGainTriggers', 'temporaryLandManaBoost', 'freeOptionalLibraryReorders', 'conditionalTappedEntry', 'simpleTargetUntapAbilities', 'friendlyStaticPermanent', 'developmentMana', 'manaOnlySelfUntapAbilities', 'fixedStatReductions', 'removesAttachedAbilities', 'untappedIfLandSubtypes', 'variableMana', 'commanderColorMana', 'painManaColors', 'colorIdentity', 'untappedPayLife'}:
+            if not isinstance(name, str) or not name or not isinstance(fact, dict) or not fields <= set(fact) or set(fact) - fields - {'protectionEquipmentKeywords', 'plainPermanentCast', 'beneficialPlayerDrawCount', 'powerManaAbilities', 'positiveStatBoostAbilities', 'entryStatReduction', 'selfReturnToHandAbilities', 'evasionSensitive', 'opponentEvasionRemovalAbilities', 'opponentAttackRequirementAbilities', 'positiveCounterTriggers', 'activatedAbilityCounts', 'attachedCombatLock', 'bounceTargetUntapAbilities', 'equipAbilities', 'selfDrawAbilities', 'simpleLifeGainTriggers', 'temporaryLandManaBoost', 'freeOptionalLibraryReorders', 'conditionalTappedEntry', 'simpleTargetUntapAbilities', 'friendlyStaticPermanent', 'developmentMana', 'manaOnlySelfUntapAbilities', 'fixedStatReductions', 'removesAttachedAbilities', 'untappedIfLandSubtypes', 'variableMana', 'commanderColorMana', 'painManaColors', 'colorIdentity', 'untappedPayLife'}:
                 raise ValueError('invalid native card fact fields')
+            protection=fact.get('protectionEquipmentKeywords')
+            if 'protectionEquipmentKeywords' in fact and (not isinstance(protection,list)
+                or any(not isinstance(k,str) for k in protection) or protection!=sorted(set(protection))
+                or 'HEXPROOF' not in protection or any(k not in {'HEXPROOF','HASTE'} for k in protection)):
+                raise ValueError('invalid native protection equipment contract')
             if 'plainPermanentCast' in fact and type(fact['plainPermanentCast']) is not bool:
                 raise ValueError('invalid plain permanent cast contract')
             if 'beneficialPlayerDrawCount' in fact and (type(fact['beneficialPlayerDrawCount']) is not int or not 1<=fact['beneficialPlayerDrawCount']<=100):

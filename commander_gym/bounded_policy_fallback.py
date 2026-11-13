@@ -598,8 +598,17 @@ class BoundedPolicyFallback:
             result = self.defaults.try_choose(o)
             if result.choice is not None: return result.choice
             base_attempts.append(result.metadata['policyLayers']); context = result.metadata['policyContext']
-        from .policy_action_bounds import bounded_observation
-        o, restrictions = bounded_observation(o, self.defaults.facts, allow_self_targets=self_target_exceptions, preferred_engines=tutor_engines, reaction_timing_exceptions=timing_exceptions, counter_target_exceptions=counter_exceptions)
+        from .policy_action_bounds import bounded_observation, remember_equipment_hosts
+        equipment_history=remember_equipment_hosts(self.defaults,o,self.defaults.facts)
+        for attempt in attempts:
+            history=attempt.get('metadata',{}).get('equipmentHistory')
+            if not isinstance(history,dict) or not equipment_history:continue
+            if any(history.get(k)!=equipment_history.get(k) for k in ['actor','players','turn','step']):continue
+            if not isinstance(history.get('hosts'),dict):continue
+            for source,visited in history['hosts'].items():
+                if source in equipment_history['hosts'] and isinstance(visited,list) and all(isinstance(i,str) for i in visited):
+                    equipment_history['hosts'][source]=list(dict.fromkeys([*visited,*equipment_history['hosts'][source]]))
+        o, restrictions = bounded_observation(o, self.defaults.facts, allow_self_targets=self_target_exceptions, preferred_engines=tutor_engines, reaction_timing_exceptions=timing_exceptions, counter_target_exceptions=counter_exceptions,equipment_history=equipment_history)
         wires = enumerate_choices(o)
         if hints:
             by_id = {a['actionId']:a for a in o.get('legalActions', [])}

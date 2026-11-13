@@ -104,7 +104,9 @@ object CompetencySavedStateProbe {
                                     result=processor.process(result.state,PassPriority(requireNotNull(result.state.priorityPlayerId))).result
                                     check(result.outcome !is Outcome.Rejected)
                                 }
-                                check(result.state.getEntity(source)!!.get<AttachedToComponent>()!!.targetId==host)
+                                val expectedHost=if(branch=="baseline" && equipment.containsKey("newHost"))
+                                    json.decodeFromJsonElement<EntityId>(equipment.getValue("newHost")) else host
+                                check(result.state.getEntity(source)!!.get<AttachedToComponent>()!!.targetId==expectedHost)
                                 val changed=initial.getBattlefield().count { id ->
                                     initial.getEntity(id)?.has<TappedComponent>()!=result.state.getEntity(id)?.has<TappedComponent>()
                                 }
@@ -116,8 +118,9 @@ object CompetencySavedStateProbe {
                             val heldCard=entry["heldCard"]
                             val auraScope=entry["auraScopeComparison"]?.jsonObject
                             val positiveCounter=entry["positiveCounterComparison"]?.jsonObject
+                            val neutralization=entry["neutralizationComparison"]?.jsonObject
                             val resolutionChoices=mutableListOf<JsonElement>()
-                            if(auraScope!=null || positiveCounter!=null) {
+                            if(auraScope!=null || positiveCounter!=null || neutralization!=null) {
                                 val ownCounterTarget=json.decodeFromJsonElement<EntityId>(entry.getValue("positiveTriggerTarget"))
                                 var steps=0
                                 while(result.state.stack.isNotEmpty() || result.state.pendingDecision!=null) {
@@ -159,6 +162,15 @@ object CompetencySavedStateProbe {
                                     fun count(state:GameState,id:EntityId)=state.getEntity(id)!!.get<CountersComponent>()?.getCount(CounterType.PLUS_ONE_PLUS_ONE) ?: 0
                                     check(count(result.state,enemy)-count(initial,enemy)==if(branch=="baseline")1 else 0)
                                     check(count(result.state,own)-count(initial,own)==if(branch=="replacement")1 else 0)
+                                }
+                                if(neutralization!=null) {
+                                    val aura=json.decodeFromJsonElement<EntityId>(neutralization.getValue("aura"))
+                                    val target=json.decodeFromJsonElement<EntityId>(neutralization.getValue(if(branch=="baseline")"originalTarget" else "replacementTarget"))
+                                    val other=json.decodeFromJsonElement<EntityId>(neutralization.getValue(if(branch=="baseline")"replacementTarget" else "originalTarget"))
+                                    val projected=StateProjector().project(result.state)
+                                    check(result.state.getEntity(aura)!!.get<AttachedToComponent>()!!.targetId==target)
+                                    check(projected.hasLostAllAbilities(target))
+                                    check(!projected.hasLostAllAbilities(other))
                                 }
                             }
                             val bounceUntap=entry["bounceUntapComparison"]?.jsonObject
@@ -473,8 +485,16 @@ object CompetencySavedStateProbe {
                                     put("tappedResourcePreserved",branch=="replacement")
                                 }
                                 if(equipment!=null) {
-                                    put("resolvedWithOpponentsPassing",true);put("attachmentUnchanged",true)
+                                    put("resolvedWithOpponentsPassing",true)
+                                    put("attachmentUnchanged",branch=="replacement" || !equipment.containsKey("newHost"))
+                                    put("attachmentHost",if(branch=="baseline" && equipment.containsKey("newHost")) equipment.getValue("newHost") else equipment.getValue("host"))
                                     put("manaAndSourceTapsPreserved",branch=="replacement")
+                                }
+                                if(neutralization!=null) {
+                                    put("resolvedWithOpponentsPassing",true)
+                                    put("neutralizedTarget",neutralization.getValue(if(branch=="baseline")"originalTarget" else "replacementTarget"))
+                                    put("counterTriggerTarget",entry.getValue("positiveTriggerTarget"))
+                                    put("nativeResolutionChoices",JsonArray(resolutionChoices))
                                 }
                                 if(branch=="replacement" && heldCard!=null) put("cardRetainedInHand",true)
                                 if(branch=="replacement" && heldSource!=null) put("drawSourceUntapped",true)
