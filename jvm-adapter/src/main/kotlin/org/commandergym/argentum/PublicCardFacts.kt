@@ -447,6 +447,17 @@ object PublicCardFacts {
                 card.staticAbilities.all { it is GrantKeyword && it == GrantKeyword(it.keyword) }) {
                 putJsonArray("protectionEquipmentKeywords") { protectionKeywords.distinct().sorted().forEach { add(it) } }
             }
+            putJsonArray("selfTappedLandRampAbilities") {
+                val patterns=(1..3).map { count -> Patterns.Library.searchLibrary(
+                    filter=com.wingedsheep.sdk.scripting.GameObjectFilter.BasicLand,
+                    count=count,destination=com.wingedsheep.sdk.scripting.effects.SearchDestination.BATTLEFIELD,
+                    entersTapped=true) }
+                for(ability in activated) {
+                    if(!ability.isManaAbility && ability.timing==TimingRule.InstantSpeed && ability.restrictions.isEmpty() &&
+                        ability.targetRequirements.isEmpty() && ability.activateFromZone==Zone.BATTLEFIELD && ability.effect in patterns)
+                        add(ability.id.value)
+                }
+            }
             putJsonArray("selfDrawAbilities") {
                 // Whole effects only: self draw, or the burden-counter draw pattern.
                 // Modes, targets, protection, pumps and mixed effects stay uncertain.

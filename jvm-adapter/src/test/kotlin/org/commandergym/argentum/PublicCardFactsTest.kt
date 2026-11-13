@@ -13,6 +13,19 @@ class PublicCardFactsTest {
     private val registry = GameBeansConfig(GameProperties()).cardRegistry()
     private val revision = "12ab2f0ed5bd018334521dc52497e6444f26f5a9"
 
+    @Test fun tappedBasicLandRampContractsUseTheWholeNativeActivatedEffect() {
+        val yes=mapOf("Wayfarer's Bauble" to "Wayfarer's Bauble:1","Myriad Landscape" to "Myriad Landscape:2","Sakura-Tribe Elder" to "Sakura-Tribe Elder:1")
+        val no=listOf("Mind Stone","Expedition Map","Solemn Simulacrum","Elvish Reclaimer")
+        val cards=PublicCardFacts.export(registry,yes.keys+no,revision)["cards"]!!.jsonObject
+        for((name,id) in yes)assertEquals(listOf(id),cards[name]!!.jsonObject["selfTappedLandRampAbilities"]!!.jsonArray.map { it.jsonPrimitive.content })
+        for(name in no)assertTrue(cards[name]!!.jsonObject["selfTappedLandRampAbilities"]!!.jsonArray.isEmpty(),name)
+        val bauble=registry.getCard("Wayfarer's Bauble")!!;val activated=bauble.script.activatedAbilities.single()
+        val mixed=bauble.copy(script=bauble.script.copy(activatedAbilities=listOf(activated.copy(
+            effect=com.wingedsheep.sdk.scripting.effects.CompositeEffect(listOf(activated.effect,com.wingedsheep.sdk.dsl.Effects.DrawCards(1)))))))
+        val overlay=com.wingedsheep.engine.registry.CardRegistry(registry);overlay.register(mixed)
+        assertTrue(PublicCardFacts.export(overlay,listOf(mixed.name),revision)["cards"]!!.jsonObject[mixed.name]!!.jsonObject["selfTappedLandRampAbilities"]!!.jsonArray.isEmpty())
+    }
+
     @Test fun combatGrantedDrawsDoNotBecomeDrawPunishers() {
         val cards=PublicCardFacts.export(registry,listOf("Reconnaissance Mission","Underworld Dreams","Laboratory Maniac"),revision)["cards"]!!.jsonObject
         assertFalse(cards["Reconnaissance Mission"]!!.jsonObject["drawSensitive"]!!.jsonPrimitive.boolean)

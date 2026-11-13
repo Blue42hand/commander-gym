@@ -32,3 +32,14 @@ The distinction between drawing and targeting was checked against the official
 [Comprehensive Rules](https://media.wizards.com/2026/downloads/MagicCompRules%2020261106.txt):
 drawing moves a library card into hand; hexproof and shroud constrain targeting.
 No new game rule is implemented here.
+
+## Tapped-land development windows
+
+The native `selfTappedLandRampAbilities` list certifies whole activated effects
+matching a basic-land search into the controller's battlefield tapped, with one
+to three cards and no additional effect. Timing defaults hold these activations
+until the acting player's main phase or an opponent's end step. Known library
+reorder-only triggers may finish first. Unknown stacks, payment corrections,
+unknown combat data, creature-sacrifice combat responses, and explicit deck
+reaction-timing overrides keep their native decision domain. Noncreature sources
+normally wait during combat; a landfall deck can override that default.

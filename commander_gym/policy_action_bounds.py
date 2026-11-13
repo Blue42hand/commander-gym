@@ -20,6 +20,16 @@ NEUTRALIZING_AURAS=frozenset({'Arrest','Pacifism','Darksteel Mutation','Imprison
 ABILITY_REMOVING_AURAS=frozenset({'Darksteel Mutation','Imprisoned in the Moon','Lignify','Noggle the Mind','Amphibian Downpour'})
 
 
+def library_reorder_only_stack(o,facts):
+    state=o.get('state',{});cards=state.get('cards',{});stack=ids_in(state,'Stack')
+    if not stack:return False
+    for zone in state.get('zones',[]):
+        if zone.get('zoneId',{}).get('zoneType')=='Stack' and (
+            zone.get('isVisible') is not True or zone.get('size',len(zone.get('cardIds',[])))!=len(zone.get('cardIds',[]))):return False
+    return all(not cards.get(i,{}).get('activeEffects') and isinstance(cards.get(i,{}).get('abilityIdentity'),dict)
+               and facts.is_library_reorder_ability(cards[i]['abilityIdentity'].get('abilityId')) for i in stack)
+
+
 def abilities_removed(o,card,facts=None):
     cards=o['state'].get('cards',{})
     return any(cards.get(i,{}).get('name') in ABILITY_REMOVING_AURAS
@@ -617,6 +627,24 @@ def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=()
             # Reviewed copy-and-cast mechanic plus a known mandatory spell target.
             # Unknown imprints and live stacks still need their actual decision.
             restrictions.append({'action':a['semanticId'],'rule':'counter-imprint-needs-live-spell'});continue
+        combat=state.get('combat')
+        no_live_combat=('combat' in state and combat is None or isinstance(combat,dict)
+                        and isinstance(combat.get('attackers'),list) and not combat['attackers'])
+        known_combat=('combat' in state and combat is None or isinstance(combat,dict) and isinstance(combat.get('attackers'),list))
+        # Basic tapped-land development has no immediate mana or combat effect.
+        # Keep creature-sacrifice combat tricks and explicit landfall/reaction plans.
+        ramp_window=known_combat and (no_live_combat or isinstance(source.get('cardTypes'),list) and 'CREATURE' not in source['cardTypes'])
+        if (not o.get('pendingDecision') and o.get('nativePaymentError') is None and can_pass and ramp_window
+            and a.get('kind')=='ActivateAbility' and a.get('isManaAbility') is not True
+            and raw.get('abilityId') in facts.get(name).get('selfTappedLandRampAbilities',[])
+            and not source.get('activeEffects') and name not in reaction_timing_exceptions
+            and (quiet and all(z.get('isVisible') is True and z.get('size',len(z.get('cardIds',[])))==0
+                               for z in state.get('zones',[]) if z.get('zoneId',{}).get('zoneType')=='Stack')
+                 or library_reorder_only_stack(o,facts))
+            and not (state.get('activePlayerId')==me and state.get('currentStep') in {'PRECOMBAT_MAIN','POSTCOMBAT_MAIN'}
+                     or state.get('activePlayerId')!=me and state.get('currentStep') in {'END','END_STEP'})):
+            restrictions.append({'action':a['semanticId'],'rule':'tapped-land-ramp-in-main-or-opponent-end-step'})
+            held_autopay |= raw.get('paymentStrategy',{}).get('type')=='AutoPay';continue
         if (not o.get('pendingDecision') and o.get('nativePaymentError') is None and own_stack and not state.get('combat')
             and name not in reaction_timing_exceptions
             and raw.get('abilityId') not in {'Lathril, Blade of the Elves:2','Sterling Grove:1'}
