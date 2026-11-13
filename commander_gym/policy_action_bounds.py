@@ -197,6 +197,23 @@ def bounded_observation(o, facts, *, allow_self_targets=(), preferred_engines=()
             a['validBlockTargets']={i:ts for i,ts in pairs.items() if ts}
             if isinstance(a.get('validBlockers'),list):a['validBlockers']=[i for i in a['validBlockers'] if i in a['validBlockTargets']]
         casting=a.get('kind','').startswith('Cast')
+        simple_untap=(a.get('kind')=='ActivateAbility' and raw.get('abilityId') in facts.get(name).get('simpleTargetUntapAbilities',[])
+            and a.get('requiresTargets') is True and a.get('minTargets')==a.get('targetCount')==1
+            and isinstance(a.get('validTargets'),list)
+            and a.get('targetRequirements') is None and not a.get('additionalCostInfo')
+            and a.get('parameterSpec',{}).get('allowedFields',{}).get('targets')=='ENTITY_ID_ARRAY')
+        combat_step=state.get('currentStep') in {'BEGIN_COMBAT','DECLARE_ATTACKERS','DECLARE_BLOCKERS','FIRST_STRIKE_COMBAT_DAMAGE','COMBAT_DAMAGE','END_COMBAT'}
+        if combat_step and state.get('activePlayerId')!=me:
+            combat=state.get('combat');empty_combat=('combat' in state and combat is None or
+                isinstance(combat,dict) and isinstance(combat.get('attackers'),list) and not combat['attackers'])
+            if state.get('currentStep')=='BEGIN_COMBAT' or empty_combat:combat_step=False
+        if (simple_untap and not o.get('pendingDecision') and o.get('nativePaymentError') is None and quiet and not combat_step and name not in allow_self_targets):
+            targets=[t for t in a.get('validTargets') or [] if cards.get(t,{}).get('isTapped') is not False and cards.get(t,{}).get('controllerId') in (None,me)]
+            if not targets:restrictions.append({'action':a['semanticId'],'rule':'untap-without-useful-own-target'});continue
+            a['validTargets']=targets
+            own_main=state.get('activePlayerId')==me and state.get('currentStep') in {'PRECOMBAT_MAIN','POSTCOMBAT_MAIN'}
+            if not own_main and state.get('currentStep') not in {'END','END_STEP'} and name not in reaction_timing_exceptions:
+                restrictions.append({'action':a['semanticId'],'rule':'untap-waits-for-development-combat-or-end'});continue
         if (quiet and not o.get('pendingDecision') and o.get('nativePaymentError') is None
             and a.get('kind')=='ActivateAbility' and raw.get('abilityId') in facts.get(name).get('manaOnlySelfUntapAbilities',[])
             and name not in allow_self_targets and cards.get(raw.get('sourceId'),{}).get('isTapped') is False):

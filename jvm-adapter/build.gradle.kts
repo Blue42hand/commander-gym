@@ -156,3 +156,14 @@ tasks.register<JavaExec>("runCompetencySavedStateProbe") {
         args(providers.gradleProperty("probeInput").get(), providers.gradleProperty("probeOutput").get())
     }
 }
+
+// Explicit offline recovery proof from a private captured native checkpoint.
+tasks.register<JavaExec>("runCommanderRescueSavedStateProbe") {
+    group = "verification"
+    dependsOn(tasks.named("testClasses"))
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("org.commandergym.argentum.CommanderRescueSavedStateProbe")
+    if (providers.gradleProperty("probeInput").isPresent && providers.gradleProperty("probeOutput").isPresent) {
+        args(providers.gradleProperty("probeInput").get(), providers.gradleProperty("probeOutput").get())
+    }
+}

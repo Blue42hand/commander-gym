@@ -17,6 +17,10 @@ class SharedCardPolicies(ResourcePolicies):
         quiet=not ids_in(s,'Stack');main=s.get('activePlayerId')==me and s.get('currentStep') in {'PRECOMBAT_MAIN','POSTCOMBAT_MAIN'}
         for a in offers:
             raw=a.get('action',{});ability=raw.get('abilityId');source=self._card(o,raw.get('sourceId'))
+            if main and quiet and self._card(o,raw.get('cardId')).get('name') not in self.self_target_exceptions:
+                from .modal_policies import commander_rescue_mode
+                rescue=commander_rescue_mode(o,a,self.facts)
+                if rescue is not None:return self._action(a,'shared-modal-restore-disabled-commander',rescue)
             simple=(a.get('targetRequirements') is None and a.get('targetCount')==a.get('minTargets')==1 and not a.get('additionalCostInfo'))
             if ability=='Timberwatch Elf:1' and quiet and s.get('currentStep') in {'DECLARE_ATTACKERS','DECLARE_BLOCKERS'} and simple:
                 combat=s.get('combat') or {};participants={v.get('creatureId') for kind in ['attackers','blockers'] for v in combat.get(kind,[])}

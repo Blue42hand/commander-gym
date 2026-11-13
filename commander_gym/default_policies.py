@@ -157,6 +157,19 @@ class DefaultPolicySubsystem(SharedCardPolicies, MaskedHeuristicSubsystem):
         if any(self.facts.get(c.get('name')).get('variableMana')
                for c in o.get('state', {}).get('mulligan', {}).get('cards', {}).values()):
             return SubsystemDecision(reason='default-variable-opening-mana')
+        m=o['state']['mulligan'];required=set(self.document.get('opening_colors',[]))
+        hand=[m.get('cards',{}).get(i,{}) for i in m.get('hand',[])]
+        lands=[c for c in hand if 'Land' in c.get('typeLine','')]
+        # At the first opening decision, repair a known missing primary colour.
+        # An unknown strategic role cannot create mana, but unknown definitions,
+        # utility lands and possible fixing keep the decision with inference.
+        if (m.get('mulliganCount')==0 and len(hand)==7 and m.get('cardsToPutOnBottom',0)==0 and required and lands
+            and all(self.facts.get(c.get('name')).get('simpleMana') for c in lands)
+            and all(self.facts.get(c.get('name')) for c in hand)
+            and not set().union(*(self._land_colors(c) for c in lands)) & required
+            and not any('RAMP' in self.facts.get(c.get('name')).get('tags',[]) for c in hand if c not in lands)):
+            offered=next((a for a in o['legalActions'] if a.get('kind')=='TakeMulligan' and affordable(a)),None)
+            if offered:return self._action(offered,'default-opening-missing-primary-mana')
         return self._mulligan(o)
     def _deck_pending(self, o, p): return None
     def _overrun_is_lethal(self, o, name): return False

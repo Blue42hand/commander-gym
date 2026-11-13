@@ -129,6 +129,14 @@ def enumerate_choices(o):
                     if selections is None:return None
                     payments=[{'sacrificedPermanents':selected} for selected in selections]
                     plain={**a,'additionalCostInfo':None}
+            if a.get('kind')=='CastSpellMode':
+                raw=a.get('action',{});modes=raw.get('chosenModes')
+                if (raw.get('type')!='CastSpell' or not isinstance(modes,list) or len(modes)!=1 or type(modes[0]) is not int or modes[0]<0
+                    or a.get('modalEnumeration') or raw.get('modeTargetsOrdered') or raw.get('modeTargetGroupCountsOrdered')
+                    or 'chosenModes' in a.get('parameterSpec',{}).get('allowedFields',{})):return None
+                # The native offer fixes this mode. Keep its original semantic
+                # ID/template and enumerate only complete payments and targets.
+                plain={**plain,'action':{**plain.get('action',{}),'chosenModes':None}}
             if not DefaultPolicySubsystem._plain_cast(plain) or any(a.get(k) for k in ['requiresManaColorChoice','hasTapForGeneric','hasHarmonize','tapForPower','xConstrainsTargetManaValue','xConstrainsTargetManaValueExactly','xConstrainsTargetPower','xConstrainsTargetCount','xConstrainsTargetCountExactly']): return None
             if type(a.get('maxRepeatableActivations')) is int and a['maxRepeatableActivations'] > 1: return None
             if any(type(a.get(k)) is int and a[k] > 0 for k in ['maxOptionalCostTimes','maxAdditionalManaForCounters']): return None
@@ -214,11 +222,13 @@ def _candidate_description(wire, o, facts=None):
             'paymentFacts':{k:[describe(t) for t in choice['params'][k]] for k in ['exiledCards','sacrificedPermanents','discardedCards','bouncedPermanents'] if k in choice['params']}, 'nativeAffordable':True,
             'manaCost':a.get('manaCostString'), 'costSlot':a.get('action',{}).get('declaredCostSlot')}
     if not result['paymentFacts']:result.pop('paymentFacts')
+    if a.get('kind','').startswith('Cast'):
+        result['costBasis']='alternative cost' if a.get('action',{}).get('useAlternativeCost') or a.get('kind')=='CastWithAlternativeCost' else 'mana cost'
     source=cards.get(a.get('action',{}).get('cardId'),{})
     if source.get('name')=='Into the Roil' and a.get('action',{}).get('declaredCostSlot') in (None,'KICKED'):
         result['reviewedEffects']={'returnTargetNonlandPermanentToOwnersHand':True,
                                   'drawCards':1 if a.get('action',{}).get('declaredCostSlot')=='KICKED' else 0}
-    return result
+    return {k:v for k,v in result.items() if v is not None}
 
 
 
@@ -291,7 +301,13 @@ def decision_context(o, *, frozen, policy_context, facts):
             for player in view['state'].get('players',[]):
                 if player.get('playerId')==o['agentToAct'] and empty(player.get('manaPool')):player.pop('manaPool',None)
     view['actorZones'] = {z['zoneId']['zoneType']:z.get('cardIds',[]) for z in zones if z.get('zoneId',{}).get('ownerId') == o['agentToAct']}
-    view['actingCommander'] = [{'entity':i,'name':c.get('name')} for i,c in cards.items() if c.get('isCommander') and c.get('ownerId',c.get('controllerId')) == o['agentToAct']]
+    commanders=[]
+    for i,c in cards.items():
+        if not c.get('isCommander') or c.get('ownerId',c.get('controllerId'))!=o['agentToAct']:continue
+        zone=next((z['zoneId']['zoneType'] for z in zones if i in z.get('cardIds',[])),None)
+        commanders.append({'entity':i,'name':c.get('name'),**({'zone':zone} if zone else {}),
+                           **({'printedAbilitiesRemoved':True} if c.get('printedAbilitiesRemoved') else {})})
+    view['actingCommander'] = commanders
     if p is not None:
         view['decision'] = clean({k:v for k,v in p.items() if k != 'cardInfo' and (k != 'cards' or not isinstance(v,dict)) and (not frozen or k not in {'options','hand','semanticId','responseSpec','id'})})
     if not frozen:

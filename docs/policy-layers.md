@@ -339,3 +339,59 @@ The reviewed Isochron Scepter copy-and-cast handler holds activation on an empty
 stack when its public imprint is a known counter that requires a spell target.
 Unknown imprints, modal effects and live stacks retain inference. This removes
 repeated quiet-window model passes and avoids paying to copy an uncastable counter.
+
+At the initial seven-card opening decision, a profile's `opening_colors` can
+require access to at least one primary colour. If ordinary known lands supply
+none, and all other known definitions lack possible ramp/fixing, the shared
+policy takes an offered mulligan. An unclassified strategic role does not
+invalidate this known mana deficiency. Unknown definitions, utility lands,
+possible fixing, smaller hands and later mulligans retain their existing logic.
+Profiles can omit or clear `opening_colors`, or override `_opening`.
+
+The compact `actingCommander` summary repeats its current visible zone and, when
+applicable, the existing printed-ability suppression annotation. This grounds
+commander availability and recovery plans without making the model reconstruct
+those facts from several card-table columns. Zones come from the acting seat's
+visible zone membership; unknown zones are omitted.
+
+Reviewed single-mode destruction offers can restore a disabled commander before
+optional development. Golgari Charm's native enchantment-destruction mode is the
+first registered example. Its fixed mode index, description, single native target
+contract and ordinary cost must all match. The shared policy selects a
+non-indestructible hostile Aura whose destruction removes the commander's last
+ability-suppression attachment. Unknown modes or extra costs defer. Trusted deck
+`self_target_exceptions` can leave the source's plan with the deck/model.
+
+Public facts optionally mark `friendlyStaticPermanent` for ordinary permanents
+whose only scripted behavior consists of positive own-board stat/keyword grants
+through reviewed friendly group filters. Triggers, activated abilities, entry
+replacements, spell effects, hostile filters and unknown static effects exclude
+this flag. It lets a protection tag on a passive permanent participate in ordinary
+development; reactive protection spells still defer. Engine profiles can classify
+an otherwise unlabelled friendly permanent as a payoff after establishing the
+commander or an engine. Existing explicit deck roles take precedence.
+
+Complete cast choices also state whether their native offer uses the mana cost or
+an alternative cost. An ordinary affordable Sephara offer needs seven mana, not
+her separate optional tap-four-flyers payment. Native affordability and complete
+payment contracts remain authoritative.
+
+`simpleTargetUntapAbilities` is exported from a whole targeted untap effect with
+unrestricted instant timing and only mana/tap costs. Return, sacrifice, life or
+mixed-effect abilities do not qualify. On quiet noncombat windows, the shared
+bounds remove already untapped or opposing targets and hold these resource
+abilities until an own main phase or an end step. Live stacks and combat retain
+their choices; unknown target state stays uncertain. Native payment corrections
+bypass scheduling. `reaction_timing_exceptions` can approve another timing, while
+`self_target_exceptions` can approve an unusual source/target plan. This covers
+Wirewood Lodge, Staff of Domination and Thousand-Year Elixir through the same
+native primitive.
+
+A native `CastSpellMode` offer with one fixed mode and an ordinary representable
+payment/target contract can be enumerated as complete numbered choices. The
+original semantic ID and native template retain the mode; the model supplies no
+mode indices or free-form parameters. Unresolved modes, multiple selected modes,
+prebound mode targets, mode-override parameters and genuinely combinatorial
+contracts retain the native schema.
+Explicitly empty opponent combats do not create an untap/blocker decision;
+unknown combat metadata retains model control.

@@ -60,6 +60,7 @@ class EngineDeckPolicy(ProfiledDeckPolicy):
         f=self.facts.get(card.get('name'))
         if role is None and 'DRAW' in f.get('tags',[]) and not f.get('affectsOpponent') and 'COUNTERSPELL' not in f.get('tags',[]):
             return 'cantrip' if set(f.get('types',[])) & {'INSTANT','SORCERY'} else 'draw_engine' if f.get('repeatable') and 'Aura' not in f.get('subtypes',[]) else None
+        if role is None and f.get('friendlyStaticPermanent'):return 'payoff'
         return role
 
     def _engines(self, o):
@@ -175,7 +176,8 @@ class EngineDeckPolicy(ProfiledDeckPolicy):
             if card.get('name') in {'Coastal Piracy','Bident of Thassa','Reconnaissance Mission'} and not any('CREATURE' in c.get('cardTypes',[]) for c in own): continue
             if role == 'payoff' and not (commander or engines): continue
             if role == 'aura_payoff' and (card.get('name') == 'Tempest Technique' or len(own)<5): continue
-            if set(fact.get('tags',[])) & UNSAFE_TAGS and role != 'aura_payoff': continue
+            unsafe=UNSAFE_TAGS-{'PROTECTION'} if fact.get('friendlyStaticPermanent') else UNSAFE_TAGS
+            if set(fact.get('tags',[])) & unsafe and role != 'aura_payoff': continue
             params = self._cast_params(o,a,card,role)
             if params is None: continue
             if not (role == 'ramp' and sum('LAND' in c.get('cardTypes',[]) for c in own)<3) and not self._reserved(o,card): reserved = True; continue

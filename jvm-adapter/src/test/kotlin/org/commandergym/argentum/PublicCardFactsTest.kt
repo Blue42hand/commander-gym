@@ -58,6 +58,22 @@ class PublicCardFactsTest {
         assertEquals(-3, reduction["toughness"]!!.jsonPrimitive.int)
     }
 
+    @Test fun friendlyStaticProtectionIsSeparateFromReactiveOrMixedProtection() {
+        val cards=PublicCardFacts.export(registry,listOf("Sephara, Sky's Blade","Heroic Intervention","Darksteel Mutation","Etchings of the Chosen","Imperious Perfect","Forest"),revision)["cards"]!!.jsonObject
+        assertTrue(cards["Sephara, Sky's Blade"]!!.jsonObject["friendlyStaticPermanent"]!!.jsonPrimitive.boolean)
+        for(name in listOf("Heroic Intervention","Darksteel Mutation","Etchings of the Chosen","Imperious Perfect","Forest")) {
+            assertFalse(cards[name]!!.jsonObject["friendlyStaticPermanent"]!!.jsonPrimitive.boolean,name)
+        }
+    }
+
+    @Test fun simpleUntapContractsExcludeMaterialCostsAndMixedEffects() {
+        val cards=PublicCardFacts.export(registry,listOf("Wirewood Lodge","Staff of Domination","Wirewood Symbiote","Timberwatch Elf"),revision)["cards"]!!.jsonObject
+        fun ids(name:String)=cards[name]!!.jsonObject["simpleTargetUntapAbilities"]!!.jsonArray.map { it.jsonPrimitive.content }
+        assertEquals(listOf("Wirewood Lodge:2"),ids("Wirewood Lodge"))
+        assertEquals(listOf("Staff of Domination:3"),ids("Staff of Domination"))
+        assertTrue(ids("Wirewood Symbiote").isEmpty());assertTrue(ids("Timberwatch Elf").isEmpty())
+    }
+
     @Test fun publicFactsDistinguishOrdinaryManaFromChoicesAndTriggeredBoards() {
         val names = listOf("Forest", "Sol Ring", "Arcane Signet", "Sythis, Harvest's Hand", "Vanquisher's Banner", "Mesa Enchantress", "Underworld Dreams")
         val export = PublicCardFacts.export(registry, names, revision)

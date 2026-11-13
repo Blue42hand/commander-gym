@@ -8,6 +8,7 @@ from .policy_action_bounds import removal_target_value
 
 DESTROY_MODES=frozenset('Destroy target '+kind for kind in ['artifact','creature','enchantment','land','planeswalker'])
 REVIEWED_REMOVAL_MODALS={'Casualties of War':DESTROY_MODES}
+REVIEWED_SINGLE_REMOVAL_MODES={'Golgari Charm':{1:'Destroy target enchantment'}}
 CONSTRAINTS=('sameOwner','sameNumericProperty','selectionGroups','exclusiveGroups','distinctCategories','totalCap',
              'differentNames','differentControllers','mustDifferFromEarlier','validTargetsByPrefix',
              'xConstrainsCount','xConstrainsCountExactly','xConstrainsManaValue','xConstrainsManaValueExactly','xConstrainsPower')
@@ -20,6 +21,33 @@ def _enemy_target(o,entity):
     card=o['state'].get('cards',{}).get(entity,{})
     return (entity in ids_in(o['state'],'Battlefield') and card.get('controllerId') not in (None,o['agentToAct'])
         and 'INDESTRUCTIBLE' not in card.get('keywords',[]))
+
+
+def commander_rescue_mode(o,a,facts):
+    """Restore a commander's printed abilities through a reviewed native mode.
+
+    The native enumerator already fixes the chosen mode and legal targets. We
+    implement only its ordinary destruction effect, not unrelated modal choices.
+    """
+    from .heuristic_policy import affordable
+    from .policy_action_bounds import abilities_removed
+    raw=a.get('action',{});cards=o['state'].get('cards',{});name=cards.get(raw.get('cardId'),{}).get('name')
+    modes=raw.get('chosenModes');reviewed=REVIEWED_SINGLE_REMOVAL_MODES.get(name,{})
+    if (a.get('kind')!='CastSpellMode' or not affordable(a) or not isinstance(modes,list) or len(modes)!=1
+        or type(modes[0]) is not int or modes[0] not in reviewed or reviewed[modes[0]]!=a.get('description')
+        or a.get('requiresTargets') is not True or a.get('minTargets')!=1 or a.get('targetCount')!=1
+        or a.get('targetRequirements') is not None or a.get('additionalCostInfo') or a.get('modalEnumeration')
+        or raw.get('useAlternativeCost') or any(a.get(k) for k in ['hasXCost','hasConvoke','hasDelve','hasHarmonize','hasTapForGeneric','requiresDamageDistribution'])
+        or a.get('parameterSpec',{}).get('allowedFields',{}).get('targets')!='ENTITY_ID_ARRAY'):return None
+    candidates=[]
+    for target in a.get('validTargets') or []:
+        if not _enemy_target(o,target) or not abilities_removed(o,{'attachments':[target]},facts):continue
+        for host in ids_in(o['state'],'Battlefield',o['agentToAct']):
+            c=cards.get(host,{})
+            if c.get('isCommander') and target in c.get('attachments',[]):
+                remaining={**c,'attachments':[i for i in c['attachments'] if i!=target]}
+                if not abilities_removed(o,remaining,facts):candidates.append(target)
+    return {'targets':[sorted(set(candidates),key=lambda t:(-removal_target_value(o,t,facts),t))[0]]} if candidates else None
 
 
 def modal_plan(o,a,facts):

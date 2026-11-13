@@ -2,6 +2,9 @@ package org.commandergym.argentum
 
 import com.wingedsheep.engine.core.*
 import com.wingedsheep.engine.state.GameState
+import com.wingedsheep.engine.state.ZoneKey
+import com.wingedsheep.engine.mechanics.layers.StateProjector
+import com.wingedsheep.sdk.core.Zone
 import com.wingedsheep.gameserver.config.GameBeansConfig
 import com.wingedsheep.gameserver.config.GameProperties
 import kotlinx.serialization.json.*
@@ -30,11 +33,21 @@ object CompetencySavedStateProbe {
                             val action=if(params==null) template else ActionParameterizer.apply(template,json.decodeFromJsonElement<ActionParams>(params),initial)
                             val result=processor.process(initial,action).result
                             check(result.outcome !is Outcome.Rejected) { "$branch rejected for callback ${entry["sequence"]}: ${result.outcome}" }
+                            var flyers:Int?=null
+                            if(branch=="replacement" && entry["ordinaryManaCast"]?.jsonPrimitive?.boolean==true) {
+                                check(action is CastSpell && !action.useAlternativeCost)
+                                check(result.outcome is Outcome.Done && result.state.pendingDecision==null)
+                                check(action.cardId in result.state.stack)
+                                val projected=StateProjector().project(initial)
+                                flyers=initial.getZone(ZoneKey(action.playerId,Zone.BATTLEFIELD)).count { "FLYING" in projected.getKeywords(it) }
+                                check(flyers<4)
+                            }
                             putJsonObject(branch) {
                                 put("accepted",true)
                                 put("outcome",result.outcome.toString())
                                 put("pendingDecision",result.state.pendingDecision?.javaClass?.simpleName)
                                 put("actionType",action.javaClass.simpleName)
+                                if(flyers!=null) { put("ordinaryManaCastAccepted",true);put("initialFlyingCreatures",flyers) }
                             }
                         }
                     })

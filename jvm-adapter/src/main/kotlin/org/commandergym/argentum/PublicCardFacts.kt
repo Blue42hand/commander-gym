@@ -7,6 +7,9 @@ import com.wingedsheep.engine.registry.CardRegistry
 import com.wingedsheep.sdk.core.Zone
 import com.wingedsheep.sdk.scripting.LoseAllAbilities
 import com.wingedsheep.sdk.scripting.ModifyStats
+import com.wingedsheep.sdk.scripting.GrantKeyword
+import com.wingedsheep.sdk.scripting.TimingRule
+import com.wingedsheep.sdk.core.Keyword
 import com.wingedsheep.sdk.scripting.EntersWithChoice
 import com.wingedsheep.sdk.scripting.ChoiceType
 import com.wingedsheep.sdk.scripting.Duration
@@ -41,6 +44,11 @@ import kotlinx.serialization.json.*
 object PublicCardFacts {
     private val json = Json { encodeDefaults = true }
     private val basicColors = mapOf("Plains" to "W", "Island" to "U", "Swamp" to "B", "Mountain" to "R", "Forest" to "G")
+
+    private fun manaAndTapOnly(cost: AbilityCost): Boolean = when(cost) {
+        is AbilityCost.Composite -> cost.costs.isNotEmpty() && cost.costs.all(::manaAndTapOnly)
+        else -> cost == AbilityCost.Tap || cost.manaCostOrNull != null
+    }
 
     private fun drawSensitive(value: JsonElement): Boolean = when (value) {
         is JsonObject -> (value["type"] as? JsonPrimitive)?.content?.contains("Draw") == true || value.values.any(::drawSensitive)
@@ -82,6 +90,19 @@ object PublicCardFacts {
         val noStatic = card.staticAbilities.isEmpty()
         val noTriggers = card.script.triggeredAbilities.isEmpty()
         val noReplacement = card.script.replacementEffects.isEmpty()
+        val friendlyGroups = setOf(GroupFilter.AllCreaturesYouControl, GroupFilter.AllPermanentsYouControl,
+            GroupFilter(GameObjectFilter.Creature.withKeyword(Keyword.FLYING).youControl()),
+            GroupFilter.ChosenSubtypeCreatures().youControl())
+        val helpfulKeywords = setOf("FLYING", "LIFELINK", "VIGILANCE", "REACH", "MENACE", "TRAMPLE", "HASTE",
+            "FIRST_STRIKE", "DOUBLE_STRIKE", "DEATHTOUCH", "HEXPROOF", "INDESTRUCTIBLE")
+        val friendlyStaticPermanent = card.typeLine.isPermanent && card.script.spellEffect == null && noTriggers && noReplacement && activated.isEmpty() && card.staticAbilities.isNotEmpty() &&
+            card.staticAbilities.all { ability ->
+                when (ability) {
+                    is GrantKeyword -> ability.keyword in helpfulKeywords && ability.filter.copy(excludeSelf = false) in friendlyGroups
+                    is ModifyStats -> ability.powerBonus >= 0 && ability.toughnessBonus >= 0 && ability.filter.copy(excludeSelf = false) in friendlyGroups
+                    else -> false
+                }
+            }
         val simpleMana = noStatic && noTriggers && noReplacement &&
             (simpleAbilities || card.typeLine.isLand && basics.isNotEmpty() && activated.isEmpty())
         val manaColors = basics.toMutableSet()
@@ -170,6 +191,13 @@ object PublicCardFacts {
                     it.cost.manaCostOrNull != null && effect?.tap == false && effect.target == EffectTarget.Self
                 }.forEach { add(it.id.value) }
             }
+            putJsonArray("simpleTargetUntapAbilities") {
+                activated.filter {
+                    val effect=it.effect as? TapUntapEffect ?: return@filter false
+                    it.isManaAbility==false && it.timing==TimingRule.InstantSpeed && it.restrictions.isEmpty() && manaAndTapOnly(it.cost) &&
+                        effect.tap==false && effect.target is EffectTarget.BoundVariable && it.targetRequirements.size==1
+                }.forEach { add(it.id.value) }
+            }
             // Match exact SDK descriptions at the native target-selection seam;
             // no Oracle text parsing or guesses from a generic REMOVAL tag.
             putJsonObject("fixedStatReductions") {
@@ -207,6 +235,7 @@ object PublicCardFacts {
             putJsonArray("manaColors") { manaColors.sorted().forEach { add(it) } }
             put("simpleMana", simpleMana)
             put("simplePermanent", noStatic && noTriggers && noReplacement && (activated.isEmpty() || simpleMana))
+            put("friendlyStaticPermanent", friendlyStaticPermanent)
             put("unconditionalUntapped", noReplacement)
             put("entersTapped", intent.entersTapped)
             // Only a whole trigger consisting of a free May(Draw N) qualifies.

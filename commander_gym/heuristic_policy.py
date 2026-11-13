@@ -395,7 +395,7 @@ class MaskedHeuristicSubsystem:
                 or a.get('hasXCost') or a.get('additionalCostInfo') or a.get('modalEnumeration')
                 or a.get('hasConvoke') or a.get('hasDelve') or ac.get('useAlternativeCost')
                 or ac.get('chosenModes') or ac.get('castFaceDown') or ac.get('faceIndex') is not None
-                or f['affectsOpponent'] or set(f['tags']) & UNSAFE_TAGS
+                or f['affectsOpponent'] or set(f['tags']) & (UNSAFE_TAGS-{'PROTECTION'} if f.get('friendlyStaticPermanent') else UNSAFE_TAGS)
                 or not ({'CREATURE'} & set(f['types']) or f['simpleMana'] or
                         f['repeatable'] and 'DRAW' in f['tags'])):
                 return SubsystemDecision(reason='heuristic-competing-special-action')
