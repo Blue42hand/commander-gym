@@ -39,7 +39,7 @@ class CardFacts:
             protection=fact.get('protectionEquipmentKeywords')
             if 'protectionEquipmentKeywords' in fact and (not isinstance(protection,list)
                 or any(not isinstance(k,str) for k in protection) or protection!=sorted(set(protection))
-                or 'HEXPROOF' not in protection or any(k not in {'HEXPROOF','HASTE'} for k in protection)):
+                or not set(protection)&{'HEXPROOF','SHROUD'} or any(k not in {'HEXPROOF','SHROUD','HASTE'} for k in protection)):
                 raise ValueError('invalid native protection equipment contract')
             if 'emptySelfDrawAtZeroX' in fact and type(fact['emptySelfDrawAtZeroX']) is not bool:
                 raise ValueError('invalid empty self draw at zero X contract')

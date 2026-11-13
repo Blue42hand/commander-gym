@@ -488,32 +488,46 @@ def remember_equipment_hosts(owner, o, facts):
     previous=cache.get(namespace,{})
     hosts=previous.get('hosts',{}) if previous.get('key')==key else {}
     cards=state.get('cards',{});owned=ids_in(state,'Battlefield',actor)
-    observed={}
+    observed={};tap_states={}
+    previous_taps=previous.get('host_taps',{}) if previous.get('key')==key else {}
     for source in owned:
         if not facts.get(cards.get(source,{}).get('name')).get('protectionEquipmentKeywords'):continue
         current=[i for i in owned if source in (cards.get(i,{}).get('attachments') or [])]
         if len(current)!=1:continue
-        observed[source]=list(dict.fromkeys([*hosts.get(source,[]),current[0]]))
+        visited=hosts.get(source,[])
+        old_taps=previous_taps.get(source,{})
+        # A real tap/untap can justify a new protection plan. Equipment moves
+        # alone change haste/sickness and attachments, but do not tap a host.
+        if any(t in old_taps and type(cards.get(t,{}).get('isTapped')) is bool
+               and old_taps[t]!=cards[t]['isTapped'] for t in visited if t in owned):visited=[]
+        observed[source]=list(dict.fromkeys([*visited,current[0]]))
+        tap_states[source]={t:cards[t]['isTapped'] for t in observed[source]
+                            if t in owned and type(cards[t].get('isTapped')) is bool}
     cache.pop(namespace,None)
-    cache[namespace]={'key':key,'hosts':observed}
+    cache[namespace]={'key':key,'hosts':observed,'host_taps':tap_states}
     if len(cache)>64:cache.pop(next(iter(cache)))
     owner._equipment_phase_history=cache
-    return {'actor':actor,'players':list(players),'turn':turn,'step':step,'hosts':deepcopy(observed)}
+    return {'actor':actor,'players':list(players),'turn':turn,'step':step,'hosts':deepcopy(observed),'host_taps':deepcopy(tap_states)}
 
 
 def repeated_protection_targets(o, action, facts, history):
     state=o.get('state',{});me=o['agentToAct'];cards=state.get('cards',{});source=action.get('action',{}).get('sourceId')
     if (not isinstance(history,dict) or history.get('actor')!=me or history.get('turn')!=state.get('turnNumber')
         or history.get('step')!=state.get('currentStep') or history.get('players')!=[p.get('playerId') for p in state.get('players',[])]
-        or state.get('activePlayerId')!=me or state.get('currentStep')!='PRECOMBAT_MAIN' or ids_in(state,'Stack')
+        or state.get('activePlayerId')!=me or state.get('currentStep') not in {'PRECOMBAT_MAIN','POSTCOMBAT_MAIN'} or ids_in(state,'Stack')
         or not facts.get(cards.get(source,{}).get('name')).get('protectionEquipmentKeywords')
         or cards.get(source,{}).get('activeEffects')):return None
     owned=ids_in(state,'Battlefield',me)
     hosts=[i for i in owned if source in (cards.get(i,{}).get('attachments') or [])]
     if len(hosts)!=1:return None
     current=cards[hosts[0]]
-    if (current.get('controllerId')!=me or current.get('isTapped') is not False
+    taps=(history.get('host_taps') or {}).get(source) if isinstance(history.get('host_taps',{}),dict) else None
+    if (current.get('controllerId')!=me or type(current.get('isTapped')) is not bool
         or current.get('hasSummoningSickness') is not False or current.get('activeEffects')):return None
+    if taps is None:
+        if current['isTapped']:return None
+    elif (not isinstance(taps,dict) or any(not isinstance(t,str) or type(v) is not bool for t,v in taps.items())
+          or any(t in owned and type(cards.get(t,{}).get('isTapped')) is bool and v!=cards[t]['isTapped'] for t,v in taps.items())):return None
     mapping=history.get('hosts')
     if not isinstance(mapping,dict):return None
     visited=mapping.get(source,[])
@@ -522,7 +536,7 @@ def repeated_protection_targets(o, action, facts, history):
         c=cards.get(target,{})
         return (target in visited and target!=hosts[0] and target in owned and c.get('controllerId')==me
                 and 'CREATURE' in c.get('cardTypes',[]) and type(c.get('hasSummoningSickness')) is bool
-                and c.get('isTapped') is False and not c.get('activeEffects'))
+                and (type(c.get('isTapped')) is bool if taps is not None else c.get('isTapped') is False) and not c.get('activeEffects'))
     return [t for t in action['validTargets'] if not repeated(t)]
 
 

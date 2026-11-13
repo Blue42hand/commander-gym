@@ -55,7 +55,12 @@ class ProtectionEquipmentTests(unittest.TestCase):
                 self.assertIn('e414',a['validTargets'])
 
     def test_malformed_native_contracts_rejected(self):
-        for value in [None,{},[],['HASTE'],['SHROUD'],['HEXPROOF','HEXPROOF'],[['HEXPROOF']]]:
+        for value in [None,{},[],['HASTE'],['UNBLOCKABLE'],['HEXPROOF','HEXPROOF'],[['HEXPROOF']]]:
             with self.subTest(value=value):
                 doc=deepcopy(self.doc);doc['cards']['Swiftfoot Boots']['protectionEquipmentKeywords']=value
                 with self.assertRaises(ValueError):CardFacts(doc)
+
+    def test_shroud_only_and_haste_shroud_contracts_are_supported(self):
+        for value in [['SHROUD'],['HASTE','SHROUD']]:
+            doc=deepcopy(self.doc);doc['cards']['Swiftfoot Boots']['protectionEquipmentKeywords']=value
+            self.assertEqual(CardFacts(doc).get('Swiftfoot Boots')['protectionEquipmentKeywords'],value)

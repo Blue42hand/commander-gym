@@ -181,6 +181,11 @@ class PublicCardFactsTest {
         assertTrue(cards["The One Ring"]!!.jsonObject["equipAbilities"]!!.jsonArray.isEmpty())
     }
 
+    @Test fun simpleShroudEquipmentUsesTheSameProtectionContract() {
+        val cards=PublicCardFacts.export(registry,listOf("Lightning Greaves"),revision)["cards"]!!.jsonObject
+        assertEquals(listOf("HASTE","SHROUD"),cards["Lightning Greaves"]!!.jsonObject["protectionEquipmentKeywords"]!!.jsonArray.map { it.jsonPrimitive.content })
+    }
+
     @Test fun protectionEquipmentRequiresTheWholeCanonicalNativeShape() {
         val names=listOf("Swiftfoot Boots","Skullclamp","The One Ring")
         val cards=PublicCardFacts.export(registry,names,revision)["cards"]!!.jsonObject

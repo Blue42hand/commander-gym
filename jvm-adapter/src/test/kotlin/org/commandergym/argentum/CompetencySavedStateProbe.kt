@@ -195,15 +195,21 @@ object CompetencySavedStateProbe {
                                     check(result.outcome !is Outcome.Rejected)
                                 }
                                 val expectedHost=if(branch=="baseline" && equipment.containsKey("newHost"))
-                                    json.decodeFromJsonElement<EntityId>(equipment.getValue("newHost")) else host
+                                    json.decodeFromJsonElement<EntityId>(equipment.getValue("newHost"))
+                                else if(branch=="replacement" && equipment.containsKey("replacementHost"))
+                                    json.decodeFromJsonElement<EntityId>(equipment.getValue("replacementHost")) else host
                                 check(result.state.getEntity(source)!!.get<AttachedToComponent>()!!.targetId==expectedHost)
                                 val changed=initial.getBattlefield().count { id ->
                                     initial.getEntity(id)?.has<TappedComponent>()!=result.state.getEntity(id)?.has<TappedComponent>()
                                 }
                                 val beforePool=initial.getEntity(action.playerId)?.get<ManaPoolComponent>()?.total ?: 0
                                 val afterPool=result.state.getEntity(action.playerId)?.get<ManaPoolComponent>()?.total ?: 0
-                                if(branch=="baseline") check(changed>0 || afterPool<beforePool)
+                                if(branch=="baseline" && equipment["zeroCostTransfer"]?.jsonPrimitive?.boolean!=true) check(changed>0 || afterPool<beforePool)
                                 else check(changed==0 && beforePool==afterPool)
+                                if(branch=="replacement" && equipment.containsKey("replacementHost")) {
+                                    val projected=StateProjector().project(result.state)
+                                    check(setOf("HASTE","SHROUD").all { it in projected.getKeywords(expectedHost) })
+                                }
                             }
                             val heldCard=entry["heldCard"]
                             val auraScope=entry["auraScopeComparison"]?.jsonObject
@@ -645,9 +651,10 @@ object CompetencySavedStateProbe {
                                 }
                                 if(equipment!=null) {
                                     put("resolvedWithOpponentsPassing",true)
-                                    put("attachmentUnchanged",branch=="replacement" || !equipment.containsKey("newHost"))
-                                    put("attachmentHost",if(branch=="baseline" && equipment.containsKey("newHost")) equipment.getValue("newHost") else equipment.getValue("host"))
-                                    put("manaAndSourceTapsPreserved",branch=="replacement")
+                                    put("attachmentUnchanged",if(branch=="replacement") !equipment.containsKey("replacementHost") else !equipment.containsKey("newHost"))
+                                    put("attachmentHost",if(branch=="baseline" && equipment.containsKey("newHost")) equipment.getValue("newHost")
+                                        else if(branch=="replacement" && equipment.containsKey("replacementHost")) equipment.getValue("replacementHost") else equipment.getValue("host"))
+                                    put("manaAndSourceTapsPreserved",branch=="replacement" || equipment["zeroCostTransfer"]?.jsonPrimitive?.boolean==true)
                                 }
                                 if(neutralization!=null) {
                                     put("resolvedWithOpponentsPassing",true)

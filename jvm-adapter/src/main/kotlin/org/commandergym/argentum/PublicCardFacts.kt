@@ -459,7 +459,7 @@ object PublicCardFacts {
                 activated.filter { it.isEquipAbility }.forEach { add(it.id.value) }
             }
             // Whole equipment only: one canonical mana-only equip, and nothing
-            // except unconditional hexproof/haste on the attached creature.
+            // except unconditional hexproof/shroud and optional haste on the attached creature.
             val equipmentAbility = activated.singleOrNull()
             val equipmentCost = equipmentAbility?.cost?.manaCostOrNull
             val protectionKeywords = card.staticAbilities.filterIsInstance<GrantKeyword>().map { it.keyword }
@@ -468,7 +468,7 @@ object PublicCardFacts {
                 noTriggers && noReplacement && card.script.spellEffect == null &&
                 equipmentAbility != null && equipmentCost != null &&
                 equipmentAbility == ActivatedAbility.equip(cost=equipmentCost,id=equipmentAbility.id) &&
-                protectionKeywords.contains("HEXPROOF") && protectionKeywords.all { it in setOf("HEXPROOF","HASTE") } &&
+                protectionKeywords.any { it in setOf("HEXPROOF","SHROUD") } && protectionKeywords.all { it in setOf("HEXPROOF","SHROUD","HASTE") } &&
                 card.staticAbilities.all { it is GrantKeyword && it == GrantKeyword(it.keyword) }) {
                 putJsonArray("protectionEquipmentKeywords") { protectionKeywords.distinct().sorted().forEach { add(it) } }
             }
